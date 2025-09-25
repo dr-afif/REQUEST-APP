@@ -1,0 +1,10 @@
+﻿node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+# Editor directories and files
+.vscode/
+.idea/
+.DS_Store
