@@ -73,6 +73,9 @@ export default function UserRequests({
                 {formatDisplayDate(request.date)} | {request.request}
               </p>
               <p className="text-xs text-slate-500">Submitted {submissionLabel}</p>
+              {request.comment ? (
+                <p className="mt-1 max-w-lg text-xs text-slate-600">{request.comment}</p>
+              ) : null}
             </div>
             <div className="flex gap-2">
               <button

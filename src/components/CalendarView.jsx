@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toIsoDate } from '../utils/normalise';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -35,8 +35,51 @@ function buildCalendarMatrix(currentDate) {
   return weeks;
 }
 
-export default function CalendarView({ requests, referenceDate = new Date() }) {
-  const calendarWeeks = useMemo(() => buildCalendarMatrix(referenceDate), [referenceDate]);
+function getUpcomingMonthReference(today = new Date()) {
+  return new Date(today.getFullYear(), today.getMonth() + 1, 1);
+}
+
+export default function CalendarView({ requests, referenceDate }) {
+  const [autoReferenceDate, setAutoReferenceDate] = useState(() => getUpcomingMonthReference());
+
+  useEffect(() => {
+    if (referenceDate) {
+      return undefined;
+    }
+
+    let timeoutId;
+
+    const scheduleUpdate = () => {
+      const now = new Date();
+      const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      const msUntilNextMonth = startOfNextMonth.getTime() - now.getTime();
+      const delay = Math.max(msUntilNextMonth, 0) + 1000;
+
+      timeoutId = window.setTimeout(() => {
+        setAutoReferenceDate(getUpcomingMonthReference());
+        scheduleUpdate();
+      }, delay);
+    };
+
+    scheduleUpdate();
+
+    return () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [referenceDate]);
+
+  const effectiveReferenceDate = useMemo(() => {
+    if (referenceDate) {
+      return referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+    }
+    return autoReferenceDate;
+  }, [autoReferenceDate, referenceDate]);
+
+  const monthToken = `${effectiveReferenceDate.getFullYear()}-${effectiveReferenceDate.getMonth()}`;
+
+  const calendarWeeks = useMemo(() => buildCalendarMatrix(effectiveReferenceDate), [monthToken]);
 
   const requestsByDate = useMemo(() => {
     return requests.reduce((acc, request) => {
@@ -55,7 +98,7 @@ export default function CalendarView({ requests, referenceDate = new Date() }) {
     }, {});
   }, [requests]);
 
-  const monthTitle = referenceDate.toLocaleDateString(undefined, {
+  const monthTitle = effectiveReferenceDate.toLocaleDateString(undefined, {
     month: 'long',
     year: 'numeric',
   });

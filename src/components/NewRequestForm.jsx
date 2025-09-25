@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-const REQUEST_TYPES = ['AM', 'PM', 'ON', 'OFF', 'AL', 'GHKA', 'COURSE'];
+const REQUEST_TYPES = ['AM', 'PM', 'ON', 'OFF', 'AL', 'HKA', 'GHKA', 'COURSE'];
+const INITIAL_STATE = { date: '', request: REQUEST_TYPES[0], comment: '' };
 
 export default function NewRequestForm({
   selectedName,
@@ -8,28 +9,31 @@ export default function NewRequestForm({
   isSubmitting,
   initialValues,
 }) {
-  const [formState, setFormState] = useState({
-    date: '',
-    request: REQUEST_TYPES[0],
-    name: '',
-  });
+  const [formState, setFormState] = useState(INITIAL_STATE);
 
-  useEffect(() => {
-    setFormState((prev) => ({
-      ...prev,
-      name: selectedName ?? '',
-    }));
-  }, [selectedName]);
+  const isReady = useMemo(() => Boolean(selectedName), [selectedName]);
 
   useEffect(() => {
     if (initialValues) {
       setFormState({
-        name: initialValues.name ?? selectedName ?? '',
         date: initialValues.date ? initialValues.date.slice(0, 10) : '',
         request: initialValues.request ?? REQUEST_TYPES[0],
+        comment: initialValues.comment ?? '',
       });
+    } else {
+      setFormState((prev) => ({
+        date: '',
+        request: REQUEST_TYPES.includes(prev.request) ? prev.request : REQUEST_TYPES[0],
+        comment: '',
+      }));
     }
-  }, [initialValues, selectedName]);
+  }, [initialValues]);
+
+  useEffect(() => {
+    if (!selectedName) {
+      setFormState(INITIAL_STATE);
+    }
+  }, [selectedName]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -38,12 +42,13 @@ export default function NewRequestForm({
 
   const handleSubmit = (event) => {
     event.preventDefault();
-    if (!formState.name || !formState.date || !formState.request) return;
+    if (!isReady || !formState.date || !formState.request) return;
 
     onSubmit?.({
-      name: formState.name,
+      name: selectedName,
       date: formState.date,
       request: formState.request,
+      comment: formState.comment,
       id: initialValues?.id,
     });
   };
@@ -53,22 +58,17 @@ export default function NewRequestForm({
       onSubmit={handleSubmit}
       className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200"
     >
-      <fieldset className="flex flex-col gap-4" disabled={isSubmitting}>
+      <fieldset className="flex flex-col gap-4" disabled={isSubmitting || !isReady}>
         <legend className="text-base font-semibold text-slate-900">
           {initialValues ? 'Update request' : 'New request'}
         </legend>
 
-        <label className="text-sm font-medium text-slate-700">
-          Name
-          <input
-            type="text"
-            name="name"
-            value={formState.name}
-            onChange={handleChange}
-            placeholder="Your full name"
-            className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-          />
-        </label>
+        <div className="rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          <span className="font-medium text-slate-700">Team member: </span>
+          <span className="text-slate-900">
+            {selectedName || 'Select a team member above to start a request'}
+          </span>
+        </div>
 
         <label className="text-sm font-medium text-slate-700">
           Date
@@ -78,6 +78,7 @@ export default function NewRequestForm({
             value={formState.date}
             onChange={handleChange}
             className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            required
           />
         </label>
 
@@ -95,6 +96,18 @@ export default function NewRequestForm({
               </option>
             ))}
           </select>
+        </label>
+
+        <label className="text-sm font-medium text-slate-700">
+          Comment (optional)
+          <textarea
+            name="comment"
+            value={formState.comment}
+            onChange={handleChange}
+            rows={3}
+            placeholder="Add any context for this request"
+            className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+          />
         </label>
 
         <button

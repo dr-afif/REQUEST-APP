@@ -1,0 +1,282 @@
+﻿const REQUEST_SHEET_NAME = 'Requests';
+const TEAM_MEMBERS_SHEET_NAME = 'TeamMembers';
+const STATUS_ACTIVE = 'Active';
+const STATUS_OLD = 'Old Request';
+const STATUS_CANCELLED = 'Cancelled';
+
+function doGet(e) {
+  try {
+    const action = (e && e.parameter && e.parameter.action ? String(e.parameter.action) : '').toLowerCase();
+    if (action === 'teammembers') {
+      return getTeamMembersResponse();
+    }
+    return getRequestsResponse();
+  } catch (error) {
+    return createJsonResponse({ result: 'error', message: error.message || error.toString() });
+  }
+}
+
+function doPost(e) {
+  try {
+    const payload = parseRequestBody(e);
+    const action = String(payload.action || '').toLowerCase();
+
+    if (action === 'submit') {
+      return handleSubmit(payload);
+    }
+    if (action === 'update') {
+      return handleUpdate(payload);
+    }
+    if (action === 'delete') {
+      return handleDelete(payload);
+    }
+
+    throw new Error('Unknown action');
+  } catch (error) {
+    return createJsonResponse({ result: 'error', message: error.message || error.toString() });
+  }
+}
+
+function getRequestsResponse() {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return createJsonResponse([]);
+  }
+
+  const headers = ensureCommentHeader(sheet, values[0]);
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return createJsonResponse(data);
+}
+
+function getTeamMembersResponse() {
+  const sheet = getSheetByName(TEAM_MEMBERS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${TEAM_MEMBERS_SHEET_NAME}" not found.`);
+  }
+
+  const rows = sheet.getDataRange().getValues();
+  if (rows.length <= 1) {
+    return createJsonResponse([]);
+  }
+
+  const members = [];
+  for (let i = 1; i < rows.length; i += 1) {
+    const value = rows[i][0];
+    if (!value) continue;
+    const parsed = String(value).trim();
+    if (!parsed) continue;
+    members.push(parsed);
+  }
+
+  const uniqueMembers = Array.from(new Set(members));
+  return createJsonResponse(uniqueMembers);
+}
+
+function handleSubmit(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureCommentHeader(sheet, values[0] || []);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const name = String(data.name || '').trim();
+  const date = data.date;
+  const request = String(data.request || '').trim();
+  const comment = data.comment ? String(data.comment).trim() : '';
+
+  if (!name || !date || !request) {
+    throw new Error('Missing required fields for submit.');
+  }
+
+  const day = data.day ? String(data.day) : getWeekdayName(date);
+  const timestamp = new Date();
+  const id = Date.now();
+
+  rows.forEach((row, rowIndex) => {
+    const matchesName = normalizeString(row[indexes.Name]) === normalizeString(name);
+    const matchesDate = row[indexes.Date] === date;
+    const isActive = normalizeString(row[indexes.Status]) === normalizeString(STATUS_ACTIVE);
+    if (matchesName && matchesDate && isActive) {
+      sheet.getRange(rowIndex + 2, indexes.Status + 1).setValue(STATUS_OLD);
+    }
+  });
+
+  const record = buildRowFromHeaders(headers, {
+    ID: id,
+    Timestamp: timestamp,
+    Name: name,
+    Date: date,
+    Day: day,
+    Request: request,
+    Status: STATUS_ACTIVE,
+    Comment: comment,
+  });
+
+  sheet.appendRow(record);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleUpdate(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureCommentHeader(sheet, values[0] || []);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing request ID for update.');
+  }
+
+  const name = String(data.name || '').trim();
+  const date = data.date;
+  const request = String(data.request || '').trim();
+  const comment = data.comment ? String(data.comment).trim() : '';
+
+  if (!name || !date || !request) {
+    throw new Error('Missing required fields for update.');
+  }
+
+  const day = data.day ? String(data.day) : getWeekdayName(date);
+  const timestamp = new Date();
+  const newId = Date.now();
+  let found = false;
+
+  rows.forEach((row, rowIndex) => {
+    const currentId = String(row[indexes.ID] || '').trim();
+    if (currentId === targetId) {
+      const status = normalizeString(row[indexes.Status]);
+      if (status === normalizeString(STATUS_ACTIVE)) {
+        sheet.getRange(rowIndex + 2, indexes.Status + 1).setValue(STATUS_OLD);
+      }
+      found = true;
+    }
+  });
+
+  if (!found) {
+    throw new Error('Request not found for update.');
+  }
+
+  const record = buildRowFromHeaders(headers, {
+    ID: newId,
+    Timestamp: timestamp,
+    Name: name,
+    Date: date,
+    Day: day,
+    Request: request,
+    Status: STATUS_ACTIVE,
+    Comment: comment,
+  });
+
+  sheet.appendRow(record);
+  return createJsonResponse({ result: 'success', id: newId, previousId: targetId });
+}
+
+function handleDelete(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureCommentHeader(sheet, values[0] || []);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing request ID for delete.');
+  }
+
+  let found = false;
+
+  rows.forEach((row, rowIndex) => {
+    const currentId = String(row[indexes.ID] || '').trim();
+    if (currentId === targetId) {
+      const status = normalizeString(row[indexes.Status]);
+      if (status === normalizeString(STATUS_ACTIVE)) {
+        sheet.getRange(rowIndex + 2, indexes.Status + 1).setValue(STATUS_CANCELLED);
+      }
+      found = true;
+    }
+  });
+
+  if (!found) {
+    throw new Error('Request not found or already inactive.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function parseRequestBody(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    throw new Error('Missing request body.');
+  }
+  return JSON.parse(e.postData.contents);
+}
+
+function getSheetByName(name) {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+}
+
+function createJsonResponse(payload) {
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function buildHeaderIndex(headers) {
+  return headers.reduce((acc, header, index) => {
+    acc[header] = index;
+    return acc;
+  }, {});
+}
+
+function buildRowFromHeaders(headers, valuesByHeader) {
+  const row = headers.map((header) => (header in valuesByHeader ? valuesByHeader[header] : ''));
+  return row;
+}
+
+function ensureCommentHeader(sheet, headers) {
+  if (headers.indexOf('Comment') !== -1) {
+    return headers;
+  }
+  const extendedHeaders = headers.concat(['Comment']);
+  sheet.getRange(1, 1, 1, extendedHeaders.length).setValues([extendedHeaders]);
+  return extendedHeaders;
+}
+
+function normalizeString(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getWeekdayName(dateValue) {
+  if (!dateValue) return '';
+  const date = new Date(dateValue);
+  if (isNaN(date.getTime())) {
+    return '';
+  }
+  return date.toLocaleDateString('en-US', { weekday: 'long' });
+}
