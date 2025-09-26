@@ -142,10 +142,10 @@ export default function CalendarView({ requests, referenceDate }) {
                 return (
                   <div
                     key={dateKey}
-                    className="flex aspect-square flex-col gap-1 bg-white p-2 text-[11px] sm:aspect-auto sm:min-h-[110px] sm:text-xs"
+                    className="flex aspect-square flex-col gap-1 bg-white p-2 text-[10px] sm:aspect-auto sm:min-h-[110px] sm:text-xs"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-900 sm:text-sm">{dayNumber}</span>
+                      <span className="text-[11px] font-semibold text-slate-900 sm:text-sm">{dayNumber}</span>
                       <span className="text-[9px] uppercase tracking-wide text-slate-400 sm:text-[10px]">
                         {weekdayLabel}
                       </span>
@@ -155,14 +155,18 @@ export default function CalendarView({ requests, referenceDate }) {
                         dayRequests.map((entry) => (
                           <span
                             key={entry.id ?? `${entry.name}-${entry.date}-${entry.request}`}
-                            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] text-slate-700 sm:text-xs"
+                            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-700 sm:px-2 sm:py-1 sm:text-xs"
                           >
-                            <span className="font-semibold">{entry.request}</span>
-                            <span className="text-slate-500">({entry.name})</span>
+                            <span className="font-semibold tracking-tight">{entry.request}</span>
+                            {entry.name ? (
+                              <span className="hidden text-slate-500 sm:inline">
+                                {`(${entry.name})`}
+                              </span>
+                            ) : null}
                           </span>
                         ))
                       ) : (
-                        <span className="rounded-full border border-dashed border-slate-200 px-2 py-1 text-[9px] text-slate-300 sm:text-[11px]">
+                        <span className="rounded-full border border-dashed border-slate-200 px-1.5 py-0.5 text-[8px] text-slate-300 sm:px-2 sm:py-1 sm:text-[11px]">
                           No requests
                         </span>
                       )}
