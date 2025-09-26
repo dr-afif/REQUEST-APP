@@ -1,6 +1,6 @@
 ﻿# RESQ Request App
 
-A Vite + React frontend that interacts with a Google Apps Script backend to manage roster requests. 
+A Vite + React frontend that interacts with a Google Apps Script backend to manage roster requests.
 
 ## Prerequisites
 
