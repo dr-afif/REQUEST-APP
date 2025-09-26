@@ -111,7 +111,7 @@
   border-radius: var(--calendar-chip-radius);
   border-width: 1px;
   border-style: solid;
-  font-size: 0.5rem;
+  font-size: 0.7rem;
   font-weight: 600;
   line-height: 1.1;
   text-align: center;
@@ -236,7 +236,7 @@
 
   .req {
     padding: 0.25rem 0.5rem;
-    font-size: 0.64rem;
+    font-size: 0.5rem;
     gap: 0.25rem;
     line-height: 1.1;
     flex-wrap: wrap;
