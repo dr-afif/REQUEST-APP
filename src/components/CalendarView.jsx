@@ -112,52 +112,66 @@ export default function CalendarView({ requests, referenceDate }) {
         </div>
       </header>
 
-      <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
-        <div className="grid grid-cols-7 bg-slate-50 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
-          {DAY_LABELS.map((label) => (
-            <div key={label} className="px-2 py-3">
-              {label}
+      <div className="mt-6 rounded-2xl border border-slate-200">
+        <div className="overflow-x-auto">
+          <div className="min-w-[560px] overflow-hidden rounded-2xl">
+            <div className="grid grid-cols-7 bg-slate-50 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">
+              {DAY_LABELS.map((label) => (
+                <div key={label} className="px-2 py-3">
+                  {label}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        <div className="grid grid-cols-7 gap-px bg-slate-200">
-          {calendarWeeks.flat().map((dateObj, index) => {
-            if (!dateObj) {
-              return <div key={`empty-${index}`} className="min-h-[90px] bg-white" />;
-            }
+            <div className="grid grid-cols-7 gap-px bg-slate-200">
+              {calendarWeeks.flat().map((dateObj, index) => {
+                if (!dateObj) {
+                  return (
+                    <div
+                      key={`empty-${index}`}
+                      className="aspect-square bg-white sm:aspect-auto sm:min-h-[100px]"
+                    />
+                  );
+                }
 
-            const dateKey = toIsoDate(dateObj);
-            const dayRequests = requestsByDate[dateKey] ?? [];
-            const dayNumber = dateObj.getDate();
-            const weekdayLabel = DAY_LABELS[dateObj.getDay()];
+                const dateKey = toIsoDate(dateObj);
+                const dayRequests = requestsByDate[dateKey] ?? [];
+                const dayNumber = dateObj.getDate();
+                const weekdayLabel = DAY_LABELS[dateObj.getDay()];
 
-            return (
-              <div key={dateKey} className="flex min-h-[110px] flex-col gap-1 bg-white p-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-slate-900">{dayNumber}</span>
-                  <span className="text-[10px] uppercase tracking-wide text-slate-400">{weekdayLabel}</span>
-                </div>
-                <div className="flex flex-col gap-1 text-xs">
-                  {dayRequests.length > 0 ? (
-                    dayRequests.map((entry) => (
-                      <span
-                        key={entry.id ?? `${entry.name}-${entry.date}-${entry.request}`}
-                        className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700"
-                      >
-                        <span className="font-semibold">{entry.request}</span>
-                        <span className="text-slate-500">({entry.name})</span>
+                return (
+                  <div
+                    key={dateKey}
+                    className="flex aspect-square flex-col gap-1 bg-white p-2 text-[11px] sm:aspect-auto sm:min-h-[110px] sm:text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-900 sm:text-sm">{dayNumber}</span>
+                      <span className="text-[9px] uppercase tracking-wide text-slate-400 sm:text-[10px]">
+                        {weekdayLabel}
                       </span>
-                    ))
-                  ) : (
-                    <span className="rounded-full border border-dashed border-slate-200 px-2 py-1 text-[11px] text-slate-300">
-                      No requests
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      {dayRequests.length > 0 ? (
+                        dayRequests.map((entry) => (
+                          <span
+                            key={entry.id ?? `${entry.name}-${entry.date}-${entry.request}`}
+                            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] text-slate-700 sm:text-xs"
+                          >
+                            <span className="font-semibold">{entry.request}</span>
+                            <span className="text-slate-500">({entry.name})</span>
+                          </span>
+                        ))
+                      ) : (
+                        <span className="rounded-full border border-dashed border-slate-200 px-2 py-1 text-[9px] text-slate-300 sm:text-[11px]">
+                          No requests
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </section>
