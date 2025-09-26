@@ -3,16 +3,6 @@ import { toIsoDate } from '../utils/normalise';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-const LEGEND_ITEMS = [
-  { key: 'am', label: 'AM' },
-  { key: 'pm', label: 'PM' },
-  { key: 'night', label: 'Night' },
-  { key: 'course', label: 'Course' },
-  { key: 'off', label: 'Off' },
-  { key: 'hka', label: 'HKA' },
-  { key: 'ghka', label: 'GHKA' },
-];
-
 const REQUEST_CLASS_MAP = {
   am: 'req--am',
   pm: 'req--pm',
@@ -159,17 +149,6 @@ export default function CalendarView({ requests, referenceDate }) {
           <h2 className="text-2xl font-semibold text-slate-900">{monthTitle}</h2>
         </div>
       </header>
-
-      <div className="calendar__legend">
-        {LEGEND_ITEMS.map((item) => (
-          <span key={item.key} className="calendar__legend-item">
-            {item.label}
-            <span className={`calendar__legend-chip calendar__legend-chip--${item.key}`}>
-              {item.label}
-            </span>
-          </span>
-        ))}
-      </div>
 
       <div className="calendar__frame mt-6">
         <div className="calendar__header">
