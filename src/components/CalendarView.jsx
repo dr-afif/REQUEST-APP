@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toIsoDate } from '../utils/normalise';
 
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const REQUEST_CLASS_MAP = {
   am: 'req--am',
@@ -20,7 +20,7 @@ function buildCalendarMatrix(currentDate) {
   const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
   const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
   const daysInMonth = end.getDate();
-  const firstWeekday = start.getDay();
+  const firstWeekday = (start.getDay() + 6) % 7;
 
   const cells = [];
   for (let i = 0; i < firstWeekday; i += 1) {
@@ -168,39 +168,32 @@ export default function CalendarView({ requests, referenceDate }) {
             const dateKey = toIsoDate(dateObj);
             const dayRequests = requestsByDate[dateKey] ?? [];
             const dayNumber = dateObj.getDate();
-            const weekdayLabel = DAY_LABELS[dateObj.getDay()];
-
             return (
               <div key={dateKey} className="calendar__cell">
                 <div className="calendar__cell-header">
                   <span className="calendar__date">{dayNumber}</span>
-                  <span className="calendar__weekday">{weekdayLabel}</span>
                 </div>
                 <div className="calendar__requests">
-                  {dayRequests.length > 0 ? (
-                    dayRequests.map((entry) => {
-                      const trimmedName = typeof entry.name === 'string' ? entry.name.trim() : '';
-                      const requestLabel = (entry.request ?? '').toString().trim();
-                      const variantClass = getRequestVariant(requestLabel);
-                      const chipClass = ['req', variantClass].filter(Boolean).join(' ');
+                  {dayRequests.length
+                    ? dayRequests.map((entry) => {
+                        const trimmedName = typeof entry.name === 'string' ? entry.name.trim() : '';
+                        const requestLabel = (entry.request ?? '').toString().trim();
+                        const variantClass = getRequestVariant(requestLabel);
+                        const chipClass = ['req', variantClass].filter(Boolean).join(' ');
 
-                      return (
-                        <div
-                          key={entry.id ?? `${entry.name}-${entry.date}-${entry.request}`}
-                          className={chipClass}
-                        >
-                          <span className="req__tag">{requestLabel || 'N/A'}</span>
-                          {trimmedName ? (
-                            <span className="req__name">&bull; {trimmedName}</span>
-                          ) : null}
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <span className="req req--default">
-                      <span className="req__tag">No requests</span>
-                    </span>
-                  )}
+                        return (
+                          <div
+                            key={entry.id ?? `${entry.name}-${entry.date}-${entry.request}`}
+                            className={chipClass}
+                          >
+                            <span className="req__tag">{requestLabel || 'N/A'}</span>
+                            {trimmedName ? (
+                              <span className="req__name">&bull; {trimmedName}</span>
+                            ) : null}
+                          </div>
+                        );
+                      })
+                    : null}
                 </div>
               </div>
             );

@@ -59,11 +59,11 @@ export default function UserSection({
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="rounded-full bg-white p-3 shadow-sm ring-1 ring-slate-200">
+      <div className="rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
         <label className="flex flex-col text-sm font-medium text-slate-700">
           Your name
           <select
-            className="mt-1 w-full rounded-full border border-slate-300 bg-slate-50 px-4 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:text-slate-400"
+            className="mt-1 w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:text-slate-400"
             value={selectedName}
             onChange={(event) => onSelectName(event.target.value)}
             disabled={disableSelector}
