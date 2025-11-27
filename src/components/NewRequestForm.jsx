@@ -1,15 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
+import { toIsoDate } from '../utils/normalise';
 
 const REQUEST_TYPES = ['AM', 'PM', 'ON', 'OFF', 'AL', 'HKA', 'GHKA', 'COURSE'];
+const LIMITED_REQUEST_TYPES = ['OFF', 'AL', 'HKA', 'GHKA', 'COURSE'];
+const LIMITED_REQUEST_TYPES_SET = new Set(LIMITED_REQUEST_TYPES);
+const DAILY_LIMIT = 3;
 const INITIAL_STATE = { date: '', request: REQUEST_TYPES[0], comment: '' };
+
+const LIMITED_TYPES_LABEL = LIMITED_REQUEST_TYPES.join(', ');
+
+function isLimitedType(value) {
+  return LIMITED_REQUEST_TYPES_SET.has((value ?? '').toString().trim().toUpperCase());
+}
 
 export default function NewRequestForm({
   selectedName,
   onSubmit,
   isSubmitting,
   initialValues,
+  requests = [],
 }) {
   const [formState, setFormState] = useState(INITIAL_STATE);
+  const [validationError, setValidationError] = useState('');
 
   const isReady = useMemo(() => Boolean(selectedName), [selectedName]);
 
@@ -35,14 +47,62 @@ export default function NewRequestForm({
     }
   }, [selectedName]);
 
+  const limitedCountByDate = useMemo(() => {
+    return (requests ?? []).reduce((acc, request) => {
+      const requestType = (request?.request ?? '').toString().trim().toUpperCase();
+      if (!isLimitedType(requestType)) return acc;
+
+      const status = (request?.status ?? '').toString().toLowerCase();
+      if (status && status !== 'active') return acc;
+
+      const dateKey = toIsoDate(request?.date);
+      if (!dateKey) return acc;
+
+      acc[dateKey] = (acc[dateKey] ?? 0) + 1;
+      return acc;
+    }, {});
+  }, [requests]);
+
+  const selectedDateKey = toIsoDate(formState.date);
+  const editingDateKey = toIsoDate(initialValues?.date);
+  const editingIsLimited = isLimitedType(initialValues?.request);
+
+  const getEffectiveLimitedCount = (dateKey) => {
+    if (!dateKey) return 0;
+    const baseCount = limitedCountByDate[dateKey] ?? 0;
+    const isEditingSameDateLimited = Boolean(
+      initialValues?.id && editingIsLimited && editingDateKey === dateKey
+    );
+    if (isEditingSameDateLimited) {
+      return Math.max(baseCount - 1, 0);
+    }
+    return baseCount;
+  };
+
+  const selectedDateLimitedCount = getEffectiveLimitedCount(selectedDateKey);
+  const isSelectedDateAtLimit = selectedDateLimitedCount >= DAILY_LIMIT;
+
   const handleChange = (event) => {
     const { name, value } = event.target;
+    setValidationError('');
     setFormState((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = (event) => {
     event.preventDefault();
     if (!isReady || !formState.date || !formState.request) return;
+
+    const normalizedDate = toIsoDate(formState.date) ?? formState.date;
+    const selectionIsLimited = isLimitedType(formState.request);
+    const willExceedLimit =
+      selectionIsLimited && normalizedDate && getEffectiveLimitedCount(normalizedDate) >= DAILY_LIMIT;
+
+    if (willExceedLimit) {
+      setValidationError(
+        `Daily limit of ${DAILY_LIMIT} reached for ${LIMITED_TYPES_LABEL} on this date.`
+      );
+      return;
+    }
 
     onSubmit?.({
       name: selectedName,
@@ -88,14 +148,29 @@ export default function NewRequestForm({
             name="request"
             value={formState.request}
             onChange={handleChange}
-            className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:text-slate-400"
           >
             {REQUEST_TYPES.map((type) => (
-              <option key={type} value={type}>
+              <option
+                key={type}
+                value={type}
+                disabled={isSelectedDateAtLimit && isLimitedType(type)}
+              >
                 {type}
               </option>
             ))}
           </select>
+          <p className="mt-1 text-xs text-slate-500">
+            {selectedDateKey ? (
+              <>
+                {selectedDateLimitedCount}/{DAILY_LIMIT} limited requests ({LIMITED_TYPES_LABEL}) on
+                this date.
+                {isSelectedDateAtLimit ? ' Selection capped.' : ''}
+              </>
+            ) : (
+              <>Up to {DAILY_LIMIT} total {LIMITED_TYPES_LABEL} requests per day.</>
+            )}
+          </p>
         </label>
 
         <label className="text-sm font-medium text-slate-700">
@@ -116,6 +191,12 @@ export default function NewRequestForm({
         >
           {isSubmitting ? 'Saving...' : 'Save request'}
         </button>
+
+        {validationError ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            {validationError}
+          </div>
+        ) : null}
       </fieldset>
     </form>
   );

@@ -105,6 +105,7 @@ export default function UserSection({
         onSubmit={handleSubmit}
         isSubmitting={isSubmitting}
         initialValues={editingRequest}
+        requests={requests}
       />
     </section>
   );

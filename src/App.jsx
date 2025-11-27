@@ -202,7 +202,7 @@ export default function App() {
         <CalendarView requests={activeRequests} />
 
         <UserSection
-          requests={requests}
+          requests={activeRequests}
           names={rosterNames}
           namesError={teamMembersError}
           isLoadingNames={isLoadingTeamMembers}
