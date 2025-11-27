@@ -52,6 +52,10 @@ function getUpcomingMonthReference(today = new Date()) {
   return new Date(today.getFullYear(), today.getMonth() + 1, 1);
 }
 
+function addMonths(date, delta) {
+  return new Date(date.getFullYear(), date.getMonth() + delta, date.getDate());
+}
+
 function getRequestVariant(value) {
   const token = (value ?? '').toString().trim().toLowerCase();
   if (!token) {
@@ -79,6 +83,7 @@ function getRequestVariant(value) {
 
 export default function CalendarView({ requests, referenceDate }) {
   const [autoReferenceDate, setAutoReferenceDate] = useState(() => getUpcomingMonthReference());
+  const [monthOffset, setMonthOffset] = useState(0);
 
   useEffect(() => {
     if (referenceDate) {
@@ -112,8 +117,8 @@ export default function CalendarView({ requests, referenceDate }) {
     if (referenceDate) {
       return referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
     }
-    return autoReferenceDate;
-  }, [autoReferenceDate, referenceDate]);
+    return addMonths(autoReferenceDate, monthOffset);
+  }, [autoReferenceDate, monthOffset, referenceDate]);
 
   const monthToken = `${effectiveReferenceDate.getFullYear()}-${effectiveReferenceDate.getMonth()}`;
 
@@ -141,13 +146,34 @@ export default function CalendarView({ requests, referenceDate }) {
     year: 'numeric',
   });
 
+  const showNavigation = !referenceDate;
+
   return (
     <section className="calendar rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm font-medium uppercase tracking-wide text-slate-500">Roster Calendar</p>
           <h2 className="text-2xl font-semibold text-slate-900">{monthTitle}</h2>
         </div>
+
+        {showNavigation ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              onClick={() => setMonthOffset((value) => value - 1)}
+            >
+              ‹ Prev
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-slate-300 px-3 py-1 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              onClick={() => setMonthOffset((value) => value + 1)}
+            >
+              Next ›
+            </button>
+          </div>
+        ) : null}
       </header>
 
       <div className="calendar__frame mt-6">
