@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import CalendarView from './components/CalendarView';
 import UserSection from './components/UserSection';
+import RosterTable from './components/RosterTable';
 import { deleteRequest, fetchAllRequests, fetchTeamMembers, submitRequest, updateRequest } from './api';
 import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
 
@@ -186,9 +187,14 @@ export default function App() {
     return requests.filter((request) => request.status?.toLowerCase() === 'active');
   }, [requests]);
 
+  const upcomingMonthDate = useMemo(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  }, []);
+
   return (
     <div className="min-h-screen bg-slate-100 pb-10">
-      <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 pt-6 md:px-8">
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 pt-6 md:px-8">
         <header className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold text-slate-900 md:text-3xl">RESQ Roster Requests</h1>
           <p className="text-sm text-slate-500 md:text-base">
@@ -198,6 +204,14 @@ export default function App() {
             <span className="text-xs font-semibold text-rose-600">{refreshError}</span>
           ) : null}
         </header>
+
+        <RosterTable
+          names={rosterNames}
+          requests={activeRequests}
+          referenceDate={upcomingMonthDate}
+          isLoadingNames={isLoadingTeamMembers}
+          namesError={teamMembersError}
+        />
 
         <CalendarView requests={activeRequests} />
 
