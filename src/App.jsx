@@ -51,6 +51,7 @@ export default function App() {
   const [teamMembers, setTeamMembers] = useState([]);
   const [teamMembersError, setTeamMembersError] = useState('');
   const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(true);
+  const [activeTab, setActiveTab] = useState('roster');
 
   useEffect(() => {
     let isMounted = true;
@@ -205,15 +206,52 @@ export default function App() {
           ) : null}
         </header>
 
-        <RosterTable
-          names={rosterNames}
-          requests={activeRequests}
-          referenceDate={upcomingMonthDate}
-          isLoadingNames={isLoadingTeamMembers}
-          namesError={teamMembersError}
-        />
+        <section className="rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
+          <div className="flex gap-2 rounded-2xl bg-slate-100 p-1">
+            <button
+              type="button"
+              className={[
+                'flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition',
+                activeTab === 'roster'
+                  ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                  : 'text-slate-600 hover:text-slate-900',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => setActiveTab('roster')}
+            >
+              Roster table
+            </button>
+            <button
+              type="button"
+              className={[
+                'flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition',
+                activeTab === 'calendar'
+                  ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                  : 'text-slate-600 hover:text-slate-900',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => setActiveTab('calendar')}
+            >
+              Calendar
+            </button>
+          </div>
 
-        <CalendarView requests={activeRequests} />
+          <div className="mt-4">
+            {activeTab === 'roster' ? (
+              <RosterTable
+                names={rosterNames}
+                requests={activeRequests}
+                referenceDate={upcomingMonthDate}
+                isLoadingNames={isLoadingTeamMembers}
+                namesError={teamMembersError}
+              />
+            ) : null}
+
+            {activeTab === 'calendar' ? <CalendarView requests={activeRequests} /> : null}
+          </div>
+        </section>
 
         <UserSection
           requests={activeRequests}
