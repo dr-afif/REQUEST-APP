@@ -51,7 +51,7 @@ export default function App() {
   const [teamMembers, setTeamMembers] = useState([]);
   const [teamMembersError, setTeamMembersError] = useState('');
   const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(true);
-  const [activeTab, setActiveTab] = useState('roster');
+  const [activeTab, setActiveTab] = useState('calendar');
 
   useEffect(() => {
     let isMounted = true;
@@ -212,20 +212,6 @@ export default function App() {
               type="button"
               className={[
                 'flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition',
-                activeTab === 'roster'
-                  ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
-                  : 'text-slate-600 hover:text-slate-900',
-              ]
-                .filter(Boolean)
-                .join(' ')}
-              onClick={() => setActiveTab('roster')}
-            >
-              Roster table
-            </button>
-            <button
-              type="button"
-              className={[
-                'flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition',
                 activeTab === 'calendar'
                   ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
                   : 'text-slate-600 hover:text-slate-900',
@@ -235,6 +221,20 @@ export default function App() {
               onClick={() => setActiveTab('calendar')}
             >
               Calendar
+            </button>
+            <button
+              type="button"
+              className={[
+                'flex-1 rounded-xl px-3 py-2 text-sm font-semibold transition',
+                activeTab === 'roster'
+                  ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                  : 'text-slate-600 hover:text-slate-900',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => setActiveTab('roster')}
+            >
+              Roster table
             </button>
           </div>
 
