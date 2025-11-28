@@ -17,9 +17,7 @@ export default function UserSection({
   const [editingRequest, setEditingRequest] = useState(null);
   const [error, setError] = useState('');
 
-  const sortedNames = useMemo(() => {
-    return [...names].sort((a, b) => a.localeCompare(b));
-  }, [names]);
+  const orderedNames = useMemo(() => [...names], [names]);
 
   const handleSubmit = async (payload) => {
     try {
@@ -51,11 +49,11 @@ export default function UserSection({
 
   const placeholderLabel = (() => {
     if (isLoadingNames) return 'Loading team members...';
-    if (!sortedNames.length) return 'No team members available';
+    if (!orderedNames.length) return 'No team members available';
     return 'Select team member...';
   })();
 
-  const disableSelector = isLoadingNames || (!sortedNames.length && !selectedName);
+  const disableSelector = isLoadingNames || (!orderedNames.length && !selectedName);
 
   return (
     <section className="flex flex-col gap-4">
@@ -71,7 +69,7 @@ export default function UserSection({
             <option value="">
               {placeholderLabel}
             </option>
-            {sortedNames.map((name) => (
+            {orderedNames.map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
