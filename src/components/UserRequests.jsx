@@ -71,7 +71,11 @@ export default function UserRequests({
       setExpandedMonths([]);
       return;
     }
-    setExpandedMonths([groupedRequests[0].key]);
+
+    const today = new Date();
+    const nextMonthToken = getMonthToken(new Date(today.getFullYear(), today.getMonth() + 1, 1));
+    const targetGroup = groupedRequests.find((group) => group.key === nextMonthToken);
+    setExpandedMonths([targetGroup?.key ?? groupedRequests[0].key]);
   }, [groupedRequests, selectedName]);
 
   const toggleGroup = (key) => {
