@@ -239,6 +239,8 @@ export default function App() {
           </div>
 
           <div className="mt-4">
+            {activeTab === 'calendar' ? <CalendarView requests={activeRequests} /> : null}
+
             {activeTab === 'roster' ? (
               <RosterTable
                 names={rosterNames}
@@ -248,8 +250,6 @@ export default function App() {
                 namesError={teamMembersError}
               />
             ) : null}
-
-            {activeTab === 'calendar' ? <CalendarView requests={activeRequests} /> : null}
           </div>
         </section>
 
