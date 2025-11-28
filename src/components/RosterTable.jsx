@@ -85,14 +85,16 @@ function getRequestVariant(value) {
 
 export default function RosterTable({ names, requests, referenceDate, isLoadingNames, namesError }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [monthOffset, setMonthOffset] = useState(0);
 
   const effectiveReferenceDate = useMemo(() => {
     if (referenceDate) {
-      return referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+      const base = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+      return new Date(base.getFullYear(), base.getMonth() + monthOffset, 1);
     }
     const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  }, [referenceDate]);
+    return new Date(now.getFullYear(), now.getMonth() + 1 + monthOffset, 1);
+  }, [referenceDate, monthOffset]);
 
   const dates = useMemo(() => buildDatesForMonth(effectiveReferenceDate), [effectiveReferenceDate]);
   const requestMap = useMemo(() => groupRequestsByNameAndDate(requests), [requests]);
@@ -123,13 +125,31 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
             Names ordered per Team Member sheet; shifts populated from requests.
           </p>
         </div>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-          onClick={() => setIsCollapsed((value) => !value)}
-        >
-          {isCollapsed ? 'Show table' : 'Hide table'}
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1 py-1">
+            <button
+              type="button"
+              className="rounded-full px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              onClick={() => setMonthOffset((value) => value - 1)}
+            >
+              ‹ Prev
+            </button>
+            <button
+              type="button"
+              className="rounded-full px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              onClick={() => setMonthOffset((value) => value + 1)}
+            >
+              Next ›
+            </button>
+          </div>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            onClick={() => setIsCollapsed((value) => !value)}
+          >
+            {isCollapsed ? 'Show table' : 'Hide table'}
+          </button>
+        </div>
       </header>
 
       {namesError ? (
