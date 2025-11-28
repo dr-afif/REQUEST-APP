@@ -1,6 +1,19 @@
 import { useMemo, useState } from 'react';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 
+const REQUEST_CLASS_MAP = {
+  am: 'req--am',
+  pm: 'req--pm',
+  night: 'req--night',
+  on: 'req--night',
+  course: 'req--course',
+  off: 'req--off',
+  leave: 'req--off',
+  hka: 'req--hka',
+  ghka: 'req--ghka',
+  al: 'req--off',
+};
+
 function buildDatesForMonth(referenceDate) {
   const start = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1);
   const end = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 0);
@@ -16,6 +29,11 @@ function buildDatesForMonth(referenceDate) {
     });
   }
   return days;
+}
+
+function isWeekend(dateObj) {
+  const day = dateObj.getDay();
+  return day === 0 || day === 6;
 }
 
 function groupRequestsByNameAndDate(requests) {
@@ -38,6 +56,31 @@ function groupRequestsByNameAndDate(requests) {
   });
 
   return grouped;
+}
+
+function getRequestVariant(value) {
+  const token = (value ?? '').toString().trim().toLowerCase();
+  if (!token) {
+    return 'req--default';
+  }
+
+  if (REQUEST_CLASS_MAP[token]) {
+    return REQUEST_CLASS_MAP[token];
+  }
+
+  if (token.includes('night')) {
+    return 'req--night';
+  }
+
+  if (token.includes('course')) {
+    return 'req--course';
+  }
+
+  if (token.includes('off') || token.includes('leave')) {
+    return 'req--off';
+  }
+
+  return 'req--default';
 }
 
 export default function RosterTable({ names, requests, referenceDate, isLoadingNames, namesError }) {
@@ -106,7 +149,12 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
                 {dates.map((day) => (
                   <th
                     key={day.key}
-                    className="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-700"
+                    className={[
+                      'whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-700',
+                      isWeekend(day.raw) ? 'bg-indigo-50' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
                   >
                     {day.label}
                   </th>
@@ -139,8 +187,22 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
                       {name}
                     </th>
                     {dates.map((day) => (
-                      <td key={day.key} className="border-b border-slate-100 px-3 py-2 text-slate-700">
-                        {renderCellValue(name, day.key)}
+                      <td
+                        key={day.key}
+                        className={[
+                          'border-b border-slate-100 px-3 py-2 text-slate-700',
+                          isWeekend(day.raw) ? 'bg-slate-50' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      >
+                        {(() => {
+                          const value = renderCellValue(name, day.key);
+                          if (!value) return '';
+                          const variantClass = getRequestVariant(value);
+                          const chipClass = ['req', variantClass].filter(Boolean).join(' ');
+                          return <span className={chipClass}>{value}</span>;
+                        })()}
                       </td>
                     ))}
                   </tr>
