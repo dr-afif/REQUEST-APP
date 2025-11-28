@@ -5,7 +5,18 @@ const REQUEST_TYPES = ['AM', 'PM', 'ON', 'OFF', 'AL', 'HKA', 'GHKA', 'COURSE'];
 const LIMITED_REQUEST_TYPES = ['OFF', 'AL', 'HKA', 'GHKA', 'COURSE'];
 const LIMITED_REQUEST_TYPES_SET = new Set(LIMITED_REQUEST_TYPES);
 const DAILY_LIMIT = 3;
-const INITIAL_STATE = { date: '', request: REQUEST_TYPES[0], comment: '' };
+
+function getNextMonthDefaultDate() {
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return toIsoDate(nextMonth);
+}
+
+const getDefaultState = () => ({
+  date: getNextMonthDefaultDate() ?? '',
+  request: REQUEST_TYPES[0],
+  comment: '',
+});
 
 const LIMITED_TYPES_LABEL = LIMITED_REQUEST_TYPES.join(', ');
 
@@ -20,7 +31,7 @@ export default function NewRequestForm({
   initialValues,
   requests = [],
 }) {
-  const [formState, setFormState] = useState(INITIAL_STATE);
+  const [formState, setFormState] = useState(getDefaultState);
   const [validationError, setValidationError] = useState('');
 
   const isReady = useMemo(() => Boolean(selectedName), [selectedName]);
@@ -34,7 +45,7 @@ export default function NewRequestForm({
       });
     } else {
       setFormState((prev) => ({
-        date: '',
+        date: getNextMonthDefaultDate() ?? '',
         request: REQUEST_TYPES.includes(prev.request) ? prev.request : REQUEST_TYPES[0],
         comment: '',
       }));
@@ -43,7 +54,7 @@ export default function NewRequestForm({
 
   useEffect(() => {
     if (!selectedName) {
-      setFormState(INITIAL_STATE);
+      setFormState(getDefaultState());
     }
   }, [selectedName]);
 
