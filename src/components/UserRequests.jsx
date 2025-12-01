@@ -74,8 +74,15 @@ export default function UserRequests({
 
     const today = new Date();
     const nextMonthToken = getMonthToken(new Date(today.getFullYear(), today.getMonth() + 1, 1));
-    const targetGroup = groupedRequests.find((group) => group.key === nextMonthToken);
-    setExpandedMonths([targetGroup?.key ?? groupedRequests[0].key]);
+    const targetGroup = groupedRequests.find(
+      (group) => group.key === nextMonthToken && group.items.length > 0
+    );
+
+    if (targetGroup) {
+      setExpandedMonths([targetGroup.key]);
+    } else {
+      setExpandedMonths([]);
+    }
   }, [groupedRequests, selectedName]);
 
   const toggleGroup = (key) => {
@@ -113,6 +120,7 @@ export default function UserRequests({
 
   return (
     <div className="flex flex-col gap-3">
+      <h3 className="px-1 text-base font-semibold text-slate-900">Request History</h3>
       {groupedRequests.map((group) => {
         const isExpanded = expandedMonths.includes(group.key);
         return (
@@ -126,7 +134,7 @@ export default function UserRequests({
               <span className="flex items-center gap-2 text-xs font-semibold text-slate-500">
                 {group.items.length} request{group.items.length === 1 ? '' : 's'}
                 <span className="rounded-full border border-slate-300 px-2 py-0.5 text-slate-600">
-                  {isExpanded ? '▾' : '▸'}
+                  {isExpanded ? 'v' : '>'}
                 </span>
               </span>
             </button>
