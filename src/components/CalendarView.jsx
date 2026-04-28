@@ -203,6 +203,7 @@ export default function CalendarView({ requests, referenceDate }) {
                   {dayRequests.length
                     ? dayRequests.map((entry) => {
                         const trimmedName = typeof entry.name === 'string' ? entry.name.trim() : '';
+                        const trimmedComment = typeof entry.comment === 'string' ? entry.comment.trim() : '';
                         const requestLabel = (entry.request ?? '').toString().trim();
                         const variantClass = getRequestVariant(requestLabel);
                         const chipClass = ['req', variantClass].filter(Boolean).join(' ');
@@ -211,10 +212,16 @@ export default function CalendarView({ requests, referenceDate }) {
                           <div
                             key={entry.id ?? `${entry.name}-${entry.date}-${entry.request}`}
                             className={chipClass}
+                            title={trimmedComment || undefined}
                           >
                             <span className="req__tag">{requestLabel || 'N/A'}</span>
                             {trimmedName ? (
                               <span className="req__name">&bull; {trimmedName}</span>
+                            ) : null}
+                            {trimmedComment ? (
+                              <span className="req__comment" role="tooltip">
+                                {trimmedComment}
+                              </span>
                             ) : null}
                           </div>
                         );

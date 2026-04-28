@@ -102,6 +102,7 @@
 }
 
 .req {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -120,6 +121,10 @@
   max-width: 100%;
 }
 
+
+.req__comment {
+  display: none;
+}
 
 
 .req__tag {
@@ -186,6 +191,61 @@
   background: #f8fafc;
   border-color: var(--calendar-border);
   color: #0f172a;
+}
+
+@media (min-width: 601px) and (hover: hover) and (pointer: fine) {
+  .calendar__frame {
+    overflow: visible;
+  }
+
+  .req:hover,
+  .req:focus-visible {
+    z-index: 20;
+  }
+
+  .req__comment {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 0.45rem);
+    z-index: 30;
+    display: block;
+    width: max-content;
+    max-width: min(18rem, 70vw);
+    padding: 0.45rem 0.6rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.5rem;
+    background: #0f172a;
+    color: #ffffff;
+    box-shadow: 0 10px 24px rgb(15 23 42 / 0.18);
+    font-size: 0.72rem;
+    font-weight: 500;
+    line-height: 1.35;
+    opacity: 0;
+    pointer-events: none;
+    text-align: left;
+    transform: translate(-50%, 0.25rem);
+    transition: opacity 120ms ease, transform 120ms ease;
+    white-space: normal;
+  }
+
+  .req__comment::after {
+    position: absolute;
+    left: 50%;
+    bottom: -0.32rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-right: 1px solid #cbd5e1;
+    border-bottom: 1px solid #cbd5e1;
+    background: #0f172a;
+    content: "";
+    transform: translateX(-50%) rotate(45deg);
+  }
+
+  .req:hover .req__comment,
+  .req:focus-visible .req__comment {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 @media (max-width: 600px) {
