@@ -6,7 +6,7 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
   const [shake, setShake] = useState(false);
   const [showPin, setShowPin] = useState(false);
 
-  const CORRECT_PIN = '1234';
+  const CORRECT_PIN = import.meta.env.VITE_ADMIN_PIN || '1234';
 
   useEffect(() => {
     if (isOpen) {
@@ -196,9 +196,11 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
           </div>
 
           {/* Prompt Hint */}
-          <div className="mt-4 text-center text-[10px] font-medium text-slate-400">
-            💡 Hint: Default admin PIN is <span className="font-bold text-slate-500">1234</span>
-          </div>
+          {CORRECT_PIN === '1234' && (
+            <div className="mt-4 text-center text-[10px] font-medium text-slate-400">
+              💡 Hint: Default admin PIN is <span className="font-bold text-slate-500">1234</span>
+            </div>
+          )}
 
           {/* Action Buttons */}
           <div className="mt-6 flex gap-3">
