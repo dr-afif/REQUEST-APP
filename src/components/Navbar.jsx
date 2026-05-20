@@ -168,94 +168,96 @@ export default function Navbar({
 
         {/* Sidebar Panel */}
         <div 
-          className={`absolute inset-y-0 right-0 w-80 max-w-[85vw] bg-white p-6 shadow-2xl flex flex-col justify-between transition-transform duration-300 ease-out transform ${
+          className={`absolute inset-y-0 right-0 w-80 max-w-[85vw] bg-white p-6 shadow-2xl overflow-y-auto transition-transform duration-300 ease-out transform ${
             isDrawerOpen ? 'translate-x-0' : 'translate-x-full'
           }`}
         >
-          {/* Top Panel Actions */}
-          <div>
-            <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-teal-500 to-indigo-600 text-white font-bold text-md shadow-sm">
-                  R
+          <div className="flex flex-col min-h-full justify-between gap-6">
+            {/* Top Panel Actions */}
+            <div>
+              <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-teal-500 to-indigo-600 text-white font-bold text-md shadow-sm">
+                    R
+                  </div>
+                  <span className="text-md font-bold bg-gradient-to-r from-teal-600 to-indigo-700 bg-clip-text text-transparent">
+                    RESQ Navigation
+                  </span>
                 </div>
-                <span className="text-md font-bold bg-gradient-to-r from-teal-600 to-indigo-700 bg-clip-text text-transparent">
-                  RESQ Navigation
-                </span>
-              </div>
-              <button
-                type="button"
-                className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-50 border border-slate-100 text-slate-500 hover:text-slate-700 active:scale-95 cursor-pointer"
-                onClick={() => setIsDrawerOpen(false)}
-                aria-label="Close menu"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Collapsible Vertical Navigation List */}
-            <div className="flex flex-col gap-1.5">
-              {navItems.map((item) => {
-                const isActive = currentPage === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleNavClick(item.id)}
-                    className={`w-full text-left rounded-xl px-4 py-3 text-sm font-semibold transition-all duration-200 ${
-                      isActive
-                        ? 'bg-gradient-to-r from-indigo-50 to-indigo-100/50 text-indigo-700 shadow-sm ring-1 ring-indigo-100'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Member Profile Selector Box inside the Drawer at the Bottom */}
-          <div className="border-t border-slate-100 pt-6 mt-auto">
-            <div className="rounded-2xl bg-slate-50 p-4 border border-slate-150">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-sm">👤</span>
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Member Account</span>
-              </div>
-              
-              <div className="relative mb-3">
-                <select
-                  id="member-select-mobile"
-                  value={selectedName}
-                  onChange={(e) => onSelectName(e.target.value)}
-                  className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-2 pl-3.5 pr-8 text-sm font-semibold text-slate-700 shadow-inner outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 cursor-pointer"
-                >
-                  <option value="">-- Guest --</option>
-                  <option value="Admin">🔒 Admin</option>
-                  {names.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
-                  ▼
-                </div>
-              </div>
-
-              {selectedName && (
                 <button
                   type="button"
-                  onClick={() => {
-                    onSelectName('');
-                    setIsDrawerOpen(false);
-                  }}
-                  className="w-full flex h-10 items-center justify-center gap-1.5 rounded-xl border border-rose-100 bg-rose-50 px-3 text-xs font-bold text-rose-600 shadow-sm transition hover:bg-rose-100/80 active:scale-95 cursor-pointer"
+                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-50 border border-slate-100 text-slate-500 hover:text-slate-700 active:scale-95 cursor-pointer"
+                  onClick={() => setIsDrawerOpen(false)}
+                  aria-label="Close menu"
                 >
-                  <span>🚪</span>
-                  <span>Exit Profile</span>
+                  ✕
                 </button>
-              )}
+              </div>
+
+              {/* Collapsible Vertical Navigation List */}
+              <div className="flex flex-col gap-1.5">
+                {navItems.map((item) => {
+                  const isActive = currentPage === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleNavClick(item.id)}
+                      className={`w-full text-left rounded-xl px-4 py-3 text-sm font-semibold transition-all duration-200 ${
+                        isActive
+                          ? 'bg-gradient-to-r from-indigo-50 to-indigo-100/50 text-indigo-700 shadow-sm ring-1 ring-indigo-100'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Member Profile Selector Box inside the Drawer at the Bottom */}
+            <div className="border-t border-slate-100 pt-6">
+              <div className="rounded-2xl bg-slate-50 p-4 border border-slate-150">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-sm">👤</span>
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Member Account</span>
+                </div>
+                
+                <div className="relative mb-3">
+                  <select
+                    id="member-select-mobile"
+                    value={selectedName}
+                    onChange={(e) => onSelectName(e.target.value)}
+                    className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-2 pl-3.5 pr-8 text-sm font-semibold text-slate-700 shadow-inner outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 cursor-pointer"
+                  >
+                    <option value="">-- Guest --</option>
+                    <option value="Admin">🔒 Admin</option>
+                    {names.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
+                    ▼
+                  </div>
+                </div>
+
+                {selectedName && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectName('');
+                      setIsDrawerOpen(false);
+                    }}
+                    className="w-full flex h-10 items-center justify-center gap-1.5 rounded-xl border border-rose-100 bg-rose-50 px-3 text-xs font-bold text-rose-600 shadow-sm transition hover:bg-rose-100/80 active:scale-95 cursor-pointer"
+                  >
+                    <span>🚪</span>
+                    <span>Exit Profile</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 

@@ -319,6 +319,16 @@
   }
 }
 
+/* ─── Panel — Mobile Landscape: full height side/bottom drawer ───────── */
+@media (max-height: 480px) and (max-width: 900px) {
+  .date-panel {
+    top: 0;
+    bottom: 0;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+}
+
 /* ─── Panel internals ─────────────────────────────────────────────────── */
 .date-panel__handle {
   flex-shrink: 0;
