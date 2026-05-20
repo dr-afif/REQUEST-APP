@@ -80,3 +80,63 @@ export async function updateRequest(id, payload) {
 export async function deleteRequest(id) {
   return request({ method: 'POST', body: { action: 'delete', id } });
 }
+
+export async function fetchMasterRoster() {
+  return request({ query: { action: 'masterroster' } });
+}
+
+export async function fetchShiftBlocks() {
+  return request({ query: { action: 'shiftblocks' } });
+}
+
+export async function fetchAllData() {
+  return request({ query: { action: 'alldata' } });
+}
+
+export async function uploadMasterRoster(rows) {
+  return request({ method: 'POST', body: { action: 'uploadmasterroster', rows } });
+}
+
+export async function updateRequestApproval(id, approvalStatus) {
+  return request({ method: 'POST', body: { action: 'updaterequestapproval', id, approvalStatus } });
+}
+
+export async function submitShiftBlock(payload) {
+  return request({ method: 'POST', body: { action: 'addshiftblock', ...payload } });
+}
+
+export async function deleteShiftBlock(id) {
+  return request({ method: 'POST', body: { action: 'deleteshiftblock', id } });
+}
+
+export async function submitShiftType(payload) {
+  return request({ method: 'POST', body: { action: 'addshifttype', ...payload } });
+}
+
+export async function updateShiftType(id, payload) {
+  return request({ method: 'POST', body: { action: 'updateshifttype', id, ...payload } });
+}
+
+export async function deleteShiftType(id) {
+  return request({ method: 'POST', body: { action: 'deleteshifttype', id } });
+}
+
+export async function submitLimitGroup(payload) {
+  return request({ method: 'POST', body: { action: 'addlimitgroup', ...payload } });
+}
+
+export async function updateLimitGroup(id, payload) {
+  return request({ method: 'POST', body: { action: 'updatelimitgroup', id, ...payload } });
+}
+
+export async function deleteLimitGroup(id) {
+  return request({ method: 'POST', body: { action: 'deletelimitgroup', id } });
+}
+
+export async function submitActivity(payload) {
+  return request({ method: 'POST', body: { action: 'addactivity', ...payload } });
+}
+
+export async function deleteActivity(id) {
+  return request({ method: 'POST', body: { action: 'deleteactivity', id } });
+}

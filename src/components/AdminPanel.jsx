@@ -1,0 +1,764 @@
+import { useState, useMemo } from 'react';
+
+export default function AdminPanel({
+  requests = [],
+  shiftBlocks = [],
+  names = [],
+  onUpdateApproval,
+  onAddBlock,
+  onDeleteBlock,
+  shiftTypes = [],
+  onAddShiftType,
+  onUpdateShiftType,
+  onDeleteShiftType,
+  limitGroups = [],
+  onAddLimitGroup,
+  onUpdateLimitGroup,
+  onDeleteLimitGroup,
+  activities = [],
+  onAddActivity,
+  onDeleteActivity,
+}) {
+
+  // Shift block inputs
+  const [blockDate, setBlockDate] = useState('');
+  const [blockGroupId, setBlockGroupId] = useState('');
+  const [blockMaxSlots, setBlockMaxSlots] = useState('0'); // 0 = completely blocked
+
+  // Shift Types inputs
+  const [newShiftName, setNewShiftName] = useState('');
+  const [newShiftIsPublic, setNewShiftIsPublic] = useState(true);
+  const [newShiftGroupId, setNewShiftGroupId] = useState('');
+
+  // Limit Groups inputs
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupLimit, setNewGroupLimit] = useState('3');
+
+  // Activity history manager inputs
+  const [actType, setActType] = useState('announcement');
+  const [actCustomText, setActCustomText] = useState('');
+  const [actName, setActName] = useState('');
+  const [actRequestType, setActRequestType] = useState('Off-Duty');
+  const [actDate, setActDate] = useState('');
+  const [actApprovalStatus, setActApprovalStatus] = useState('Approved');
+  const [actRequest, setActRequest] = useState('');
+  const [actSwapPartner, setActSwapPartner] = useState('');
+  const [actComment, setActComment] = useState('');
+
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  const handleAddActivitySubmit = (e) => {
+    e.preventDefault();
+    if (actType === 'announcement') {
+      if (!actCustomText.trim()) {
+        alert('Please fill out announcement text.');
+        return;
+      }
+      onAddActivity({
+        customText: actCustomText.trim(),
+      });
+      setActCustomText('');
+    } else {
+      if (!actName || !actDate) {
+        alert('Please fill out Name and Date.');
+        return;
+      }
+      if (actRequestType === 'Swap' && !actSwapPartner) {
+        alert('Please select a swap partner.');
+        return;
+      }
+      if (actRequestType === 'Off-Duty' && !actRequest) {
+        alert('Please enter shift name.');
+        return;
+      }
+      onAddActivity({
+        name: actName,
+        requestType: actRequestType,
+        date: actDate,
+        request: actRequestType === 'Swap' ? '' : actRequest,
+        swapPartner: actRequestType === 'Swap' ? actSwapPartner : '',
+        approvalStatus: 'Approved',
+        comment: actComment,
+      });
+      // reset form
+      setActName('');
+      setActDate('');
+      setActRequest('');
+      setActSwapPartner('');
+      setActComment('');
+    }
+  };
+
+  // 1. Queue of requests waiting for ADMIN approval
+  const adminQueue = useMemo(() => {
+    return requests.filter(
+      (r) => r.status?.toLowerCase() === 'active' && r.ApprovalStatus === 'Pending Admin'
+    );
+  }, [requests]);
+
+  const handleAddBlockSubmit = (e) => {
+    e.preventDefault();
+    if (!blockDate || !blockGroupId) {
+      alert('Please fill out date and select a limit group.');
+      return;
+    }
+    onAddBlock({
+      date: blockDate,
+      shiftType: blockGroupId, // Storing GroupID in the ShiftType column of ShiftBlocks
+      maxSlots: Number(blockMaxSlots),
+    });
+    setBlockDate('');
+  };
+
+  const handleAddShiftTypeSubmit = (e) => {
+    e.preventDefault();
+    if (!newShiftName.trim()) {
+      alert('Please enter a shift type name.');
+      return;
+    }
+    onAddShiftType({
+      name: newShiftName.trim(),
+      isPublic: newShiftIsPublic,
+      groupId: newShiftGroupId,
+    });
+    setNewShiftName('');
+    setNewShiftIsPublic(true);
+    setNewShiftGroupId('');
+  };
+
+  const handleAddLimitGroupSubmit = (e) => {
+    e.preventDefault();
+    if (!newGroupName.trim()) {
+      alert('Please enter a limit group name.');
+      return;
+    }
+    onAddLimitGroup({
+      groupName: newGroupName.trim(),
+      defaultLimit: Number(newGroupLimit),
+    });
+    setNewGroupName('');
+    setNewGroupLimit('3');
+  };
+
+  return (
+    <div className="mx-auto max-w-5xl px-4 py-8 md:px-8">
+      
+      {/* Page Title */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-extrabold text-slate-800">🔑 Roster Administration Panel</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Perform administrative changes, oversee change submissions, customize date caps, and configure shift quotas.
+        </p>
+      </div>
+
+      <div className="grid gap-8 lg:grid-cols-2">
+        
+        {/* Left Column: Operations */}
+        <div className="space-y-8">
+          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-slate-800">📋 Roster Approval Requests Queue</h2>
+              <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-bold text-indigo-700">
+                {adminQueue.length} Pending
+              </span>
+            </div>
+
+            {adminQueue.length > 0 ? (
+              <div className="space-y-4">
+                {adminQueue.map((req) => {
+                  const isSwap = req.RequestType?.toLowerCase() === 'swap';
+                  
+                  return (
+                    <div 
+                      key={req.ID}
+                      className="rounded-2xl border border-slate-100 p-4 shadow-inner bg-slate-50/50 hover:bg-slate-50 transition"
+                    >
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-500">
+                        <span>{req.Date}</span>
+                        <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] text-indigo-600 uppercase border border-indigo-100">
+                          {req.RequestType || 'Leave'}
+                        </span>
+                      </div>
+
+                      <p className="mt-3 text-sm text-slate-800">
+                        <span className="font-bold text-slate-900">{req.Name}</span>
+                        {isSwap ? (
+                          <span> swaps duty shifts with <span className="font-bold text-slate-900">{req.SwapPartner}</span>.</span>
+                        ) : (
+                          <span> requested off duty for: <span className="font-bold text-slate-900">{req.Request}</span>.</span>
+                        )}
+                      </p>
+
+                      {req.Comment && (
+                        <p className="mt-2 text-xs italic text-slate-500">"{req.Comment}"</p>
+                      )}
+
+                      <div className="mt-4 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onUpdateApproval(req.ID, 'Approved')}
+                          className="flex-1 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 text-xs transition"
+                        >
+                          ✅ Approve & Override
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onUpdateApproval(req.ID, 'Rejected')}
+                          className="flex-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-bold py-2 text-xs transition"
+                        >
+                          ❌ Reject
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400">
+                <span className="text-3xl">☕</span>
+                <p className="mt-2 text-sm font-semibold">Your queue is fully cleared! Time to rest.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Date-Specific Shift Blocker Console */}
+          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-800 mb-4">🛑 Date-Specific Shift Blocker</h2>
+            
+            <form onSubmit={handleAddBlockSubmit} className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Block Date
+                  </label>
+                  <input
+                    type="date"
+                    value={blockDate}
+                    onChange={(e) => setBlockDate(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Limit Group Cap
+                  </label>
+                  <select
+                    value={blockGroupId}
+                    onChange={(e) => setBlockGroupId(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                  >
+                    <option value="" disabled>Select a Limit Group</option>
+                    {limitGroups.map(lg => (
+                      <option key={lg.ID} value={lg.ID}>{lg.GroupName} (Default limit: {lg.DefaultLimit})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Max Available Slots (0 = Fully Blocked)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={blockMaxSlots}
+                  onChange={(e) => setBlockMaxSlots(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
+              >
+                🔒 Apply Shift Limitation Rule
+              </button>
+            </form>
+
+            {/* List Active Blocks */}
+            <div className="mt-6 border-t border-slate-100 pt-6">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Active Rules</h3>
+              {shiftBlocks.length > 0 ? (
+                <div className="divide-y divide-slate-100">
+                  {shiftBlocks.map((block) => {
+                    const group = limitGroups.find(lg => lg.ID === block.ShiftType);
+                    const groupName = group ? group.GroupName : block.ShiftType;
+                    return (
+                      <div key={block.ID} className="flex items-center justify-between py-2 text-xs">
+                        <div>
+                          <span className="font-bold text-slate-800">{block.Date}</span>
+                          <span className="ml-2 font-semibold text-slate-500">
+                            Group '{groupName}' cap: {block.MaxSlots}
+                          </span>
+                        </div>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteBlock(block.ID)}
+                        className="text-rose-500 font-bold hover:underline"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs italic text-slate-400">No active limit caps applied.</p>
+              )}
+            </div>
+          </div>
+
+        </div>{/* end left column */}
+
+        {/* Right Column: Configuration */}
+        <div className="space-y-8">
+
+          {/* Shift Types Management Card */}
+          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-800 mb-4">⚙️ Shift Types Configuration</h2>
+            
+            <form onSubmit={handleAddShiftTypeSubmit} className="space-y-4 mb-6">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  New Shift Name (e.g. AM, AL, MC)
+                </label>
+                <input
+                  type="text"
+                  value={newShiftName}
+                  onChange={(e) => setNewShiftName(e.target.value)}
+                  placeholder="e.g. EL"
+                  required
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white uppercase"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={newShiftIsPublic}
+                    onChange={(e) => setNewShiftIsPublic(e.target.checked)}
+                    className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                  />
+                  <div>
+                    <div className="text-xs font-bold text-slate-700">Public visibility</div>
+                    <div className="text-[10px] text-slate-400">Regular users can see it</div>
+                  </div>
+                </label>
+
+                <div className="flex flex-col bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <label className="text-xs font-bold text-slate-700 mb-2">Limit Group</label>
+                  <select
+                    value={newShiftGroupId}
+                    onChange={(e) => setNewShiftGroupId(e.target.value)}
+                    className="w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs font-semibold outline-none focus:border-indigo-400"
+                  >
+                    <option value="">None (Unlimited)</option>
+                    {limitGroups.map(lg => (
+                      <option key={lg.ID} value={lg.ID}>{lg.GroupName}</option>
+                    ))}
+                  </select>
+                  <div className="text-[10px] text-slate-400 mt-1">Pools quota with this group</div>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
+              >
+                ➕ Add Shift Type
+              </button>
+            </form>
+
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-t border-slate-100 pt-6">
+              Active Shift Types
+            </h3>
+            
+            {shiftTypes.length > 0 ? (
+              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto pr-2">
+                {shiftTypes.map((st) => {
+                  const group = limitGroups.find(lg => lg.ID === st.GroupID);
+                  return (
+                    <div key={st.ID} className="flex items-center justify-between py-3 text-xs">
+                      <div className="flex flex-col">
+                        <span className="font-bold text-slate-800 text-sm">{st.Name}</span>
+                        <div className="flex gap-2 mt-1">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${st.IsPublic ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                            {st.IsPublic ? '👁️ Public' : '🔒 Admin Only'}
+                          </span>
+                          {group && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">
+                              ⚡ Group: {group.GroupName}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="flex flex-col items-end gap-2">
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onUpdateShiftType(st.ID, { name: st.Name, isPublic: !st.IsPublic, groupId: st.GroupID })}
+                            className="text-[10px] font-bold text-slate-500 hover:text-indigo-600"
+                          >
+                            Toggle Public
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`Delete shift type ${st.Name}?`)) onDeleteShiftType(st.ID);
+                          }}
+                          className="text-rose-500 font-bold hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs italic text-slate-400">No shift types loaded.</p>
+            )}
+          </div>
+
+          {/* Quota Limit Groups Card */}
+          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-800 mb-4">📊 Quota Limit Groups</h2>
+            
+            <form onSubmit={handleAddLimitGroupSubmit} className="space-y-4 mb-6">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Group Name (e.g. Leaves)
+                  </label>
+                  <input
+                    type="text"
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    placeholder="e.g. Nights"
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Default Daily Limit
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newGroupLimit}
+                    onChange={(e) => setNewGroupLimit(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 text-xs transition"
+              >
+                ➕ Add Limit Group
+              </button>
+            </form>
+
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-t border-slate-100 pt-6">
+              Active Limit Groups
+            </h3>
+            
+            {limitGroups.length > 0 ? (
+              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto pr-2">
+                {limitGroups.map((lg) => (
+                  <div key={lg.ID} className="flex items-center justify-between py-3 text-xs">
+                    <div className="flex flex-col">
+                      <span className="font-bold text-slate-800 text-sm">{lg.GroupName}</span>
+                      <span className="text-[10px] text-slate-500 mt-1 font-semibold">
+                        Default Limit: {lg.DefaultLimit} slots/day
+                      </span>
+                    </div>
+                    
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`Delete limit group ${lg.GroupName}? Associated shift types will lose their limits.`)) onDeleteLimitGroup(lg.ID);
+                      }}
+                      className="text-rose-500 font-bold hover:underline"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs italic text-slate-400">No limit groups created.</p>
+            )}
+          </div>
+        </div>{/* end right column */}
+
+      </div>
+
+      {/* 📢 Activity & Announcement Manager */}
+      <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-800 mb-2">📢 Manage Activity History & Bulletins</h2>
+        <p className="text-xs text-slate-400 mb-6">
+          Add custom alerts or request logs that will be displayed in the scrolling announcement banner and updates timeline.
+        </p>
+
+        <div className="grid gap-8 md:grid-cols-3">
+          {/* Form: Add Announcement / Custom Alert */}
+          <div className="md:col-span-1 border-r border-slate-100 pr-0 md:pr-8 space-y-4">
+            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Add Update Row</h3>
+            
+            <form onSubmit={handleAddActivitySubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Update Type
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActType('announcement')}
+                    className={`flex-1 rounded-xl py-2 text-xs font-bold transition border ${
+                      actType === 'announcement'
+                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Megaphone 📢
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActType('log')}
+                    className={`flex-1 rounded-xl py-2 text-xs font-bold transition border ${
+                      actType === 'log'
+                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Roster Event 📅
+                  </button>
+                </div>
+              </div>
+
+              {actType === 'announcement' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Announcement Message (megaphoned)
+                  </label>
+                  <textarea
+                    rows="3"
+                    value={actCustomText}
+                    onChange={(e) => setActCustomText(e.target.value)}
+                    required
+                    placeholder="e.g. 📢 The upcoming June Roster is now published and open for swap request submissions!"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Member Name
+                    </label>
+                    <select
+                      value={actName}
+                      onChange={(e) => setActName(e.target.value)}
+                      required
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                    >
+                      <option value="" disabled>Select Member</option>
+                      {names.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Request Type
+                      </label>
+                      <select
+                        value={actRequestType}
+                        onChange={(e) => setActRequestType(e.target.value)}
+                        required
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      >
+                        <option value="Off-Duty">Off-Duty</option>
+                        <option value="Swap">Swap</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Shift Date
+                      </label>
+                      <input
+                        type="date"
+                        value={actDate}
+                        onChange={(e) => setActDate(e.target.value)}
+                        required
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  {actRequestType === 'Swap' ? (
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Swap Partner
+                      </label>
+                      <select
+                        value={actSwapPartner}
+                        onChange={(e) => setActSwapPartner(e.target.value)}
+                        required
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      >
+                        <option value="" disabled>Select Partner</option>
+                        {names.map(name => (
+                          name !== actName && (
+                            <option key={name} value={name}>{name}</option>
+                          )
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Requested Shift Name / Code
+                      </label>
+                      <input
+                        type="text"
+                        value={actRequest}
+                        onChange={(e) => setActRequest(e.target.value)}
+                        required
+                        placeholder="e.g. AM, Night, PM"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Comment (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={actComment}
+                      onChange={(e) => setActComment(e.target.value)}
+                      placeholder="Comment/Reason..."
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
+              >
+                📢 Post Update Event
+              </button>
+            </form>
+          </div>
+
+          {/* List of current announcements and update logs */}
+          <div className="md:col-span-2 space-y-4">
+            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Posted Activities ({activities.length})</h3>
+            
+            {activities.length > 0 ? (
+              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-2 space-y-3">
+                {activities.map((act) => {
+                  const isCustom = !!act.CustomText;
+                  return (
+                    <div key={act.ID} className="flex items-start justify-between py-3 text-xs gap-4 border-b border-slate-100 last:border-0">
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            isCustom ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
+                          }`}>
+                            {isCustom ? '📢 Announcement' : '📅 Roster Log'}
+                          </span>
+                          {act.Timestamp && (
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(act.Timestamp).toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+
+                        {isCustom ? (
+                          <p className="text-sm text-slate-800 font-semibold">{act.CustomText}</p>
+                        ) : (
+                          <p className="text-sm text-slate-800">
+                            <strong>{act.Name}</strong>{' '}
+                            {act.RequestType?.toLowerCase() === 'swap' ? (
+                              <span>swapped shift with <strong>{act.SwapPartner}</strong></span>
+                            ) : (
+                              <span>requested off-duty for <strong>{act.Request}</strong></span>
+                            )}{' '}
+                            on <strong>{act.Date}</strong> ({act.ApprovalStatus || 'Approved'})
+                            {act.Comment && <span className="block text-xs text-slate-500 italic mt-1">"{act.Comment}"</span>}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="self-center shrink-0">
+                        {confirmDeleteId === act.ID ? (
+                          <div className="flex items-center gap-2 bg-rose-50 px-2 py-1 rounded-lg border border-rose-100">
+                            <span className="text-[10px] font-bold text-rose-700">Confirm?</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDeleteActivity(act.ID);
+                                setConfirmDeleteId(null);
+                              }}
+                              className="text-white bg-rose-500 hover:bg-rose-600 px-2 py-1 rounded text-[10px] font-bold transition"
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="text-slate-600 bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-[10px] font-bold transition"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setConfirmDeleteId(act.ID);
+                            }}
+                            className="text-rose-500 font-bold hover:underline"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+                <span className="text-2xl">📭</span>
+                <p className="mt-1 text-xs font-semibold">No dynamic announcements are stored in Google Sheets.</p>
+                <p className="text-[10px] text-slate-400 mt-1">Use the left form to post an update!</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
+}

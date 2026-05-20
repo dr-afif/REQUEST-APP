@@ -28,3 +28,25 @@ button {
     @apply rounded-3xl bg-white shadow-sm ring-1 ring-slate-200;
   }
 }
+
+/* Custom premium scrollbars & animations */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+h1, h2, h3, .font-display {
+  font-family: 'Outfit', sans-serif !important;
+}

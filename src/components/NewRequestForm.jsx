@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toIsoDate } from '../utils/normalise';
 
-const REQUEST_TYPES = ['AM', 'PM', 'ON', 'OFF', 'AL', 'HKA', 'GHKA', 'COURSE'];
-const LIMITED_REQUEST_TYPES = ['OFF', 'AL', 'HKA', 'GHKA', 'COURSE'];
-const LIMITED_REQUEST_TYPES_SET = new Set(LIMITED_REQUEST_TYPES);
 const DAILY_LIMIT = 3;
 
 function getNextMonthDefaultDate() {
@@ -12,25 +9,72 @@ function getNextMonthDefaultDate() {
   return toIsoDate(nextMonth);
 }
 
-const getDefaultState = () => ({
-  date: getNextMonthDefaultDate() ?? '',
-  request: REQUEST_TYPES[0],
-  comment: '',
-});
-
-const LIMITED_TYPES_LABEL = LIMITED_REQUEST_TYPES.join(', ');
-
-function isLimitedType(value) {
-  return LIMITED_REQUEST_TYPES_SET.has((value ?? '').toString().trim().toUpperCase());
-}
-
 export default function NewRequestForm({
   selectedName,
   onSubmit,
   isSubmitting,
   initialValues,
   requests = [],
+  shiftTypes = [],
+  limitGroups = [],
+  shiftBlocks = [],
 }) {
+  const availableShiftTypes = useMemo(() => {
+    if (shiftTypes.length === 0) return ['AM', 'PM', 'ON', 'OFF', 'AL', 'HKA', 'GHKA', 'COURSE']; // fallback
+    const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+    return shiftTypes
+      .filter((st) => isAdmin || st.IsPublic)
+      .map((st) => st.Name);
+  }, [shiftTypes, selectedName]);
+
+  const limitGroupById = useMemo(() => {
+    return limitGroups.reduce((acc, group) => {
+      acc[group.ID] = group;
+      return acc;
+    }, {});
+  }, [limitGroups]);
+
+  const limitGroupIdByShiftType = useMemo(() => {
+    return shiftTypes.reduce((acc, st) => {
+      if (st.GroupID) {
+        acc[st.Name.toUpperCase()] = st.GroupID;
+      }
+      return acc;
+    }, {});
+  }, [shiftTypes]);
+
+  const limitOverridesByDateAndGroup = useMemo(() => {
+    return shiftBlocks.reduce((acc, block) => {
+      if (!acc[block.Date]) acc[block.Date] = {};
+      acc[block.Date][block.ShiftType] = block.MaxSlots; // ShiftType in shiftBlocks is actually GroupID
+      return acc;
+    }, {});
+  }, [shiftBlocks]);
+
+  const usageByDateAndGroup = useMemo(() => {
+    return (requests ?? []).reduce((acc, request) => {
+      const status = (request?.status ?? '').toLowerCase();
+      if (status && status !== 'active') return acc;
+      
+      const requestType = (request?.request ?? '').toString().trim().toUpperCase();
+      const groupId = limitGroupIdByShiftType[requestType];
+      if (!groupId) return acc; // unlimited
+
+      const dateKey = toIsoDate(request?.date);
+      if (!dateKey) return acc;
+
+      if (!acc[dateKey]) acc[dateKey] = {};
+      acc[dateKey][groupId] = (acc[dateKey][groupId] ?? 0) + 1;
+      return acc;
+    }, {});
+  }, [requests, limitGroupIdByShiftType]);
+
+  const getDefaultState = () => ({
+    date: getNextMonthDefaultDate() ?? '',
+    request: availableShiftTypes[0] ?? 'AM',
+    comment: '',
+  });
+
   const [formState, setFormState] = useState(getDefaultState);
   const [validationError, setValidationError] = useState('');
 
@@ -40,17 +84,17 @@ export default function NewRequestForm({
     if (initialValues) {
       setFormState({
         date: initialValues.date ? initialValues.date.slice(0, 10) : '',
-        request: initialValues.request ?? REQUEST_TYPES[0],
+        request: initialValues.request ?? availableShiftTypes[0],
         comment: initialValues.comment ?? '',
       });
     } else {
       setFormState((prev) => ({
         date: getNextMonthDefaultDate() ?? '',
-        request: REQUEST_TYPES.includes(prev.request) ? prev.request : REQUEST_TYPES[0],
+        request: availableShiftTypes.includes(prev.request) ? prev.request : availableShiftTypes[0],
         comment: '',
       }));
     }
-  }, [initialValues]);
+  }, [initialValues, availableShiftTypes]);
 
   useEffect(() => {
     if (!selectedName) {
@@ -58,40 +102,43 @@ export default function NewRequestForm({
     }
   }, [selectedName]);
 
-  const limitedCountByDate = useMemo(() => {
-    return (requests ?? []).reduce((acc, request) => {
-      const requestType = (request?.request ?? '').toString().trim().toUpperCase();
-      if (!isLimitedType(requestType)) return acc;
-
-      const status = (request?.status ?? '').toString().toLowerCase();
-      if (status && status !== 'active') return acc;
-
-      const dateKey = toIsoDate(request?.date);
-      if (!dateKey) return acc;
-
-      acc[dateKey] = (acc[dateKey] ?? 0) + 1;
-      return acc;
-    }, {});
-  }, [requests]);
-
   const selectedDateKey = toIsoDate(formState.date);
-  const editingDateKey = toIsoDate(initialValues?.date);
-  const editingIsLimited = isLimitedType(initialValues?.request);
 
-  const getEffectiveLimitedCount = (dateKey) => {
-    if (!dateKey) return 0;
-    const baseCount = limitedCountByDate[dateKey] ?? 0;
-    const isEditingSameDateLimited = Boolean(
-      initialValues?.id && editingIsLimited && editingDateKey === dateKey
-    );
-    if (isEditingSameDateLimited) {
-      return Math.max(baseCount - 1, 0);
+  const getLimitStatusForType = (type, date) => {
+    const groupId = limitGroupIdByShiftType[(type || '').toUpperCase()];
+    if (!groupId) return { isLimited: false }; 
+    
+    const group = limitGroupById[groupId];
+    if (!group) return { isLimited: false };
+
+    // Check if there is an override
+    const override = limitOverridesByDateAndGroup[date]?.[groupId];
+    const limit = override !== undefined ? override : group.DefaultLimit;
+
+    // Current usage
+    const usage = usageByDateAndGroup[date]?.[groupId] ?? 0;
+    
+    // Adjust if editing the same type
+    let effectiveUsage = usage;
+    if (initialValues?.id) {
+       const editingDateKey = toIsoDate(initialValues?.date);
+       const editingType = (initialValues?.request ?? '').toUpperCase();
+       const editingGroupId = limitGroupIdByShiftType[editingType];
+       if (editingDateKey === date && editingGroupId === groupId) {
+         effectiveUsage = Math.max(0, usage - 1);
+       }
     }
-    return baseCount;
+
+    return {
+      isLimited: true,
+      groupName: group.GroupName,
+      limit,
+      usage: effectiveUsage,
+      isAtLimit: effectiveUsage >= limit
+    };
   };
 
-  const selectedDateLimitedCount = getEffectiveLimitedCount(selectedDateKey);
-  const isSelectedDateAtLimit = selectedDateLimitedCount >= DAILY_LIMIT;
+  const selectedTypeStatus = getLimitStatusForType(formState.request, selectedDateKey);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -104,13 +151,11 @@ export default function NewRequestForm({
     if (!isReady || !formState.date || !formState.request) return;
 
     const normalizedDate = toIsoDate(formState.date) ?? formState.date;
-    const selectionIsLimited = isLimitedType(formState.request);
-    const willExceedLimit =
-      selectionIsLimited && normalizedDate && getEffectiveLimitedCount(normalizedDate) >= DAILY_LIMIT;
+    const limitStatus = getLimitStatusForType(formState.request, normalizedDate);
 
-    if (willExceedLimit) {
+    if (limitStatus.isLimited && limitStatus.isAtLimit) {
       setValidationError(
-        `Daily limit of ${DAILY_LIMIT} reached for ${LIMITED_TYPES_LABEL} on this date.`
+        `Limit reached for group '${limitStatus.groupName}' (${limitStatus.limit} slots) on this date.`
       );
       return;
     }
@@ -131,7 +176,7 @@ export default function NewRequestForm({
     >
       <fieldset className="flex flex-col gap-4" disabled={isSubmitting || !isReady}>
         <legend className="text-base font-semibold text-slate-900">
-          {initialValues ? 'Update request' : 'New request'}
+          {initialValues?.id ? 'Update request' : 'New request'}
         </legend>
 
         <div className="rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
@@ -161,25 +206,27 @@ export default function NewRequestForm({
             onChange={handleChange}
             className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:text-slate-400"
           >
-            {REQUEST_TYPES.map((type) => (
-              <option
-                key={type}
-                value={type}
-                disabled={isSelectedDateAtLimit && isLimitedType(type)}
-              >
-                {type}
-              </option>
-            ))}
+            {availableShiftTypes.map((type) => {
+              const limitStatus = getLimitStatusForType(type, selectedDateKey);
+              return (
+                <option
+                  key={type}
+                  value={type}
+                  disabled={limitStatus.isLimited && limitStatus.isAtLimit}
+                >
+                  {type} {limitStatus.isLimited && limitStatus.isAtLimit ? '(Full)' : ''}
+                </option>
+              );
+            })}
           </select>
           <p className="mt-1 text-xs text-slate-500">
-            {selectedDateKey ? (
+            {selectedDateKey && selectedTypeStatus.isLimited ? (
               <>
-                {selectedDateLimitedCount}/{DAILY_LIMIT} limited requests ({LIMITED_TYPES_LABEL}) on
-                this date.
-                {isSelectedDateAtLimit ? ' Selection capped.' : ''}
+                {selectedTypeStatus.usage}/{selectedTypeStatus.limit} requests for group '{selectedTypeStatus.groupName}' on this date.
+                {selectedTypeStatus.isAtLimit ? ' Selection capped.' : ''}
               </>
             ) : (
-              <>Up to {DAILY_LIMIT} total {LIMITED_TYPES_LABEL} requests per day.</>
+              selectedTypeStatus.isLimited ? `Group '${selectedTypeStatus.groupName}' is subject to limits.` : 'This shift type is unlimited.'
             )}
           </p>
         </label>

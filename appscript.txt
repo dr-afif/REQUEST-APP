@@ -1,14 +1,43 @@
-﻿const REQUEST_SHEET_NAME = 'Requests';
+const REQUEST_SHEET_NAME = 'Requests';
 const TEAM_MEMBERS_SHEET_NAME = 'TeamMembers';
+const MASTER_ROSTER_SHEET_NAME = 'MasterRoster';
+const SHIFT_BLOCKS_SHEET_NAME = 'ShiftBlocks';
+const SHIFT_TYPES_SHEET_NAME = 'ShiftTypes';
+const LIMIT_GROUPS_SHEET_NAME = 'LimitGroups';
+const ACTIVITY_HISTORY_SHEET_NAME = 'ActivityHistory';
+
 const STATUS_ACTIVE = 'Active';
 const STATUS_OLD = 'Old Request';
 const STATUS_CANCELLED = 'Cancelled';
+
+const APPROVAL_PENDING_PARTNER = 'Pending Partner';
+const APPROVAL_PENDING_ADMIN = 'Pending Admin';
+const APPROVAL_APPROVED = 'Approved';
+const APPROVAL_REJECTED = 'Rejected';
 
 function doGet(e) {
   try {
     const action = (e && e.parameter && e.parameter.action ? String(e.parameter.action) : '').toLowerCase();
     if (action === 'teammembers') {
       return getTeamMembersResponse();
+    }
+    if (action === 'alldata') {
+      return getAllDataResponse();
+    }
+    if (action === 'masterroster') {
+      return createJsonResponse(getMasterRosterData());
+    }
+    if (action === 'shiftblocks') {
+      return createJsonResponse(getShiftBlocksData());
+    }
+    if (action === 'shifttypes') {
+      return createJsonResponse(getShiftTypesData());
+    }
+    if (action === 'limitgroups') {
+      return createJsonResponse(getLimitGroupsData());
+    }
+    if (action === 'activityhistory') {
+      return createJsonResponse(getActivityHistoryData());
     }
     return getRequestsResponse();
   } catch (error) {
@@ -30,25 +59,78 @@ function doPost(e) {
     if (action === 'delete') {
       return handleDelete(payload);
     }
+    if (action === 'uploadmasterroster') {
+      return handleUploadMasterRoster(payload);
+    }
+    if (action === 'updaterequestapproval') {
+      return handleUpdateRequestApproval(payload);
+    }
+    if (action === 'addshiftblock') {
+      return handleAddShiftBlock(payload);
+    }
+    if (action === 'deleteshiftblock') {
+      return handleDeleteShiftBlock(payload);
+    }
+    if (action === 'addshifttype') {
+      return handleAddShiftType(payload);
+    }
+    if (action === 'updateshifttype') {
+      return handleUpdateShiftType(payload);
+    }
+    if (action === 'deleteshifttype') {
+      return handleDeleteShiftType(payload);
+    }
+    if (action === 'addlimitgroup') {
+      return handleAddLimitGroup(payload);
+    }
+    if (action === 'updatelimitgroup') {
+      return handleUpdateLimitGroup(payload);
+    }
+    if (action === 'deletelimitgroup') {
+      return handleDeleteLimitGroup(payload);
+    }
+    if (action === 'addactivity') {
+      return handleAddActivity(payload);
+    }
+    if (action === 'deleteactivity') {
+      return handleDeleteActivity(payload);
+    }
 
-    throw new Error('Unknown action');
+    throw new Error('Unknown action: ' + action);
   } catch (error) {
     return createJsonResponse({ result: 'error', message: error.message || error.toString() });
   }
 }
 
+function getAllDataResponse() {
+  return createJsonResponse({
+    requests: getRequestsData(),
+    teamMembers: getTeamMembersData(),
+    masterRoster: getMasterRosterData(),
+    shiftBlocks: getShiftBlocksData(),
+    shiftTypes: getShiftTypesData(),
+    limitGroups: getLimitGroupsData(),
+    activityHistory: getActivityHistoryData()
+  });
+}
+
 function getRequestsResponse() {
+  return createJsonResponse(getRequestsData());
+}
+
+function getRequestsData() {
   const sheet = getSheetByName(REQUEST_SHEET_NAME);
   if (!sheet) {
-    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+    createSheetIfNotExist(REQUEST_SHEET_NAME, ['ID', 'Timestamp', 'Name', 'Date', 'Day', 'Request', 'Status', 'Comment', 'ApprovalStatus', 'SwapPartner', 'RequestType']);
+    return [];
   }
 
   const values = sheet.getDataRange().getValues();
   if (values.length <= 1) {
-    return createJsonResponse([]);
+    return [];
   }
 
-  const headers = ensureCommentHeader(sheet, values[0]);
+  const headers = ensureHeaders(sheet, values[0]);
   const data = values.slice(1).map((row) => {
     const record = {};
     headers.forEach((header, index) => {
@@ -57,18 +139,23 @@ function getRequestsResponse() {
     return record;
   });
 
-  return createJsonResponse(data);
+  return data;
 }
 
 function getTeamMembersResponse() {
+  return createJsonResponse(getTeamMembersData());
+}
+
+function getTeamMembersData() {
   const sheet = getSheetByName(TEAM_MEMBERS_SHEET_NAME);
   if (!sheet) {
-    throw new Error(`Sheet "${TEAM_MEMBERS_SHEET_NAME}" not found.`);
+    createSheetIfNotExist(TEAM_MEMBERS_SHEET_NAME, ['MemberName']);
+    return [];
   }
 
   const rows = sheet.getDataRange().getValues();
   if (rows.length <= 1) {
-    return createJsonResponse([]);
+    return [];
   }
 
   const members = [];
@@ -80,8 +167,93 @@ function getTeamMembersResponse() {
     members.push(parsed);
   }
 
-  const uniqueMembers = Array.from(new Set(members));
-  return createJsonResponse(uniqueMembers);
+  return Array.from(new Set(members));
+}
+
+function getMasterRosterData() {
+  const sheet = getSheetByName(MASTER_ROSTER_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(MASTER_ROSTER_SHEET_NAME, ['Name', 'Date', 'Shift']);
+    return [];
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function getShiftBlocksData() {
+  const sheet = getSheetByName(SHIFT_BLOCKS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SHIFT_BLOCKS_SHEET_NAME, ['ID', 'Date', 'ShiftType', 'MaxSlots']);
+    return [];
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function getShiftTypesData() {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SHIFT_TYPES_SHEET_NAME, ['ID', 'Name', 'IsPublic', 'GroupID']);
+    const defaultSheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+    const defaults = [
+      [Date.now() + 1, 'AM', true, ''],
+      [Date.now() + 2, 'PM', true, ''],
+      [Date.now() + 3, 'ON', true, ''],
+      [Date.now() + 4, 'OFF', true, 'LEAVES'], // placeholder group id
+      [Date.now() + 5, 'AL', true, 'LEAVES'],
+      [Date.now() + 6, 'HKA', true, 'LEAVES'],
+      [Date.now() + 7, 'GHKA', true, 'LEAVES'],
+      [Date.now() + 8, 'COURSE', true, 'LEAVES'],
+      [Date.now() + 9, 'MC', false, ''],
+      [Date.now() + 10, 'EL', false, '']
+    ];
+    defaults.forEach(r => defaultSheet.appendRow(r));
+    return getShiftTypesData();
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
 }
 
 function handleSubmit(data) {
@@ -92,7 +264,7 @@ function handleSubmit(data) {
 
   const range = sheet.getDataRange();
   const values = range.getValues();
-  const headers = ensureCommentHeader(sheet, values[0] || []);
+  const headers = ensureHeaders(sheet, values[0] || []);
   const indexes = buildHeaderIndex(headers);
   const rows = values.slice(1);
 
@@ -100,6 +272,8 @@ function handleSubmit(data) {
   const date = data.date;
   const request = String(data.request || '').trim();
   const comment = data.comment ? String(data.comment).trim() : '';
+  const requestType = data.requestType ? String(data.requestType).trim() : 'Leave';
+  const swapPartner = data.swapPartner ? String(data.swapPartner).trim() : '';
 
   if (!name || !date || !request) {
     throw new Error('Missing required fields for submit.');
@@ -118,6 +292,11 @@ function handleSubmit(data) {
     }
   });
 
+  let approvalStatus = APPROVAL_PENDING_ADMIN;
+  if (requestType.toLowerCase() === 'swap') {
+    approvalStatus = APPROVAL_PENDING_PARTNER;
+  }
+
   const record = buildRowFromHeaders(headers, {
     ID: id,
     Timestamp: timestamp,
@@ -127,6 +306,9 @@ function handleSubmit(data) {
     Request: request,
     Status: STATUS_ACTIVE,
     Comment: comment,
+    ApprovalStatus: approvalStatus,
+    SwapPartner: swapPartner,
+    RequestType: requestType
   });
 
   sheet.appendRow(record);
@@ -141,7 +323,7 @@ function handleUpdate(data) {
 
   const range = sheet.getDataRange();
   const values = range.getValues();
-  const headers = ensureCommentHeader(sheet, values[0] || []);
+  const headers = ensureHeaders(sheet, values[0] || []);
   const indexes = buildHeaderIndex(headers);
   const rows = values.slice(1);
 
@@ -154,6 +336,8 @@ function handleUpdate(data) {
   const date = data.date;
   const request = String(data.request || '').trim();
   const comment = data.comment ? String(data.comment).trim() : '';
+  const requestType = data.requestType ? String(data.requestType).trim() : 'Leave';
+  const swapPartner = data.swapPartner ? String(data.swapPartner).trim() : '';
 
   if (!name || !date || !request) {
     throw new Error('Missing required fields for update.');
@@ -179,6 +363,11 @@ function handleUpdate(data) {
     throw new Error('Request not found for update.');
   }
 
+  let approvalStatus = APPROVAL_PENDING_ADMIN;
+  if (requestType.toLowerCase() === 'swap') {
+    approvalStatus = APPROVAL_PENDING_PARTNER;
+  }
+
   const record = buildRowFromHeaders(headers, {
     ID: newId,
     Timestamp: timestamp,
@@ -188,6 +377,9 @@ function handleUpdate(data) {
     Request: request,
     Status: STATUS_ACTIVE,
     Comment: comment,
+    ApprovalStatus: approvalStatus,
+    SwapPartner: swapPartner,
+    RequestType: requestType
   });
 
   sheet.appendRow(record);
@@ -202,7 +394,7 @@ function handleDelete(data) {
 
   const range = sheet.getDataRange();
   const values = range.getValues();
-  const headers = ensureCommentHeader(sheet, values[0] || []);
+  const headers = ensureHeaders(sheet, values[0] || []);
   const indexes = buildHeaderIndex(headers);
   const rows = values.slice(1);
 
@@ -226,6 +418,286 @@ function handleDelete(data) {
 
   if (!found) {
     throw new Error('Request not found or already inactive.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleUploadMasterRoster(data) {
+  const sheet = createSheetIfNotExist(MASTER_ROSTER_SHEET_NAME, ['Name', 'Date', 'Shift']);
+  
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  }
+
+  const rows = data.rows;
+  if (Array.isArray(rows) && rows.length > 0) {
+    const values = rows.map(r => [
+      String(r.name || '').trim(),
+      String(r.date || '').trim(),
+      String(r.shift || '').trim()
+    ]);
+    sheet.getRange(2, 1, values.length, 3).setValues(values);
+  }
+
+  return createJsonResponse({ result: 'success', count: rows ? rows.length : 0 });
+}
+
+function handleUpdateRequestApproval(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('Requests sheet not found.');
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureHeaders(sheet, values[0]);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const targetId = String(data.id || '').trim();
+  const newApprovalStatus = String(data.approvalStatus || '').trim();
+
+  if (!targetId || !newApprovalStatus) {
+    throw new Error('Missing target ID or approval status.');
+  }
+
+  let found = false;
+  rows.forEach((row, rowIndex) => {
+    const currentId = String(row[indexes.ID] || '').trim();
+    if (currentId === targetId) {
+      sheet.getRange(rowIndex + 2, indexes.ApprovalStatus + 1).setValue(newApprovalStatus);
+      found = true;
+    }
+  });
+
+  if (!found) {
+    throw new Error('Request not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId, approvalStatus: newApprovalStatus });
+}
+
+function handleAddShiftBlock(data) {
+  const sheet = createSheetIfNotExist(SHIFT_BLOCKS_SHEET_NAME, ['ID', 'Date', 'ShiftType', 'MaxSlots']);
+  
+  const id = Date.now();
+  const date = String(data.date || '').trim();
+  const shiftType = String(data.shiftType || '').trim();
+  const maxSlots = Number(data.maxSlots ?? 0);
+
+  if (!date || !shiftType) {
+    throw new Error('Missing required fields for shift block.');
+  }
+
+  sheet.appendRow([id, date, shiftType, maxSlots]);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleDeleteShiftBlock(data) {
+  const sheet = getSheetByName(SHIFT_BLOCKS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftBlocks sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const targetId = String(data.id || '').trim();
+  
+  let deleted = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  if (!deleted) {
+    throw new Error('Shift block ID not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleAddShiftType(data) {
+  const sheet = createSheetIfNotExist(SHIFT_TYPES_SHEET_NAME, ['ID', 'Name', 'IsPublic', 'GroupID']);
+  
+  const id = Date.now();
+  const name = String(data.name || '').trim().toUpperCase();
+  const isPublic = Boolean(data.isPublic);
+  const groupId = String(data.groupId || '').trim();
+
+  if (!name) {
+    throw new Error('Missing shift type name.');
+  }
+
+  sheet.appendRow([id, name, isPublic, groupId]);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleUpdateShiftType(data) {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftTypes sheet not found.');
+  }
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing shift type ID.');
+  }
+
+  const name = String(data.name || '').trim().toUpperCase();
+  const isPublic = Boolean(data.isPublic);
+  const groupId = String(data.groupId || '').trim();
+
+  const values = sheet.getDataRange().getValues();
+  let found = false;
+
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.getRange(i + 1, 2).setValue(name);
+      sheet.getRange(i + 1, 3).setValue(isPublic);
+      sheet.getRange(i + 1, 4).setValue(groupId);
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new Error('Shift type not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleDeleteShiftType(data) {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftTypes sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const targetId = String(data.id || '').trim();
+  
+  let deleted = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  if (!deleted) {
+    throw new Error('Shift type ID not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function getLimitGroupsData() {
+  const sheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(LIMIT_GROUPS_SHEET_NAME, ['ID', 'GroupName', 'DefaultLimit']);
+    const defaultSheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+    const defaults = [
+      ['LEAVES', 'Leaves & Offs', 3]
+    ];
+    defaults.forEach(r => defaultSheet.appendRow(r));
+    return getLimitGroupsData();
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function handleAddLimitGroup(data) {
+  const sheet = createSheetIfNotExist(LIMIT_GROUPS_SHEET_NAME, ['ID', 'GroupName', 'DefaultLimit']);
+  
+  const id = 'G_' + Date.now();
+  const groupName = String(data.groupName || '').trim();
+  const defaultLimit = Number(data.defaultLimit ?? 0);
+
+  if (!groupName) {
+    throw new Error('Missing limit group name.');
+  }
+
+  sheet.appendRow([id, groupName, defaultLimit]);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleUpdateLimitGroup(data) {
+  const sheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('LimitGroups sheet not found.');
+  }
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing limit group ID.');
+  }
+
+  const groupName = String(data.groupName || '').trim();
+  const defaultLimit = Number(data.defaultLimit ?? 0);
+
+  const values = sheet.getDataRange().getValues();
+  let found = false;
+
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.getRange(i + 1, 2).setValue(groupName);
+      sheet.getRange(i + 1, 3).setValue(defaultLimit);
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new Error('Limit group not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleDeleteLimitGroup(data) {
+  const sheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('LimitGroups sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const targetId = String(data.id || '').trim();
+  
+  let deleted = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  if (!deleted) {
+    throw new Error('Limit group ID not found.');
   }
 
   return createJsonResponse({ result: 'success', id: targetId });
@@ -259,12 +731,31 @@ function buildRowFromHeaders(headers, valuesByHeader) {
   return row;
 }
 
-function ensureCommentHeader(sheet, headers) {
-  if (headers.indexOf('Comment') !== -1) {
-    return headers;
+function createSheetIfNotExist(name, defaultHeaders) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.getRange(1, 1, 1, defaultHeaders.length).setValues([defaultHeaders]);
   }
-  const extendedHeaders = headers.concat(['Comment']);
-  sheet.getRange(1, 1, 1, extendedHeaders.length).setValues([extendedHeaders]);
+  return sheet;
+}
+
+function ensureHeaders(sheet, headers) {
+  const required = ['ID', 'Timestamp', 'Name', 'Date', 'Day', 'Request', 'Status', 'Comment', 'ApprovalStatus', 'SwapPartner', 'RequestType'];
+  let modified = false;
+  const extendedHeaders = [...headers];
+  
+  required.forEach((req) => {
+    if (extendedHeaders.indexOf(req) === -1) {
+      extendedHeaders.push(req);
+      modified = true;
+    }
+  });
+
+  if (modified) {
+    sheet.getRange(1, 1, 1, extendedHeaders.length).setValues([extendedHeaders]);
+  }
   return extendedHeaders;
 }
 
@@ -279,4 +770,93 @@ function getWeekdayName(dateValue) {
     return '';
   }
   return date.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
+function getActivityHistoryData() {
+  const sheet = getSheetByName(ACTIVITY_HISTORY_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(ACTIVITY_HISTORY_SHEET_NAME, ['ID', 'Timestamp', 'CustomText', 'Name', 'RequestType', 'Request', 'SwapPartner', 'Date', 'ApprovalStatus', 'Comment', 'Status']);
+    return [];
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const statusColIndex = headers.indexOf('Status');
+
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  // Only return Active entries; rows without a Status column are treated as Active (backward-compat)
+  return data.filter((record) => {
+    if (statusColIndex === -1) return true;
+    const status = String(record.Status || '').trim().toLowerCase();
+    return status !== 'archived';
+  });
+}
+
+function handleAddActivity(data) {
+  const sheet = createSheetIfNotExist(ACTIVITY_HISTORY_SHEET_NAME, ['ID', 'Timestamp', 'CustomText', 'Name', 'RequestType', 'Request', 'SwapPartner', 'Date', 'ApprovalStatus', 'Comment', 'Status']);
+  
+  const id = String(Date.now());
+  const timestamp = new Date().toISOString();
+  const customText = String(data.customText || '').trim();
+  const name = String(data.name || '').trim();
+  const requestType = String(data.requestType || '').trim();
+  const request = String(data.request || '').trim();
+  const swapPartner = String(data.swapPartner || '').trim();
+  const date = String(data.date || '').trim();
+  const approvalStatus = String(data.approvalStatus || '').trim() || 'Approved';
+  const comment = String(data.comment || '').trim();
+
+  sheet.appendRow([id, timestamp, customText, name, requestType, request, swapPartner, date, approvalStatus, comment, 'Active']);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleDeleteActivity(data) {
+  const sheet = getSheetByName(ACTIVITY_HISTORY_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ActivityHistory sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0] || [];
+  const targetId = String(data.id || '').trim();
+
+  if (!targetId) {
+    throw new Error('Missing activity ID for delete.');
+  }
+
+  // Find or create the Status column
+  let statusColIndex = headers.indexOf('Status');
+  if (statusColIndex === -1) {
+    // Status column doesn't exist yet — add it to the header row
+    statusColIndex = headers.length;
+    sheet.getRange(1, statusColIndex + 1).setValue('Status');
+  }
+
+  let found = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      // Soft delete: mark as Archived, never physically remove the row
+      sheet.getRange(i + 1, statusColIndex + 1).setValue('Archived');
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new Error('Activity ID not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
 }
