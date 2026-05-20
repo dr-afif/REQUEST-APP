@@ -313,6 +313,7 @@ export default function App() {
 
   // Ensure current verified selector choice is valid after names sync
   useEffect(() => {
+    if (isLoading || isLoadingTeamMembers) return;
     if (!selectedName || selectedName?.trim().toLowerCase() === 'admin') return;
 
     const hasSelected = rosterNames.some(
@@ -323,7 +324,7 @@ export default function App() {
       setSelectedName('');
       localStorage.removeItem('resq_member_name');
     }
-  }, [rosterNames, selectedName]);
+  }, [rosterNames, selectedName, isLoading, isLoadingTeamMembers]);
 
   // Handle Standard Submissions
   const handleSubmitRequest = async ({ name, date, request, id, comment, requestType, swapPartner }) => {
