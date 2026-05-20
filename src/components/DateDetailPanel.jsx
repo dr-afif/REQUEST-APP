@@ -134,18 +134,25 @@ export default function DateDetailPanel({
               </h3>
               <ul className="date-panel__request-list">
                 {allDateRequests.map((r) => {
+                  const isSaving = r.isOptimistic;
                   const style = getVariantStyle(r.request);
                   const isOwn =
                     selectedName &&
                     normalizeForComparison(r.name) === normalizeForComparison(selectedName);
+                  const itemClass = [
+                    'date-panel__request-item',
+                    isOwn ? 'date-panel__request-item--own' : '',
+                    isSaving ? 'opacity-65 animate-pulse border border-dashed border-indigo-200/80 bg-indigo-50/20' : '',
+                  ].filter(Boolean).join(' ');
+
                   return (
                     <li
                       key={r.id ?? `${r.name}-${r.date}-${r.request}`}
-                      className={`date-panel__request-item${isOwn ? ' date-panel__request-item--own' : ''}`}
+                      className={itemClass}
                     >
-                      <div className="date-panel__request-info">
+                      <div className="date-panel__request-info flex-1">
                         <span
-                          className="date-panel__request-badge"
+                          className="date-panel__request-badge shrink-0"
                           style={{
                             background: style.background,
                             color: style.color,
@@ -154,24 +161,33 @@ export default function DateDetailPanel({
                         >
                           {r.request}
                         </span>
-                        <span className="date-panel__request-name">{r.name}</span>
+                        <span className="date-panel__request-name">
+                          {r.name}
+                          {isSaving && (
+                            <span className="ml-1.5 text-[10px] font-semibold text-indigo-500">
+                              (Syncing...)
+                            </span>
+                          )}
+                        </span>
                         {r.comment && (
                           <span className="date-panel__request-comment">{r.comment}</span>
                         )}
                       </div>
                       {isOwn && (
-                        <div className="date-panel__request-actions">
+                        <div className="date-panel__request-actions shrink-0">
                           <button
                             type="button"
-                            className="date-panel__btn date-panel__btn--edit"
+                            className="date-panel__btn date-panel__btn--edit disabled:opacity-40 disabled:pointer-events-none"
                             onClick={() => onEdit?.(r)}
+                            disabled={isSaving}
                           >
                             Edit
                           </button>
                           <button
                             type="button"
-                            className="date-panel__btn date-panel__btn--delete"
+                            className="date-panel__btn date-panel__btn--delete disabled:opacity-40 disabled:pointer-events-none"
                             onClick={() => onDelete?.(r)}
+                            disabled={isSaving}
                           >
                             Delete
                           </button>

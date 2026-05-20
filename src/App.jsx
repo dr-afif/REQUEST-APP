@@ -8,6 +8,7 @@ import UpdatesPage from './components/UpdatesPage';
 import AdminPanel from './components/AdminPanel';
 import AdminPinModal from './components/AdminPinModal';
 import OnboardingOverlay from './components/OnboardingOverlay';
+import ToastNotification from './components/ToastNotification';
 
 import {
   deleteRequest,
@@ -95,6 +96,23 @@ function adaptRequestsResponse(data) {
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [requests, setRequests] = useState([]);
+  const [toasts, setToasts] = useState([]);
+
+  const addToast = (message, type = 'info', duration = 3000) => {
+    const id = `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setToasts((prev) => [...prev, { id, message, type, duration }]);
+    return id;
+  };
+
+  const removeToast = (id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const updateToast = (id, updates) => {
+    setToasts((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
+    );
+  };
   const [masterRoster, setMasterRoster] = useState([]);
   const [shiftBlocks, setShiftBlocks] = useState([]);
   const [shiftTypes, setShiftTypes] = useState([]);
@@ -326,7 +344,7 @@ export default function App() {
     }
   }, [rosterNames, selectedName, isLoading, isLoadingTeamMembers]);
 
-  // Handle Standard Submissions
+  // Handle Standard Submissions (Optimistic UI & Background save)
   const handleSubmitRequest = async ({ name, date, request, id, comment, requestType, swapPartner }) => {
     const isoDate = toIsoDate(date);
     const normalizedDate = isoDate ?? date;
@@ -342,34 +360,124 @@ export default function App() {
       swapPartner: swapPartner || '',
     };
 
-    if (id) {
-      await updateRequest(id, payload);
-    } else {
-      await submitRequest(payload);
-    }
+    const previousRequests = [...requests];
+    const tempId = id || `opt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
-    await loadAllData();
+    // Optimistically update local React state instantly
+    setRequests((prev) => {
+      if (id) {
+        return prev.map((req) =>
+          req.id === id ? { ...req, ...payload, isOptimistic: true } : req
+        );
+      } else {
+        const newReq = {
+          ...payload,
+          id: tempId,
+          isOptimistic: true,
+          status: 'Active',
+          approvalStatus: 'Pending',
+          timestamp: new Date().toISOString(),
+        };
+        return [...prev, newReq];
+      }
+    });
+
+    const actionText = id ? 'Updating' : 'Submitting';
+    const toastId = addToast(`🔄 ${actionText} request for ${name}...`, 'info', Infinity);
+
+    // Launch save process in background
+    (async () => {
+      try {
+        if (id) {
+          await updateRequest(id, payload);
+        } else {
+          await submitRequest(payload);
+        }
+        updateToast(toastId, {
+          message: `✅ Request saved successfully!`,
+          type: 'success',
+          duration: 3000,
+        });
+        await loadAllData();
+      } catch (err) {
+        console.error('Background save failed:', err);
+        setRequests(previousRequests);
+        updateToast(toastId, {
+          message: `❌ Save failed: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
   };
 
-  // Handle Roster Cancellations / Deletions
+  // Handle Roster Cancellations / Deletions (Optimistic UI & Background delete)
   const handleDeleteRequest = async ({ id, name }) => {
     if (!id) {
       throw new Error('Missing request ID for deletion.');
     }
 
-    await deleteRequest(id);
-    await loadAllData();
+    const previousRequests = [...requests];
+
+    // Optimistically remove request from local state immediately
+    setRequests((prev) => prev.filter((req) => req.id !== id));
+
+    const toastId = addToast(`🔄 Deleting request for ${name || 'member'}...`, 'info', Infinity);
+
+    // Launch delete in background
+    (async () => {
+      try {
+        await deleteRequest(id);
+        updateToast(toastId, {
+          message: `✅ Request deleted successfully.`,
+          type: 'success',
+          duration: 3000,
+        });
+        await loadAllData();
+      } catch (err) {
+        console.error('Background deletion failed:', err);
+        setRequests(previousRequests);
+        updateToast(toastId, {
+          message: `❌ Deletion failed: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
   };
 
-  // Handle Approval Overrides (Admin and Swap Partners)
+  // Handle Approval Overrides (Admin and Swap Partners) (Optimistic UI & Background update)
   const handleUpdateApproval = async (id, approvalStatus) => {
-    try {
-      setRefreshError('');
-      await updateRequestApproval(id, approvalStatus);
-      await loadAllData();
-    } catch (error) {
-      setRefreshError(error.message || 'Could not update request approval.');
-    }
+    const previousRequests = [...requests];
+
+    // Optimistically update approval status locally
+    setRequests((prev) =>
+      prev.map((req) =>
+        req.id === id ? { ...req, approvalStatus, isOptimistic: true } : req
+      )
+    );
+
+    const toastId = addToast(`🔄 Updating approval status...`, 'info', Infinity);
+
+    (async () => {
+      try {
+        await updateRequestApproval(id, approvalStatus);
+        updateToast(toastId, {
+          message: `✅ Approval status updated.`,
+          type: 'success',
+          duration: 3000,
+        });
+        await loadAllData();
+      } catch (err) {
+        console.error('Background approval update failed:', err);
+        setRequests(previousRequests);
+        updateToast(toastId, {
+          message: `❌ Approval update failed: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
   };
 
   // Handle Excel Baseline Uploads
@@ -457,14 +565,39 @@ export default function App() {
   };
 
   const handleAddActivity = async (payload) => {
-    try {
-      await submitActivity(payload);
-      // Give Sheets time to commit the write before reading back
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      await loadAllData();
-    } catch (error) {
-      alert(`Failed to add activity update: ${error.message}`);
-    }
+    const previousActivities = [...activities];
+    const tempId = `opt_${Date.now()}`;
+    const newActivity = {
+      ...payload,
+      ID: tempId,
+      Timestamp: new Date().toISOString(),
+      isOptimistic: true,
+    };
+
+    // Optimistically update state
+    setActivities((prev) => [newActivity, ...prev]);
+    const toastId = addToast(`🔄 Publishing announcement/update...`, 'info', Infinity);
+
+    (async () => {
+      try {
+        await submitActivity(payload);
+        updateToast(toastId, {
+          message: `✅ Announcement published successfully.`,
+          type: 'success',
+          duration: 3000,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await loadAllData();
+      } catch (err) {
+        console.error('Background activity addition failed:', err);
+        setActivities(previousActivities);
+        updateToast(toastId, {
+          message: `❌ Failed to publish announcement: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
   };
 
   const handleDeleteActivity = async (id) => {
@@ -472,16 +605,32 @@ export default function App() {
       alert('Cannot delete: activity ID is missing.');
       return;
     }
-    try {
-      await deleteActivity(id);
-      // Optimistically remove from UI immediately so it feels instant
-      setActivities((prev) => prev.filter((a) => a.ID !== id));
-      // Cell updates commit faster than row deletions — 800ms is enough
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await loadAllData();
-    } catch (error) {
-      alert(`Failed to delete activity update: ${error.message}`);
-    }
+    const previousActivities = [...activities];
+
+    // Optimistically delete from UI
+    setActivities((prev) => prev.filter((a) => a.ID !== id));
+    const toastId = addToast(`🔄 Deleting announcement/update...`, 'info', Infinity);
+
+    (async () => {
+      try {
+        await deleteActivity(id);
+        updateToast(toastId, {
+          message: `✅ Announcement deleted.`,
+          type: 'success',
+          duration: 3000,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await loadAllData();
+      } catch (err) {
+        console.error('Background activity deletion failed:', err);
+        setActivities(previousActivities);
+        updateToast(toastId, {
+          message: `❌ Deletion failed: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
   };
 
   const activeRequests = useMemo(() => {
@@ -608,6 +757,9 @@ export default function App() {
         onClose={handlePinClose}
         onSuccess={handlePinSuccess}
       />
+
+      {/* Toast notifications container */}
+      <ToastNotification toasts={toasts} onRemove={removeToast} />
 
     </div>
   );

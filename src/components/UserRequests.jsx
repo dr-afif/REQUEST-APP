@@ -145,16 +145,26 @@ export default function UserRequests({
                     ? new Date(request.timestamp).toLocaleString()
                     : 'Timestamp unavailable';
 
+                   const isSaving = request.isOptimistic;
+                  const itemClass = [
+                    "flex flex-wrap items-center justify-between gap-2 rounded-2xl px-3 py-2 transition-all duration-300",
+                    isSaving 
+                      ? "bg-indigo-50/40 border border-indigo-150/40 opacity-75 animate-pulse" 
+                      : "bg-slate-50 border border-transparent"
+                  ].filter(Boolean).join(" ");
+
                   return (
                     <li
                       key={request.id ?? `${request.name}-${request.date}`}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3 py-2"
+                      className={itemClass}
                     >
                       <div>
                         <p className="text-sm font-semibold text-slate-900">
                           {formatDisplayDate(request.date)} | {request.request}
                         </p>
-                        <p className="text-xs text-slate-500">Submitted {submissionLabel}</p>
+                        <p className="text-xs text-slate-500">
+                          {isSaving ? "🔄 Syncing with Google Sheets..." : `Submitted ${submissionLabel}`}
+                        </p>
                         {request.comment ? (
                           <p className="mt-1 max-w-lg text-xs text-slate-600">{request.comment}</p>
                         ) : null}
@@ -162,15 +172,17 @@ export default function UserRequests({
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-600 transition hover:bg-amber-50"
+                          className="rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-600 transition hover:bg-amber-50 disabled:opacity-30 disabled:pointer-events-none"
                           onClick={() => onEdit?.(request)}
+                          disabled={isSaving}
                         >
                           Edit
                         </button>
                         <button
                           type="button"
-                          className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
+                          className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none"
                           onClick={() => onDelete?.(request)}
+                          disabled={isSaving}
                         >
                           Delete
                         </button>
