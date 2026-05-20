@@ -329,6 +329,31 @@
   }
 }
 
+/* ─── Compact calendar overrides for small viewport heights (Landscape viewports) ───────── */
+@media (max-height: 480px) {
+  .calendar__cell {
+    min-height: 68px !important;
+    padding: 0.35rem 0.25rem !important;
+    gap: 0.15rem !important;
+  }
+  .calendar__requests {
+    gap: 0.15rem !important;
+  }
+  .req {
+    padding: 0.12rem 0.4rem !important;
+    gap: 0.15rem !important;
+    font-size: 0.65rem !important;
+  }
+  .calendar__date {
+    font-size: 0.75rem !important;
+    width: 1.3rem !important;
+    height: 1.3rem !important;
+  }
+  .calendar__cell-header {
+    margin-bottom: 0px !important;
+  }
+}
+
 /* ─── Panel internals ─────────────────────────────────────────────────── */
 .date-panel__handle {
   flex-shrink: 0;

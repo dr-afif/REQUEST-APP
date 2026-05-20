@@ -59,8 +59,8 @@ export default function Navbar({
             </div>
           </div>
 
-          {/* 🖥️ Desktop Navigation Links & Member Profile selector (Visible only on sm and up) */}
-          <div className="hidden sm:flex items-center gap-4">
+          {/* 🖥️ Desktop Navigation Links & Member Profile selector (Visible only on lg and up) */}
+          <div className="hidden lg:flex items-center gap-4">
             <div className="flex gap-1">
               {navItems.map((item) => {
                 const isActive = currentPage === item.id;
@@ -114,7 +114,7 @@ export default function Navbar({
                   title="Logout / Switch Profile"
                 >
                   <span>🚪</span>
-                  <span className="hidden md:inline">Exit</span>
+                  <span className="hidden lg:inline">Exit</span>
                 </button>
               )}
 
@@ -130,7 +130,7 @@ export default function Navbar({
           </div>
 
           {/* 📱 Mobile Toggle & Hamburger Menu Button (Visible only on mobile/tablet) */}
-          <div className="flex sm:hidden items-center gap-2">
+          <div className="flex lg:hidden items-center gap-2">
             <button
               type="button"
               className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm shadow-sm transition hover:bg-slate-50 cursor-pointer"
