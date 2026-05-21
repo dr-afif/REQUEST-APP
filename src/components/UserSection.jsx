@@ -94,15 +94,6 @@ export default function UserSection({
 
     return [
       { 
-        key: currentKey, 
-        label: labelOf(currentKey), 
-        count: counts[currentKey] || 0, 
-        limit,
-        weekendCount: weekendCounts[currentKey] || 0,
-        weekendLimit,
-        weekendLabel: weekendTargetName
-      },
-      { 
         key: nextKey, 
         label: labelOf(nextKey), 
         count: counts[nextKey] || 0, 
@@ -214,7 +205,7 @@ export default function UserSection({
 
       {/* 📊 Monthly Request Limits Summary Cards */}
       {selectedName && selectedName.trim().toLowerCase() !== 'admin' && monthlyStats.length > 0 && (
-        <div className="grid gap-4 sm:grid-cols-2 animate-fadeIn mb-2">
+        <div className="animate-fadeIn mb-2 max-w-sm">
           {monthlyStats.map((stat) => {
             const pct = Math.min(100, (stat.count / stat.limit) * 100);
             const weekendPct = Math.min(100, (stat.weekendCount / stat.weekendLimit) * 100);
