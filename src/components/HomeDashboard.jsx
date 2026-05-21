@@ -332,7 +332,7 @@ export default function HomeDashboard({
                     </h3>
                     {todayHighlight?.isOverride && (
                       <span className="mt-2 inline-block rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-600 border border-emerald-100">
-                        APPROVED OVERRIDE
+                        REQUESTED SHIFT
                       </span>
                     )}
                   </div>
