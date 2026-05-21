@@ -243,6 +243,261 @@ export default function AdminPanel({
         </p>
       </div>
 
+      {/* 📢 Activity & Announcement Manager — moved to top */}
+      <div className="mb-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-800 mb-2">📢 Manage Activity History &amp; Bulletins</h2>
+        <p className="text-xs text-slate-400 mb-6">
+          Add custom alerts or request logs that will be displayed in the scrolling announcement banner and updates timeline.
+        </p>
+
+        <div className="grid gap-8 md:grid-cols-3">
+          {/* Form: Add Announcement / Custom Alert */}
+          <div className="md:col-span-1 border-r border-slate-100 pr-0 md:pr-8 space-y-4">
+            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Add Update Row</h3>
+            
+            <form onSubmit={handleAddActivitySubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Update Type
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActType('announcement')}
+                    className={`flex-1 rounded-xl py-2 text-xs font-bold transition border ${
+                      actType === 'announcement'
+                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Megaphone 📢
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActType('log')}
+                    className={`flex-1 rounded-xl py-2 text-xs font-bold transition border ${
+                      actType === 'log'
+                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Roster Event 📅
+                  </button>
+                </div>
+              </div>
+
+              {actType === 'announcement' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Announcement Message (megaphoned)
+                  </label>
+                  <textarea
+                    rows="3"
+                    value={actCustomText}
+                    onChange={(e) => setActCustomText(e.target.value)}
+                    required
+                    placeholder="e.g. 📢 The upcoming June Roster is now published and open for swap request submissions!"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Member Name
+                    </label>
+                    <select
+                      value={actName}
+                      onChange={(e) => setActName(e.target.value)}
+                      required
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                    >
+                      <option value="" disabled>Select Member</option>
+                      {names.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Request Type
+                      </label>
+                      <select
+                        value={actRequestType}
+                        onChange={(e) => setActRequestType(e.target.value)}
+                        required
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      >
+                        <option value="Off-Duty">Off-Duty</option>
+                        <option value="Swap">Swap</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Shift Date
+                      </label>
+                      <input
+                        type="date"
+                        value={actDate}
+                        onChange={(e) => setActDate(e.target.value)}
+                        required
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  {actRequestType === 'Swap' ? (
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Swap Partner
+                      </label>
+                      <select
+                        value={actSwapPartner}
+                        onChange={(e) => setActSwapPartner(e.target.value)}
+                        required
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      >
+                        <option value="" disabled>Select Partner</option>
+                        {names.map(name => (
+                          name !== actName && (
+                            <option key={name} value={name}>{name}</option>
+                          )
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Requested Shift Name / Code
+                      </label>
+                      <input
+                        type="text"
+                        value={actRequest}
+                        onChange={(e) => setActRequest(e.target.value)}
+                        required
+                        placeholder="e.g. AM, Night, PM"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Comment (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={actComment}
+                      onChange={(e) => setActComment(e.target.value)}
+                      placeholder="Comment/Reason..."
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
+              >
+                📢 Post Update Event
+              </button>
+            </form>
+          </div>
+
+          {/* List of current announcements and update logs */}
+          <div className="md:col-span-2 space-y-4">
+            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Posted Activities ({activities.length})</h3>
+            
+            {activities.length > 0 ? (
+              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-2 space-y-3">
+                {activities.map((act) => {
+                  const isCustom = !!act.CustomText;
+                  return (
+                    <div key={act.ID} className="flex items-start justify-between py-3 text-xs gap-4 border-b border-slate-100 last:border-0">
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            isCustom ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
+                          }`}>
+                            {isCustom ? '📢 Announcement' : '📅 Roster Log'}
+                          </span>
+                          {act.Timestamp && (
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(act.Timestamp).toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+
+                        {isCustom ? (
+                          <p className="text-sm text-slate-800 font-semibold">{act.CustomText}</p>
+                        ) : (
+                          <p className="text-sm text-slate-800">
+                            <strong>{act.Name}</strong>{' '}
+                            {act.RequestType?.toLowerCase() === 'swap' ? (
+                              <span>swapped shift with <strong>{act.SwapPartner}</strong></span>
+                            ) : (
+                              <span>requested off-duty for <strong>{act.Request}</strong></span>
+                            )}{' '}
+                            on <strong>{act.Date}</strong> ({act.ApprovalStatus || 'Approved'})
+                            {act.Comment && <span className="block text-xs text-slate-500 italic mt-1">"{act.Comment}"</span>}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="self-center shrink-0">
+                        {confirmDeleteId === act.ID ? (
+                          <div className="flex items-center gap-2 bg-rose-50 px-2 py-1 rounded-lg border border-rose-100">
+                            <span className="text-[10px] font-bold text-rose-700">Confirm?</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDeleteActivity(act.ID);
+                                setConfirmDeleteId(null);
+                              }}
+                              className="text-white bg-rose-500 hover:bg-rose-600 px-2 py-1 rounded text-[10px] font-bold transition"
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="text-slate-600 bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-[10px] font-bold transition"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setConfirmDeleteId(act.ID);
+                            }}
+                            className="text-rose-500 font-bold hover:underline"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+                <span className="text-2xl">📭</span>
+                <p className="mt-1 text-xs font-semibold">No dynamic announcements are stored in Google Sheets.</p>
+                <p className="text-[10px] text-slate-400 mt-1">Use the left form to post an update!</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-8 lg:grid-cols-2">
         
         {/* Left Column: Operations */}
@@ -693,261 +948,6 @@ export default function AdminPanel({
           </div>
         </div>{/* end right column */}
 
-      </div>
-
-      {/* 📢 Activity & Announcement Manager */}
-      <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-800 mb-2">📢 Manage Activity History & Bulletins</h2>
-        <p className="text-xs text-slate-400 mb-6">
-          Add custom alerts or request logs that will be displayed in the scrolling announcement banner and updates timeline.
-        </p>
-
-        <div className="grid gap-8 md:grid-cols-3">
-          {/* Form: Add Announcement / Custom Alert */}
-          <div className="md:col-span-1 border-r border-slate-100 pr-0 md:pr-8 space-y-4">
-            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Add Update Row</h3>
-            
-            <form onSubmit={handleAddActivitySubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                  Update Type
-                </label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setActType('announcement')}
-                    className={`flex-1 rounded-xl py-2 text-xs font-bold transition border ${
-                      actType === 'announcement'
-                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    Megaphone 📢
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActType('log')}
-                    className={`flex-1 rounded-xl py-2 text-xs font-bold transition border ${
-                      actType === 'log'
-                        ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    Roster Event 📅
-                  </button>
-                </div>
-              </div>
-
-              {actType === 'announcement' ? (
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                    Announcement Message (megaphoned)
-                  </label>
-                  <textarea
-                    rows="3"
-                    value={actCustomText}
-                    onChange={(e) => setActCustomText(e.target.value)}
-                    required
-                    placeholder="e.g. 📢 The upcoming June Roster is now published and open for swap request submissions!"
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                  />
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      Member Name
-                    </label>
-                    <select
-                      value={actName}
-                      onChange={(e) => setActName(e.target.value)}
-                      required
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                    >
-                      <option value="" disabled>Select Member</option>
-                      {names.map(name => (
-                        <option key={name} value={name}>{name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Request Type
-                      </label>
-                      <select
-                        value={actRequestType}
-                        onChange={(e) => setActRequestType(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      >
-                        <option value="Off-Duty">Off-Duty</option>
-                        <option value="Swap">Swap</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Shift Date
-                      </label>
-                      <input
-                        type="date"
-                        value={actDate}
-                        onChange={(e) => setActDate(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      />
-                    </div>
-                  </div>
-
-                  {actRequestType === 'Swap' ? (
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Swap Partner
-                      </label>
-                      <select
-                        value={actSwapPartner}
-                        onChange={(e) => setActSwapPartner(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      >
-                        <option value="" disabled>Select Partner</option>
-                        {names.map(name => (
-                          name !== actName && (
-                            <option key={name} value={name}>{name}</option>
-                          )
-                        ))}
-                      </select>
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Requested Shift Name / Code
-                      </label>
-                      <input
-                        type="text"
-                        value={actRequest}
-                        onChange={(e) => setActRequest(e.target.value)}
-                        required
-                        placeholder="e.g. AM, Night, PM"
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      />
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      Comment (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={actComment}
-                      onChange={(e) => setActComment(e.target.value)}
-                      placeholder="Comment/Reason..."
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
-              >
-                📢 Post Update Event
-              </button>
-            </form>
-          </div>
-
-          {/* List of current announcements and update logs */}
-          <div className="md:col-span-2 space-y-4">
-            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Posted Activities ({activities.length})</h3>
-            
-            {activities.length > 0 ? (
-              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-2 space-y-3">
-                {activities.map((act) => {
-                  const isCustom = !!act.CustomText;
-                  return (
-                    <div key={act.ID} className="flex items-start justify-between py-3 text-xs gap-4 border-b border-slate-100 last:border-0">
-                      <div className="flex-1 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            isCustom ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {isCustom ? '📢 Announcement' : '📅 Roster Log'}
-                          </span>
-                          {act.Timestamp && (
-                            <span className="text-[10px] text-slate-400">
-                              {new Date(act.Timestamp).toLocaleString()}
-                            </span>
-                          )}
-                        </div>
-
-                        {isCustom ? (
-                          <p className="text-sm text-slate-800 font-semibold">{act.CustomText}</p>
-                        ) : (
-                          <p className="text-sm text-slate-800">
-                            <strong>{act.Name}</strong>{' '}
-                            {act.RequestType?.toLowerCase() === 'swap' ? (
-                              <span>swapped shift with <strong>{act.SwapPartner}</strong></span>
-                            ) : (
-                              <span>requested off-duty for <strong>{act.Request}</strong></span>
-                            )}{' '}
-                            on <strong>{act.Date}</strong> ({act.ApprovalStatus || 'Approved'})
-                            {act.Comment && <span className="block text-xs text-slate-500 italic mt-1">"{act.Comment}"</span>}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="self-center shrink-0">
-                        {confirmDeleteId === act.ID ? (
-                          <div className="flex items-center gap-2 bg-rose-50 px-2 py-1 rounded-lg border border-rose-100">
-                            <span className="text-[10px] font-bold text-rose-700">Confirm?</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onDeleteActivity(act.ID);
-                                setConfirmDeleteId(null);
-                              }}
-                              className="text-white bg-rose-500 hover:bg-rose-600 px-2 py-1 rounded text-[10px] font-bold transition"
-                            >
-                              Yes
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteId(null)}
-                              className="text-slate-600 bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-[10px] font-bold transition"
-                            >
-                              No
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setConfirmDeleteId(act.ID);
-                            }}
-                            className="text-rose-500 font-bold hover:underline"
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-                <span className="text-2xl">📭</span>
-                <p className="mt-1 text-xs font-semibold">No dynamic announcements are stored in Google Sheets.</p>
-                <p className="text-[10px] text-slate-400 mt-1">Use the left form to post an update!</p>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
       {/* 🔧 Global Portal Settings */}
       <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
