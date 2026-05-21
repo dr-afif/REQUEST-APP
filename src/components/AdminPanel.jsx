@@ -74,7 +74,8 @@ export default function AdminPanel({
   });
   const [quotaOverviewMonth, setQuotaOverviewMonth] = useState(() => {
     const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
   });
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
