@@ -257,7 +257,9 @@ export default function HomeDashboard({
       </div>
 
       {/* 🔄 Action Queue: Swap Partner Approvals */}
-      {selectedName && pendingPartnerSwaps.length > 0 && (
+      {/* NOTE: Approval workflow disabled — roster is finalised externally. */}
+      {/* Set APPROVAL_WORKFLOW_ENABLED = true here to re-enable. */}
+      {false && selectedName && pendingPartnerSwaps.length > 0 && (
         <div className="mt-8 rounded-3xl border border-indigo-100 bg-indigo-50/50 p-6">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-xl">⚠️</span>

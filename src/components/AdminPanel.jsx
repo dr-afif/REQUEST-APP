@@ -165,6 +165,10 @@ export default function AdminPanel({
   };
 
   // 1. Queue of requests waiting for ADMIN approval
+  // NOTE: Approval workflow is disabled for now — roster is finalised externally.
+  // Set APPROVAL_WORKFLOW_ENABLED = true to re-enable when needed.
+  const APPROVAL_WORKFLOW_ENABLED = false;
+
   const adminQueue = useMemo(() => {
     return requests.filter(
       (r) => r.status?.toLowerCase() === 'active' && r.ApprovalStatus === 'Pending Admin'
@@ -243,6 +247,8 @@ export default function AdminPanel({
         
         {/* Left Column: Operations */}
         <div className="space-y-8">
+          {/* Roster Approval Requests Queue — hidden until approval workflow is activated */}
+          {APPROVAL_WORKFLOW_ENABLED && (
           <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-slate-800">📋 Roster Approval Requests Queue</h2>
@@ -308,6 +314,7 @@ export default function AdminPanel({
               </div>
             )}
           </div>
+          )} {/* end APPROVAL_WORKFLOW_ENABLED */}
 
           {/* Date-Specific Shift Blocker Console */}
           <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
