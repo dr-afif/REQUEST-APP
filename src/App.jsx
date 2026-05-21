@@ -22,6 +22,7 @@ import {
   submitShiftType,
   updateShiftType,
   deleteShiftType,
+  reorderShiftTypes,
   submitLimitGroup,
   updateLimitGroup,
   deleteLimitGroup,
@@ -541,6 +542,15 @@ export default function App() {
     }
   };
 
+  const handleReorderShiftTypes = async (ids) => {
+    try {
+      await reorderShiftTypes(ids);
+      await loadAllData();
+    } catch (error) {
+      alert(`Failed to reorder shift types: ${error.message}`);
+    }
+  };
+
   // Handle Limit Groups Configuration
   const handleAddLimitGroup = async (payload) => {
     try {
@@ -762,6 +772,7 @@ export default function App() {
             onAddShiftType={handleAddShiftType}
             onUpdateShiftType={handleUpdateShiftType}
             onDeleteShiftType={handleDeleteShiftType}
+            onReorderShiftTypes={handleReorderShiftTypes}
             limitGroups={limitGroups}
             onAddLimitGroup={handleAddLimitGroup}
             onUpdateLimitGroup={handleUpdateLimitGroup}

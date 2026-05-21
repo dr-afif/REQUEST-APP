@@ -11,6 +11,7 @@ export default function AdminPanel({
   onAddShiftType,
   onUpdateShiftType,
   onDeleteShiftType,
+  onReorderShiftTypes,
   limitGroups = [],
   onAddLimitGroup,
   onUpdateLimitGroup,
@@ -31,6 +32,15 @@ export default function AdminPanel({
   const [newShiftName, setNewShiftName] = useState('');
   const [newShiftIsPublic, setNewShiftIsPublic] = useState(true);
   const [newShiftGroupId, setNewShiftGroupId] = useState('');
+
+  // Shift Types – inline edit & local ordered list
+  const [editingShiftId, setEditingShiftId] = useState(null);
+  const [editShiftName, setEditShiftName] = useState('');
+  const [editShiftIsPublic, setEditShiftIsPublic] = useState(true);
+  const [editShiftGroupId, setEditShiftGroupId] = useState('');
+  const [localShiftTypes, setLocalShiftTypes] = useState(shiftTypes);
+  const [isSavingShiftEdit, setIsSavingShiftEdit] = useState(false);
+  const [isReorderingShift, setIsReorderingShift] = useState(false);
 
   // Limit Groups inputs
   const [newGroupName, setNewGroupName] = useState('');
@@ -60,6 +70,57 @@ export default function AdminPanel({
       setMonthlyRequestLimitInput(settings.monthly_request_limit);
     }
   }, [settings]);
+
+  // Keep localShiftTypes in sync when prop changes (after server refresh)
+  useEffect(() => {
+    setLocalShiftTypes(shiftTypes);
+  }, [shiftTypes]);
+
+  const startEditShift = (st) => {
+    setEditingShiftId(st.ID);
+    setEditShiftName(st.Name);
+    setEditShiftIsPublic(st.IsPublic);
+    setEditShiftGroupId(st.GroupID || '');
+  };
+
+  const cancelEditShift = () => {
+    setEditingShiftId(null);
+  };
+
+  const saveEditShift = async (st) => {
+    if (!editShiftName.trim()) return;
+    setIsSavingShiftEdit(true);
+    // Optimistic update locally
+    setLocalShiftTypes(prev =>
+      prev.map(s => s.ID === st.ID
+        ? { ...s, Name: editShiftName.trim().toUpperCase(), IsPublic: editShiftIsPublic, GroupID: editShiftGroupId }
+        : s
+      )
+    );
+    setEditingShiftId(null);
+    try {
+      await onUpdateShiftType(st.ID, { name: editShiftName.trim(), isPublic: editShiftIsPublic, groupId: editShiftGroupId });
+    } catch (e) {
+      // revert on error
+      setLocalShiftTypes(shiftTypes);
+    }
+    setIsSavingShiftEdit(false);
+  };
+
+  const moveShift = async (index, direction) => {
+    const newList = [...localShiftTypes];
+    const swapIdx = index + direction;
+    if (swapIdx < 0 || swapIdx >= newList.length) return;
+    [newList[index], newList[swapIdx]] = [newList[swapIdx], newList[index]];
+    setLocalShiftTypes(newList);
+    setIsReorderingShift(true);
+    try {
+      await onReorderShiftTypes(newList.map(s => s.ID));
+    } catch (e) {
+      setLocalShiftTypes(shiftTypes); // revert
+    }
+    setIsReorderingShift(false);
+  };
 
   const handleAddActivitySubmit = (e) => {
     e.preventDefault();
@@ -401,56 +462,152 @@ export default function AdminPanel({
               </button>
             </form>
 
-            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-t border-slate-100 pt-6">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-t border-slate-100 pt-6 flex items-center gap-2">
               Active Shift Types
+              {isReorderingShift && <span className="text-[10px] font-normal text-indigo-400 animate-pulse">Saving order…</span>}
             </h3>
-            
-            {shiftTypes.length > 0 ? (
-              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto pr-2">
-                {shiftTypes.map((st) => {
+
+            {localShiftTypes.length > 0 ? (
+              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-1">
+                {localShiftTypes.map((st, idx) => {
                   const group = limitGroups.find(lg => lg.ID === st.GroupID);
+                  const isEditing = editingShiftId === st.ID;
                   return (
-                    <div key={st.ID} className="flex items-center justify-between py-3 text-xs">
-                      <div className="flex flex-col">
-                        <span className="font-bold text-slate-800 text-sm">{st.Name}</span>
-                        <div className="flex gap-2 mt-1">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${st.IsPublic ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                            {st.IsPublic ? '👁️ Public' : '🔒 Admin Only'}
-                          </span>
-                          {group && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">
-                              ⚡ Group: {group.GroupName}
-                            </span>
-                          )}
+                    <div
+                      key={st.ID}
+                      className={`py-3 text-xs transition-colors ${isEditing ? 'bg-indigo-50/60 rounded-xl px-3 -mx-1' : ''}`}
+                    >
+                      {isEditing ? (
+                        /* ── EDIT MODE ── */
+                        <div className="space-y-3">
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Name</label>
+                            <input
+                              type="text"
+                              value={editShiftName}
+                              onChange={e => setEditShiftName(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') saveEditShift(st); if (e.key === 'Escape') cancelEditShift(); }}
+                              autoFocus
+                              className="w-full rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-300"
+                            />
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <div
+                                onClick={() => setEditShiftIsPublic(v => !v)}
+                                className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${
+                                  editShiftIsPublic ? 'bg-emerald-500' : 'bg-slate-300'
+                                }`}
+                              >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
+                                  editShiftIsPublic ? 'translate-x-4' : 'translate-x-0'
+                                }`} />
+                              </div>
+                              <span className={`text-[11px] font-bold ${editShiftIsPublic ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                {editShiftIsPublic ? '👁️ Public' : '🔒 Admin Only'}
+                              </span>
+                            </label>
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Quota Group</label>
+                            <select
+                              value={editShiftGroupId}
+                              onChange={e => setEditShiftGroupId(e.target.value)}
+                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold outline-none focus:border-indigo-400"
+                            >
+                              <option value="">— None —</option>
+                              {limitGroups.map(lg => (
+                                <option key={lg.ID} value={lg.ID}>{lg.GroupName}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => saveEditShift(st)}
+                              disabled={isSavingShiftEdit || !editShiftName.trim()}
+                              className="flex-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-[11px] font-bold py-1.5 transition"
+                            >
+                              {isSavingShiftEdit ? 'Saving…' : '✓ Save'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditShift}
+                              className="flex-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-[11px] font-bold py-1.5 transition"
+                            >
+                              Cancel
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      
-                      <div className="flex flex-col items-end gap-2">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => onUpdateShiftType(st.ID, { name: st.Name, isPublic: !st.IsPublic, groupId: st.GroupID })}
-                            className="text-[10px] font-bold text-slate-500 hover:text-indigo-600"
-                          >
-                            Toggle Public
-                          </button>
+                      ) : (
+                        /* ── VIEW MODE ── */
+                        <div className="flex items-center gap-2">
+                          {/* Up/Down reorder buttons */}
+                          <div className="flex flex-col gap-0.5 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => moveShift(idx, -1)}
+                              disabled={idx === 0 || isReorderingShift}
+                              title="Move up"
+                              className="flex h-5 w-5 items-center justify-center rounded bg-slate-100 text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 disabled:opacity-25 transition text-[10px] leading-none"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveShift(idx, 1)}
+                              disabled={idx === localShiftTypes.length - 1 || isReorderingShift}
+                              title="Move down"
+                              className="flex h-5 w-5 items-center justify-center rounded bg-slate-100 text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 disabled:opacity-25 transition text-[10px] leading-none"
+                            >
+                              ▼
+                            </button>
+                          </div>
+
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <span className="block font-bold text-slate-800 text-sm truncate">{st.Name}</span>
+                            <div className="flex flex-wrap gap-1.5 mt-1">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                st.IsPublic ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                              }`}>
+                                {st.IsPublic ? '👁️ Public' : '🔒 Admin Only'}
+                              </span>
+                              {group && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">
+                                  ⚡ {group.GroupName}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex gap-1.5 flex-shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => startEditShift(st)}
+                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
+                            >
+                              ✏️ Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Delete shift type "${st.Name}"?`)) onDeleteShiftType(st.ID);
+                              }}
+                              className="rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-500 hover:bg-rose-100 transition"
+                            >
+                              🗑
+                            </button>
+                          </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (confirm(`Delete shift type ${st.Name}?`)) onDeleteShiftType(st.ID);
-                          }}
-                          className="text-rose-500 font-bold hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
             ) : (
-              <p className="text-xs italic text-slate-400">No shift types loaded.</p>
+              <p className="text-xs italic text-slate-400">No shift types configured yet.</p>
             )}
           </div>
 

@@ -121,6 +121,11 @@ export async function deleteShiftType(id) {
   return request({ method: 'POST', body: { action: 'deleteshifttype', id } });
 }
 
+export async function reorderShiftTypes(ids) {
+  return request({ method: 'POST', body: { action: 'reordershifttypes', ids } });
+}
+
+
 export async function submitLimitGroup(payload) {
   return request({ method: 'POST', body: { action: 'addlimitgroup', ...payload } });
 }

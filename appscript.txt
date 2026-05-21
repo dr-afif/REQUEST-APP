@@ -81,6 +81,9 @@ function doPost(e) {
     if (action === 'deleteshifttype') {
       return handleDeleteShiftType(payload);
     }
+    if (action === 'reordershifttypes') {
+      return handleReorderShiftTypes(payload);
+    }
     if (action === 'addlimitgroup') {
       return handleAddLimitGroup(payload);
     }
@@ -602,6 +605,46 @@ function handleDeleteShiftType(data) {
   }
 
   return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleReorderShiftTypes(data) {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftTypes sheet not found.');
+  }
+
+  const ids = data.ids;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new Error('Missing or invalid ids array.');
+  }
+
+  // Read current rows (skip header)
+  const allValues = sheet.getDataRange().getValues();
+  const header = allValues[0];
+  const dataRows = allValues.slice(1);
+
+  // Build a map id -> row data
+  const rowMap = {};
+  dataRows.forEach(function(row) {
+    rowMap[String(row[0]).trim()] = row;
+  });
+
+  // Build the new ordered rows based on the provided ids array
+  const reordered = ids.map(function(id) {
+    return rowMap[String(id).trim()];
+  }).filter(Boolean);
+
+  // Clear the sheet except header
+  if (sheet.getLastRow() > 1) {
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+  }
+
+  // Write reordered rows back
+  reordered.forEach(function(row, i) {
+    sheet.getRange(i + 2, 1, 1, row.length).setValues([row]);
+  });
+
+  return createJsonResponse({ result: 'success' });
 }
 
 function getLimitGroupsData() {
