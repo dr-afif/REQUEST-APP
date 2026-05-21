@@ -201,6 +201,52 @@ export default function AdminPanel({
     );
   }, [requests]);
 
+  // Group ALL users' requests by user and by month
+  const userMonthlyUsage = useMemo(() => {
+    const usage = {};
+    const globalLimit = Number(settings?.monthly_request_limit) || 10;
+    
+    // Initialize for all active users
+    names.forEach(name => {
+      usage[name] = {};
+    });
+
+    // We only care about active requests for quota
+    const activeRequests = requests.filter(r => r.status?.toLowerCase() === 'active');
+    
+    activeRequests.forEach(r => {
+      if (!r.date || !r.name) return;
+      if (!names.includes(r.name)) return; // Only track currently active names
+      const d = new Date(r.date);
+      if (isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!usage[r.name][key]) {
+        usage[r.name][key] = 0;
+      }
+      usage[r.name][key]++;
+    });
+
+    const now = new Date();
+    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const nextKey = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
+
+    const labelOf = (yearMonthKey) => {
+      const [y, m] = yearMonthKey.split('-');
+      const dateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
+      return dateObj.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    };
+
+    return {
+      limit: globalLimit,
+      months: [
+        { key: currentKey, label: labelOf(currentKey) },
+        { key: nextKey, label: labelOf(nextKey) }
+      ],
+      data: usage
+    };
+  }, [requests, names, settings?.monthly_request_limit]);
+
   const handleAddBlockSubmit = (e) => {
     e.preventDefault();
     if (!blockDate || !blockGroupId) {
@@ -1038,6 +1084,65 @@ export default function AdminPanel({
         </div>{/* end right column */}
 
       </div>
+
+      {/* 📈 Users Monthly Quota Overview */}
+      <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 mb-1">📈 Monthly Quota Overview</h2>
+            <p className="text-xs text-slate-400">
+              Track request limits for all active users across current and upcoming months. (Limit: {userMonthlyUsage.limit})
+            </p>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b-2 border-slate-100">
+                <th className="pb-3 text-xs font-bold text-slate-500 uppercase tracking-wider pl-2">User Name</th>
+                {userMonthlyUsage.months.map(m => (
+                  <th key={m.key} className="pb-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">
+                    {m.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {Object.keys(userMonthlyUsage.data).sort().map(userName => (
+                <tr key={userName} className="hover:bg-slate-50/50 transition">
+                  <td className="py-3 pl-2 text-sm font-bold text-slate-700">{userName}</td>
+                  {userMonthlyUsage.months.map(m => {
+                    const count = userMonthlyUsage.data[userName][m.key] || 0;
+                    const limit = userMonthlyUsage.limit;
+                    const isOver = count > limit;
+                    const isNear = count === limit;
+                    return (
+                      <td key={m.key} className="py-3 text-center">
+                        <span className={`inline-flex items-center justify-center min-w-[3rem] px-2 py-1 rounded-lg text-xs font-bold ${
+                          isOver ? 'bg-rose-100 text-rose-700' :
+                          isNear ? 'bg-amber-100 text-amber-700' :
+                          count > 0 ? 'bg-indigo-50 text-indigo-700' : 'text-slate-400'
+                        }`}>
+                          {count} <span className="opacity-50 ml-0.5">/ {limit}</span>
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              {Object.keys(userMonthlyUsage.data).length === 0 && (
+                <tr>
+                  <td colSpan={userMonthlyUsage.months.length + 1} className="py-8 text-center text-sm text-slate-400 italic">
+                    No active users to track.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* 🔧 Global Portal Settings */}
       <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
         <h2 className="text-xl font-bold text-slate-800 mb-2">🔧 Global Portal Settings</h2>
