@@ -66,11 +66,17 @@ export default function AdminPanel({
   const [monthlyRequestLimitInput, setMonthlyRequestLimitInput] = useState(() => {
     return settings?.monthly_request_limit || '10';
   });
+  const [monthlyWeekendLimitInput, setMonthlyWeekendLimitInput] = useState(() => {
+    return settings?.monthly_weekend_limit || '4';
+  });
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
   useEffect(() => {
     if (settings?.monthly_request_limit) {
       setMonthlyRequestLimitInput(settings.monthly_request_limit);
+    }
+    if (settings?.monthly_weekend_limit) {
+      setMonthlyWeekendLimitInput(settings.monthly_weekend_limit);
     }
   }, [settings]);
 
@@ -297,6 +303,7 @@ export default function AdminPanel({
     setIsUpdatingSettings(true);
     try {
       await onUpdateSetting('monthly_request_limit', monthlyRequestLimitInput);
+      await onUpdateSetting('monthly_weekend_limit', monthlyWeekendLimitInput);
     } catch (err) {
       alert(err.message || 'Failed to update settings');
     } finally {
@@ -1151,11 +1158,11 @@ export default function AdminPanel({
         </p>
 
         <form onSubmit={handleSaveSettings} className="max-w-md space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-              Monthly Request Limit per User
-            </label>
-            <div className="flex gap-2">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Monthly Request Limit (Total)
+              </label>
               <input
                 type="number"
                 min="1"
@@ -1163,19 +1170,40 @@ export default function AdminPanel({
                 value={monthlyRequestLimitInput}
                 onChange={(e) => setMonthlyRequestLimitInput(e.target.value)}
                 required
-                className="w-32 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
               />
-              <button
-                type="submit"
-                disabled={isUpdatingSettings}
-                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-indigo-500 disabled:bg-indigo-300"
-              >
-                {isUpdatingSettings ? 'Saving...' : 'Save Settings'}
-              </button>
+              <p className="mt-1 text-[10px] text-slate-400">
+                Change the monthly request quota. Set to e.g. 10 to limit each user to 10 shift/swap submissions per month.
+              </p>
             </div>
-            <p className="mt-1 text-[10px] text-slate-400">
-              Change the monthly request quota. Set to e.g. 10 to limit each user to 10 shift/swap submissions per month.
-            </p>
+            
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Weekend Request Limit
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="99"
+                value={monthlyWeekendLimitInput}
+                onChange={(e) => setMonthlyWeekendLimitInput(e.target.value)}
+                required
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+              />
+              <p className="mt-1 text-[10px] text-slate-400">
+                Limits how many of a user's monthly requests can fall on a weekend (Saturday or Sunday). Set to e.g. 4.
+              </p>
+            </div>
+          </div>
+          
+          <div className="pt-2">
+            <button
+              type="submit"
+              disabled={isUpdatingSettings}
+              className="w-full rounded-xl bg-indigo-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-indigo-500 disabled:bg-indigo-300"
+            >
+              {isUpdatingSettings ? 'Saving...' : 'Save Settings'}
+            </button>
           </div>
         </form>
       </div>

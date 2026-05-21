@@ -37,12 +37,20 @@ export default function UserSection({
     });
 
     const counts = {};
+    const weekendCounts = {};
+
     userActiveRequests.forEach((r) => {
       if (!r.date) return;
       const d = new Date(r.date);
       if (isNaN(d.getTime())) return;
+      
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       counts[key] = (counts[key] || 0) + 1;
+      
+      const day = d.getDay();
+      if (day === 0 || day === 6) {
+        weekendCounts[key] = (weekendCounts[key] || 0) + 1;
+      }
     });
 
     const now = new Date();
@@ -52,6 +60,9 @@ export default function UserSection({
     const nextKey = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
 
     const limit = Number(settings?.monthly_request_limit) || 10;
+    const weekendLimit = settings?.monthly_weekend_limit !== undefined 
+      ? Number(settings.monthly_weekend_limit) 
+      : 4;
 
     const labelOf = (yearMonthKey) => {
       const [y, m] = yearMonthKey.split('-');
@@ -60,8 +71,22 @@ export default function UserSection({
     };
 
     return [
-      { key: currentKey, label: labelOf(currentKey), count: counts[currentKey] || 0, limit },
-      { key: nextKey, label: labelOf(nextKey), count: counts[nextKey] || 0, limit },
+      { 
+        key: currentKey, 
+        label: labelOf(currentKey), 
+        count: counts[currentKey] || 0, 
+        limit,
+        weekendCount: weekendCounts[currentKey] || 0,
+        weekendLimit
+      },
+      { 
+        key: nextKey, 
+        label: labelOf(nextKey), 
+        count: counts[nextKey] || 0, 
+        limit,
+        weekendCount: weekendCounts[nextKey] || 0,
+        weekendLimit
+      },
     ];
   }, [requests, selectedName, settings]);
 
@@ -168,6 +193,7 @@ export default function UserSection({
         <div className="grid gap-4 sm:grid-cols-2 animate-fadeIn mb-2">
           {monthlyStats.map((stat) => {
             const pct = Math.min(100, (stat.count / stat.limit) * 100);
+            const weekendPct = Math.min(100, (stat.weekendCount / stat.weekendLimit) * 100);
             
             // Color thresholds
             let barColor = 'bg-emerald-500';
@@ -194,24 +220,43 @@ export default function UserSection({
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    {stat.label}
-                  </span>
-                  <span className={`text-sm font-extrabold ${textColor}`}>
-                    {stat.count} / {stat.limit} used
+                    {stat.label} Quotas
                   </span>
                 </div>
                 
-                {/* Progress Bar Container */}
-                <div className="h-2 w-full rounded-full bg-slate-200/75 overflow-hidden">
-                  <div 
-                    className={`h-full ${barColor} transition-all duration-500 ease-out rounded-full`}
-                    style={{ width: `${pct}%` }}
-                  />
+                {/* Total Quota Progress Bar Container */}
+                <div className="mb-3">
+                  <div className="flex justify-between mb-1 text-[10px] font-bold">
+                    <span className="text-slate-500">Total Requests</span>
+                    <span className={textColor}>{stat.count} / {stat.limit}</span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-slate-200/75 overflow-hidden">
+                    <div 
+                      className={`h-full ${barColor} transition-all duration-500 ease-out rounded-full`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
                 </div>
 
-                {stat.count >= stat.limit && (
+                {/* Weekend Quota Progress Bar Container */}
+                <div className="mb-1">
+                  <div className="flex justify-between mb-1 text-[10px] font-bold">
+                    <span className="text-slate-500">Weekend Requests</span>
+                    <span className={stat.weekendCount >= stat.weekendLimit ? 'text-rose-700' : 'text-slate-600'}>
+                      {stat.weekendCount} / {stat.weekendLimit}
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-slate-200/75 overflow-hidden">
+                    <div 
+                      className={`h-full ${stat.weekendCount >= stat.weekendLimit ? 'bg-rose-500' : 'bg-slate-400'} transition-all duration-500 ease-out rounded-full`}
+                      style={{ width: `${weekendPct}%` }}
+                    />
+                  </div>
+                </div>
+
+                {(stat.count >= stat.limit || stat.weekendCount >= stat.weekendLimit) && (
                   <p className="mt-2 text-[10px] font-semibold text-rose-600 flex items-center gap-1">
-                    ⚠️ Limit reached! No more requests allowed for this month.
+                    ⚠️ {stat.count >= stat.limit ? 'Total Limit reached!' : 'Weekend limit reached!'}
                   </p>
                 )}
               </div>

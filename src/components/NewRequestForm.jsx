@@ -185,6 +185,39 @@ export default function NewRequestForm({
     return count;
   };
 
+  const getMonthlyWeekendRequestCount = (targetName, dateString) => {
+    if (!targetName || !dateString) return 0;
+    const targetDate = new Date(dateString);
+    if (isNaN(targetDate.getTime())) return 0;
+    
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+    
+    const normalizedTargetName = targetName.trim().toLowerCase();
+
+    const userActiveWeekendRequests = (requests ?? []).filter((r) => {
+      const isUser = r.name && r.name.trim().toLowerCase() === normalizedTargetName;
+      const isActive = r.status?.toLowerCase() === 'active';
+      if (!isUser || !isActive || !r.date) return false;
+      
+      const d = new Date(r.date);
+      if (isNaN(d.getTime())) return false;
+      const day = d.getDay();
+      const isWeekend = day === 0 || day === 6;
+      
+      return d.getFullYear() === targetYear && d.getMonth() === targetMonth && isWeekend;
+    });
+
+    let count = userActiveWeekendRequests.length;
+    if (initialValues?.id) {
+      const isEditingInSameMonth = userActiveWeekendRequests.some((r) => r.id === initialValues.id);
+      if (isEditingInSameMonth) {
+        count = Math.max(0, count - 1);
+      }
+    }
+    return count;
+  };
+
   const handleSubmit = (event) => {
     event.preventDefault();
     if (!isReady || !formState.date || !formState.request) return;
@@ -217,6 +250,26 @@ export default function NewRequestForm({
           `Monthly request limit reached for ${finalName} (${monthlyLimit} requests allowed per month).`
         );
         return;
+      }
+    }
+
+    // 3. Check monthly weekend limit (skip if Admin)
+    if (!isAdmin) {
+      const d = new Date(normalizedDate);
+      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+      
+      if (isWeekend) {
+        const weekendCount = getMonthlyWeekendRequestCount(finalName, normalizedDate);
+        const weekendLimit = settings?.monthly_weekend_limit !== undefined 
+          ? Number(settings.monthly_weekend_limit) 
+          : 4; // Default to 4 if not set
+        
+        if (weekendLimit >= 0 && weekendCount >= weekendLimit) {
+          setValidationError(
+            `Monthly weekend request limit reached for ${finalName} (${weekendLimit} weekend requests allowed per month).`
+          );
+          return;
+        }
       }
     }
 
