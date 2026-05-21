@@ -72,6 +72,10 @@ export default function AdminPanel({
   const [weekendLimitGroupIdInput, setWeekendLimitGroupIdInput] = useState(() => {
     return settings?.weekend_limit_group_id || 'ALL';
   });
+  const [quotaOverviewMonth, setQuotaOverviewMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
   useEffect(() => {
@@ -217,11 +221,20 @@ export default function AdminPanel({
   const userMonthlyUsage = useMemo(() => {
     const usage = {};
     const globalLimit = Number(settings?.monthly_request_limit) || 10;
+    const weekendLimit = settings?.monthly_weekend_limit !== undefined 
+      ? Number(settings.monthly_weekend_limit) 
+      : 4;
+    const weekendLimitGroupId = settings?.weekend_limit_group_id || 'ALL';
     
     // Initialize for all active users
     names.forEach(name => {
       usage[name] = {};
     });
+
+    const limitGroupIdByShiftType = localShiftTypes.reduce((acc, st) => {
+      if (st.GroupID) acc[st.Name.toUpperCase()] = st.GroupID;
+      return acc;
+    }, {});
 
     // We only care about active requests for quota
     const activeRequests = requests.filter(r => r.status?.toLowerCase() === 'active');
@@ -231,33 +244,43 @@ export default function AdminPanel({
       if (!names.includes(r.name)) return; // Only track currently active names
       const d = new Date(r.date);
       if (isNaN(d.getTime())) return;
+      
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       if (!usage[r.name][key]) {
-        usage[r.name][key] = 0;
+        usage[r.name][key] = { count: 0, weekendCount: 0 };
       }
-      usage[r.name][key]++;
+      usage[r.name][key].count++;
+
+      const day = d.getDay();
+      if (day === 0 || day === 6) {
+        let applies = true;
+        if (weekendLimitGroupId !== 'ALL') {
+          const reqType = (r.request ?? '').toString().trim().toUpperCase();
+          if (limitGroupIdByShiftType[reqType] !== weekendLimitGroupId) {
+            applies = false;
+          }
+        }
+        if (applies) {
+          usage[r.name][key].weekendCount++;
+        }
+      }
     });
 
-    const now = new Date();
-    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    const nextKey = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
-
     const labelOf = (yearMonthKey) => {
+      if (!yearMonthKey) return '';
       const [y, m] = yearMonthKey.split('-');
       const dateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
-      return dateObj.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+      return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     };
 
     return {
       limit: globalLimit,
-      months: [
-        { key: currentKey, label: labelOf(currentKey) },
-        { key: nextKey, label: labelOf(nextKey) }
-      ],
+      weekendLimit,
+      monthKey: quotaOverviewMonth,
+      monthLabel: labelOf(quotaOverviewMonth),
       data: usage
     };
-  }, [requests, names, settings?.monthly_request_limit]);
+  }, [requests, names, settings, quotaOverviewMonth, localShiftTypes]);
 
   const handleAddBlockSubmit = (e) => {
     e.preventDefault();
@@ -1101,12 +1124,23 @@ export default function AdminPanel({
 
       {/* 📈 Users Monthly Quota Overview */}
       <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
             <h2 className="text-xl font-bold text-slate-800 mb-1">📈 Monthly Quota Overview</h2>
             <p className="text-xs text-slate-400">
-              Track request limits for all active users across current and upcoming months. (Limit: {userMonthlyUsage.limit})
+              Track request limits for all active users for a given month.
             </p>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-2">
+              Select Month
+            </label>
+            <input
+              type="month"
+              value={quotaOverviewMonth}
+              onChange={(e) => setQuotaOverviewMonth(e.target.value)}
+              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white cursor-pointer"
+            />
           </div>
         </div>
 
@@ -1114,40 +1148,58 @@ export default function AdminPanel({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b-2 border-slate-100">
-                <th className="pb-3 text-xs font-bold text-slate-500 uppercase tracking-wider pl-2">User Name</th>
-                {userMonthlyUsage.months.map(m => (
-                  <th key={m.key} className="pb-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">
-                    {m.label}
-                  </th>
-                ))}
+                <th className="pb-3 text-xs font-bold text-slate-500 uppercase tracking-wider pl-2 w-1/3">User Name</th>
+                <th className="pb-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center w-1/3">
+                  {userMonthlyUsage.monthLabel} <br/> <span className="opacity-70 text-[10px]">Total Quota ({userMonthlyUsage.limit})</span>
+                </th>
+                <th className="pb-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center w-1/3">
+                  {userMonthlyUsage.monthLabel} <br/> <span className="opacity-70 text-[10px]">Weekend Quota ({userMonthlyUsage.weekendLimit})</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {Object.keys(userMonthlyUsage.data).sort().map(userName => (
-                <tr key={userName} className="hover:bg-slate-50/50 transition">
-                  <td className="py-3 pl-2 text-sm font-bold text-slate-700">{userName}</td>
-                  {userMonthlyUsage.months.map(m => {
-                    const count = userMonthlyUsage.data[userName][m.key] || 0;
-                    const limit = userMonthlyUsage.limit;
-                    const isOver = count > limit;
-                    const isNear = count === limit;
-                    return (
-                      <td key={m.key} className="py-3 text-center">
-                        <span className={`inline-flex items-center justify-center min-w-[3rem] px-2 py-1 rounded-lg text-xs font-bold ${
-                          isOver ? 'bg-rose-100 text-rose-700' :
-                          isNear ? 'bg-amber-100 text-amber-700' :
-                          count > 0 ? 'bg-indigo-50 text-indigo-700' : 'text-slate-400'
-                        }`}>
-                          {count} <span className="opacity-50 ml-0.5">/ {limit}</span>
-                        </span>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+              {Object.keys(userMonthlyUsage.data).sort().map(userName => {
+                const stats = userMonthlyUsage.data[userName]?.[userMonthlyUsage.monthKey] || { count: 0, weekendCount: 0 };
+                const count = stats.count;
+                const weekendCount = stats.weekendCount;
+                const limit = userMonthlyUsage.limit;
+                const weekendLimit = userMonthlyUsage.weekendLimit;
+                
+                const isOver = count > limit;
+                const isNear = count === limit;
+                
+                const isWkndOver = weekendCount > weekendLimit;
+                const isWkndNear = weekendCount === weekendLimit;
+
+                return (
+                  <tr key={userName} className="hover:bg-slate-50/50 transition">
+                    <td className="py-3 pl-2 text-sm font-bold text-slate-700">{userName}</td>
+                    
+                    <td className="py-3 text-center">
+                      <span className={`inline-flex items-center justify-center min-w-[3rem] px-2 py-1 rounded-lg text-xs font-bold ${
+                        isOver ? 'bg-rose-100 text-rose-700' :
+                        isNear ? 'bg-amber-100 text-amber-700' :
+                        count > 0 ? 'bg-indigo-50 text-indigo-700' : 'text-slate-400'
+                      }`}>
+                        {count} <span className="opacity-50 ml-0.5">/ {limit}</span>
+                      </span>
+                    </td>
+
+                    <td className="py-3 text-center">
+                      <span className={`inline-flex items-center justify-center min-w-[3rem] px-2 py-1 rounded-lg text-xs font-bold ${
+                        isWkndOver ? 'bg-rose-100 text-rose-700' :
+                        isWkndNear ? 'bg-amber-100 text-amber-700' :
+                        weekendCount > 0 ? 'bg-indigo-50 text-indigo-700' : 'text-slate-400'
+                      }`}>
+                        {weekendCount} <span className="opacity-50 ml-0.5">/ {weekendLimit}</span>
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
               {Object.keys(userMonthlyUsage.data).length === 0 && (
                 <tr>
-                  <td colSpan={userMonthlyUsage.months.length + 1} className="py-8 text-center text-sm text-slate-400 italic">
+                  <td colSpan="3" className="py-8 text-center text-sm text-slate-400 italic">
                     No active users to track.
                   </td>
                 </tr>
