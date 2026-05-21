@@ -5,6 +5,7 @@ const SHIFT_BLOCKS_SHEET_NAME = 'ShiftBlocks';
 const SHIFT_TYPES_SHEET_NAME = 'ShiftTypes';
 const LIMIT_GROUPS_SHEET_NAME = 'LimitGroups';
 const ACTIVITY_HISTORY_SHEET_NAME = 'ActivityHistory';
+const SETTINGS_SHEET_NAME = 'Settings';
 
 const STATUS_ACTIVE = 'Active';
 const STATUS_OLD = 'Old Request';
@@ -95,6 +96,9 @@ function doPost(e) {
     if (action === 'deleteactivity') {
       return handleDeleteActivity(payload);
     }
+    if (action === 'updatesetting') {
+      return handleUpdateSetting(payload);
+    }
 
     throw new Error('Unknown action: ' + action);
   } catch (error) {
@@ -110,7 +114,8 @@ function getAllDataResponse() {
     shiftBlocks: getShiftBlocksData(),
     shiftTypes: getShiftTypesData(),
     limitGroups: getLimitGroupsData(),
-    activityHistory: getActivityHistoryData()
+    activityHistory: getActivityHistoryData(),
+    settings: getSettingsData()
   });
 }
 
@@ -859,4 +864,53 @@ function handleDeleteActivity(data) {
   }
 
   return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function getSettingsData() {
+  const sheet = getSheetByName(SETTINGS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SETTINGS_SHEET_NAME, ['Key', 'Value']);
+    sheet.appendRow(['monthly_request_limit', '10']);
+    return { monthly_request_limit: 10 };
+  }
+  const values = sheet.getDataRange().getValues();
+  const settings = {};
+  for (let i = 1; i < values.length; i++) {
+    const key = String(values[i][0] || '').trim();
+    const val = String(values[i][1] || '').trim();
+    if (key) {
+      settings[key] = val;
+    }
+  }
+  // Ensure default is there
+  if (settings.monthly_request_limit === undefined) {
+    settings.monthly_request_limit = '10';
+  }
+  return settings;
+}
+
+function handleUpdateSetting(data) {
+  const key = String(data.key || '').trim();
+  const value = String(data.value || '').trim();
+  if (!key) {
+    throw new Error('Missing setting key');
+  }
+  const sheet = getSheetByName(SETTINGS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SETTINGS_SHEET_NAME, ['Key', 'Value']);
+  }
+  const values = sheet.getDataRange().getValues();
+  let rowIdx = -1;
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === key) {
+      rowIdx = i + 1;
+      break;
+    }
+  }
+  if (rowIdx !== -1) {
+    sheet.getRange(rowIdx, 2).setValue(value);
+  } else {
+    sheet.appendRow([key, value]);
+  }
+  return createJsonResponse({ result: 'success', key: key, value: value });
 }

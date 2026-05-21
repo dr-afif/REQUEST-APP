@@ -30,6 +30,7 @@ import {
   fetchShiftBlocks,
   submitActivity,
   deleteActivity,
+  updateSetting,
 } from './api';
 import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
 
@@ -118,6 +119,7 @@ export default function App() {
   const [shiftTypes, setShiftTypes] = useState([]);
   const [limitGroups, setLimitGroups] = useState([]);
   const [activities, setActivities] = useState([]);
+  const [settings, setSettings] = useState({ monthly_request_limit: '10' });
   
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -221,6 +223,9 @@ export default function App() {
         rawShiftTypes = response.shiftTypes || [];
         rawLimitGroups = response.limitGroups || [];
         rawActivities = response.activityHistory || response.activities || [];
+        if (response.settings) {
+          setSettings(response.settings);
+        }
       }
 
       // Parse & set Team Members
@@ -633,6 +638,33 @@ export default function App() {
     })();
   };
 
+  const handleUpdateSetting = async (key, value) => {
+    const previousSettings = { ...settings };
+    setSettings((prev) => ({ ...prev, [key]: value }));
+
+    const toastId = addToast(`🔄 Updating system settings...`, 'info', Infinity);
+
+    (async () => {
+      try {
+        await updateSetting(key, value);
+        updateToast(toastId, {
+          message: `✅ Settings updated successfully!`,
+          type: 'success',
+          duration: 3000,
+        });
+        await loadAllData();
+      } catch (err) {
+        console.error('Failed to update setting:', err);
+        setSettings(previousSettings);
+        updateToast(toastId, {
+          message: `❌ Failed to update settings: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
+  };
+
   const activeRequests = useMemo(() => {
     return requests.filter((request) => request.status?.toLowerCase() === 'active');
   }, [requests]);
@@ -703,6 +735,7 @@ export default function App() {
               masterRoster={masterRoster}
               shiftTypes={shiftTypes}
               limitGroups={limitGroups}
+              settings={settings}
             />
           </div>
         )}
@@ -736,6 +769,8 @@ export default function App() {
             activities={activities}
             onAddActivity={handleAddActivity}
             onDeleteActivity={handleDeleteActivity}
+            settings={settings}
+            onUpdateSetting={handleUpdateSetting}
           />
         )}
 

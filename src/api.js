@@ -140,3 +140,7 @@ export async function submitActivity(payload) {
 export async function deleteActivity(id) {
   return request({ method: 'POST', body: { action: 'deleteactivity', id } });
 }
+
+export async function updateSetting(key, value) {
+  return request({ method: 'POST', body: { action: 'updatesetting', key, value } });
+}

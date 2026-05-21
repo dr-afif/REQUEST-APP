@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 export default function AdminPanel({
   requests = [],
@@ -18,6 +18,8 @@ export default function AdminPanel({
   activities = [],
   onAddActivity,
   onDeleteActivity,
+  settings = {},
+  onUpdateSetting,
 }) {
 
   // Shift block inputs
@@ -46,6 +48,18 @@ export default function AdminPanel({
   const [actComment, setActComment] = useState('');
 
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  // Settings inputs
+  const [monthlyRequestLimitInput, setMonthlyRequestLimitInput] = useState(() => {
+    return settings?.monthly_request_limit || '10';
+  });
+  const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
+
+  useEffect(() => {
+    if (settings?.monthly_request_limit) {
+      setMonthlyRequestLimitInput(settings.monthly_request_limit);
+    }
+  }, [settings]);
 
   const handleAddActivitySubmit = (e) => {
     e.preventDefault();
@@ -138,6 +152,19 @@ export default function AdminPanel({
     });
     setNewGroupName('');
     setNewGroupLimit('3');
+  };
+
+  const handleSaveSettings = async (e) => {
+    e.preventDefault();
+    if (!onUpdateSetting) return;
+    setIsUpdatingSettings(true);
+    try {
+      await onUpdateSetting('monthly_request_limit', monthlyRequestLimitInput);
+    } catch (err) {
+      alert(err.message || 'Failed to update settings');
+    } finally {
+      setIsUpdatingSettings(false);
+    }
   };
 
   return (
@@ -757,6 +784,42 @@ export default function AdminPanel({
             )}
           </div>
         </div>
+      </div>
+      {/* 🔧 Global Portal Settings */}
+      <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-800 mb-2">🔧 Global Portal Settings</h2>
+        <p className="text-xs text-slate-400 mb-6">
+          Configure default values and global policies that apply to all roster portal members.
+        </p>
+
+        <form onSubmit={handleSaveSettings} className="max-w-md space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+              Monthly Request Limit per User
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min="1"
+                max="99"
+                value={monthlyRequestLimitInput}
+                onChange={(e) => setMonthlyRequestLimitInput(e.target.value)}
+                required
+                className="w-32 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+              />
+              <button
+                type="submit"
+                disabled={isUpdatingSettings}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-indigo-500 disabled:bg-indigo-300"
+              >
+                {isUpdatingSettings ? 'Saving...' : 'Save Settings'}
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-slate-400">
+              Change the monthly request quota. Set to e.g. 10 to limit each user to 10 shift/swap submissions per month.
+            </p>
+          </div>
+        </form>
       </div>
 
     </div>

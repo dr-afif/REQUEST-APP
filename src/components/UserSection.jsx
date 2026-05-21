@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import CalendarView from './CalendarView';
 import DateDetailPanel from './DateDetailPanel';
 import RosterTable from './RosterTable';
+import UserRequests from './UserRequests';
 
 export default function UserSection({
   requests,
@@ -17,12 +18,52 @@ export default function UserSection({
   shiftTypes = [],
   limitGroups = [],
   shiftBlocks = [],
+  settings = {},
 }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingRequest, setEditingRequest] = useState(null);
   const [error, setError] = useState('');
   const [selectedDate, setSelectedDate] = useState(null);
   const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'table'
+
+  const monthlyStats = useMemo(() => {
+    if (!selectedName || selectedName.trim().toLowerCase() === 'admin' || !requests?.length) return [];
+    
+    const targetName = selectedName.trim().toLowerCase();
+    const userActiveRequests = requests.filter((r) => {
+      const isUser = r.name && r.name.trim().toLowerCase() === targetName;
+      const isActive = r.status?.toLowerCase() === 'active';
+      return isUser && isActive;
+    });
+
+    const counts = {};
+    userActiveRequests.forEach((r) => {
+      if (!r.date) return;
+      const d = new Date(r.date);
+      if (isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      counts[key] = (counts[key] || 0) + 1;
+    });
+
+    const now = new Date();
+    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const nextKey = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
+
+    const limit = Number(settings?.monthly_request_limit) || 10;
+
+    const labelOf = (yearMonthKey) => {
+      const [y, m] = yearMonthKey.split('-');
+      const dateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
+      return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    };
+
+    return [
+      { key: currentKey, label: labelOf(currentKey), count: counts[currentKey] || 0, limit },
+      { key: nextKey, label: labelOf(nextKey), count: counts[nextKey] || 0, limit },
+    ];
+  }, [requests, selectedName, settings]);
 
 
 
@@ -122,6 +163,63 @@ export default function UserSection({
         </div>
       )}
 
+      {/* 📊 Monthly Request Limits Summary Cards */}
+      {selectedName && selectedName.trim().toLowerCase() !== 'admin' && monthlyStats.length > 0 && (
+        <div className="grid gap-4 sm:grid-cols-2 animate-fadeIn mb-2">
+          {monthlyStats.map((stat) => {
+            const pct = Math.min(100, (stat.count / stat.limit) * 100);
+            
+            // Color thresholds
+            let barColor = 'bg-emerald-500';
+            let textColor = 'text-emerald-700';
+            let bgColor = 'bg-emerald-50';
+            let borderColor = 'border-emerald-100';
+            
+            if (stat.count >= stat.limit) {
+              barColor = 'bg-rose-500';
+              textColor = 'text-rose-700';
+              bgColor = 'bg-rose-50';
+              borderColor = 'border-rose-100';
+            } else if (stat.count >= stat.limit - 2) {
+              barColor = 'bg-amber-500';
+              textColor = 'text-amber-700';
+              bgColor = 'bg-amber-50';
+              borderColor = 'border-amber-100';
+            }
+
+            return (
+              <div 
+                key={stat.key}
+                className={`rounded-2xl border ${borderColor} ${bgColor} p-4 shadow-sm transition-all duration-300 flex flex-col justify-between`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    {stat.label}
+                  </span>
+                  <span className={`text-sm font-extrabold ${textColor}`}>
+                    {stat.count} / {stat.limit} used
+                  </span>
+                </div>
+                
+                {/* Progress Bar Container */}
+                <div className="h-2 w-full rounded-full bg-slate-200/75 overflow-hidden">
+                  <div 
+                    className={`h-full ${barColor} transition-all duration-500 ease-out rounded-full`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+
+                {stat.count >= stat.limit && (
+                  <p className="mt-2 text-[10px] font-semibold text-rose-600 flex items-center gap-1">
+                    ⚠️ Limit reached! No more requests allowed for this month.
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* 🎛️ Unified Switch View */}
       {viewMode === 'calendar' ? (
         <CalendarView
@@ -134,6 +232,20 @@ export default function UserSection({
           <RosterTable
             names={names}
             requests={requests}
+          />
+        </div>
+      )}
+
+      {/* 📋 Personal Request History Section */}
+      {selectedName && selectedName.trim().toLowerCase() !== 'admin' && (
+        <div className="mt-4 border-t border-slate-100 pt-6">
+          <UserRequests
+            requests={requests}
+            selectedName={selectedName}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            isLoading={isLoadingRequests}
+            settings={settings}
           />
         </div>
       )}
@@ -154,6 +266,8 @@ export default function UserSection({
           limitGroups={limitGroups}
           shiftBlocks={shiftBlocks}
           error={error}
+          settings={settings}
+          names={names}
         />
       )}
     </section>

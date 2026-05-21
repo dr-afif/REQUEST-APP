@@ -18,6 +18,8 @@ export default function NewRequestForm({
   shiftTypes = [],
   limitGroups = [],
   shiftBlocks = [],
+  settings = {},
+  names = [],
 }) {
   const availableShiftTypes = useMemo(() => {
     if (shiftTypes.length === 0) return ['AM', 'PM', 'ON', 'OFF', 'AL', 'HKA', 'GHKA', 'COURSE']; // fallback
@@ -77,6 +79,9 @@ export default function NewRequestForm({
 
   const [formState, setFormState] = useState(getDefaultState);
   const [validationError, setValidationError] = useState('');
+  const [onBehalfOfName, setOnBehalfOfName] = useState(() => {
+    return initialValues?.name || '';
+  });
 
   const isReady = useMemo(() => Boolean(selectedName), [selectedName]);
 
@@ -87,18 +92,21 @@ export default function NewRequestForm({
         request: initialValues.request ?? availableShiftTypes[0],
         comment: initialValues.comment ?? '',
       });
+      setOnBehalfOfName(initialValues.name || '');
     } else {
       setFormState((prev) => ({
         date: getNextMonthDefaultDate() ?? '',
         request: availableShiftTypes.includes(prev.request) ? prev.request : availableShiftTypes[0],
         comment: '',
       }));
+      setOnBehalfOfName('');
     }
   }, [initialValues, availableShiftTypes]);
 
   useEffect(() => {
     if (!selectedName) {
       setFormState(getDefaultState());
+      setOnBehalfOfName('');
     }
   }, [selectedName]);
 
@@ -146,22 +154,74 @@ export default function NewRequestForm({
     setFormState((prev) => ({ ...prev, [name]: value }));
   };
 
+  const getMonthlyRequestCount = (targetName, dateString) => {
+    if (!targetName || !dateString) return 0;
+    const targetDate = new Date(dateString);
+    if (isNaN(targetDate.getTime())) return 0;
+    
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+    
+    const normalizedTargetName = targetName.trim().toLowerCase();
+
+    const userActiveRequests = (requests ?? []).filter((r) => {
+      const isUser = r.name && r.name.trim().toLowerCase() === normalizedTargetName;
+      const isActive = r.status?.toLowerCase() === 'active';
+      if (!isUser || !isActive || !r.date) return false;
+      
+      const d = new Date(r.date);
+      if (isNaN(d.getTime())) return false;
+      
+      return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
+    });
+
+    let count = userActiveRequests.length;
+    if (initialValues?.id) {
+      const isEditingInSameMonth = userActiveRequests.some((r) => r.id === initialValues.id);
+      if (isEditingInSameMonth) {
+        count = Math.max(0, count - 1);
+      }
+    }
+    return count;
+  };
+
   const handleSubmit = (event) => {
     event.preventDefault();
     if (!isReady || !formState.date || !formState.request) return;
 
+    const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+    const finalName = isAdmin ? onBehalfOfName : selectedName;
+
+    if (!finalName) {
+      setValidationError('Please select a team member.');
+      return;
+    }
+
     const normalizedDate = toIsoDate(formState.date) ?? formState.date;
     const limitStatus = getLimitStatusForType(formState.request, normalizedDate);
 
-    if (limitStatus.isLimited && limitStatus.isAtLimit) {
+    // 1. Check daily limit (skip if Admin)
+    if (!isAdmin && limitStatus.isLimited && limitStatus.isAtLimit) {
       setValidationError(
         `Limit reached for group '${limitStatus.groupName}' (${limitStatus.limit} slots) on this date.`
       );
       return;
     }
 
+    // 2. Check monthly limit (skip if Admin)
+    if (!isAdmin) {
+      const monthlyCount = getMonthlyRequestCount(finalName, normalizedDate);
+      const monthlyLimit = Number(settings?.monthly_request_limit) || 10;
+      if (monthlyCount >= monthlyLimit) {
+        setValidationError(
+          `Monthly request limit reached for ${finalName} (${monthlyLimit} requests allowed per month).`
+        );
+        return;
+      }
+    }
+
     onSubmit?.({
-      name: selectedName,
+      name: finalName,
       date: formState.date,
       request: formState.request,
       comment: formState.comment,
@@ -179,12 +239,35 @@ export default function NewRequestForm({
           {initialValues?.id ? 'Update request' : 'New request'}
         </legend>
 
-        <div className="rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          <span className="font-medium text-slate-700">Team member: </span>
-          <span className="text-slate-900">
-            {selectedName || 'Select a team member above to start a request'}
-          </span>
-        </div>
+        {selectedName?.trim().toLowerCase() === 'admin' ? (
+          <label className="text-sm font-medium text-slate-700">
+            Submit on behalf of:
+            <select
+              name="onBehalfOf"
+              value={onBehalfOfName}
+              onChange={(e) => {
+                setValidationError('');
+                setOnBehalfOfName(e.target.value);
+              }}
+              className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              required
+            >
+              <option value="">-- Select Team Member --</option>
+              {names.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <div className="rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            <span className="font-medium text-slate-700">Team member: </span>
+            <span className="text-slate-900">
+              {selectedName || 'Select a team member above to start a request'}
+            </span>
+          </div>
+        )}
 
         <label className="text-sm font-medium text-slate-700">
           Date
@@ -198,6 +281,34 @@ export default function NewRequestForm({
           />
         </label>
 
+        {/* 📊 Live Monthly Limit Warning Card (regular users only) */}
+        {selectedName?.trim().toLowerCase() !== 'admin' && formState.date && (
+          (() => {
+            const monthlyLimit = Number(settings?.monthly_request_limit) || 10;
+            const monthlyCount = getMonthlyRequestCount(selectedName, formState.date);
+            const isOverLimit = monthlyCount >= monthlyLimit;
+            
+            let colorClass = 'text-emerald-600 bg-emerald-50/50 border-emerald-100/70';
+            if (isOverLimit) {
+              colorClass = 'text-rose-600 bg-rose-50 border-rose-100 font-bold';
+            } else if (monthlyCount >= monthlyLimit - 2) {
+              colorClass = 'text-amber-600 bg-amber-50 border-amber-100';
+            }
+
+            let displayMonth = 'this month';
+            try {
+              displayMonth = new Date(formState.date).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+            } catch (e) {}
+
+            return (
+              <div className={`rounded-xl border p-2.5 text-xs ${colorClass} flex items-center justify-between transition-colors duration-300`}>
+                <span>Monthly total for {displayMonth}:</span>
+                <span>{monthlyCount} / {monthlyLimit} used</span>
+              </div>
+            );
+          })()
+        )}
+
         <label className="text-sm font-medium text-slate-700">
           Request type
           <select
@@ -208,13 +319,14 @@ export default function NewRequestForm({
           >
             {availableShiftTypes.map((type) => {
               const limitStatus = getLimitStatusForType(type, selectedDateKey);
+              const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
               return (
                 <option
                   key={type}
                   value={type}
-                  disabled={limitStatus.isLimited && limitStatus.isAtLimit}
+                  disabled={!isAdmin && limitStatus.isLimited && limitStatus.isAtLimit}
                 >
-                  {type} {limitStatus.isLimited && limitStatus.isAtLimit ? '(Full)' : ''}
+                  {type} {(!isAdmin && limitStatus.isLimited && limitStatus.isAtLimit) ? '(Full)' : ''}
                 </option>
               );
             })}
@@ -223,7 +335,7 @@ export default function NewRequestForm({
             {selectedDateKey && selectedTypeStatus.isLimited ? (
               <>
                 {selectedTypeStatus.usage}/{selectedTypeStatus.limit} requests for group '{selectedTypeStatus.groupName}' on this date.
-                {selectedTypeStatus.isAtLimit ? ' Selection capped.' : ''}
+                {(!selectedName?.trim().toLowerCase() === 'admin' && selectedTypeStatus.isAtLimit) ? ' Selection capped.' : ''}
               </>
             ) : (
               selectedTypeStatus.isLimited ? `Group '${selectedTypeStatus.groupName}' is subject to limits.` : 'This shift type is unlimited.'

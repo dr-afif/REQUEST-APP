@@ -32,6 +32,7 @@ export default function UserRequests({
   onEdit,
   onDelete,
   isLoading,
+  settings = {},
 }) {
   const [expandedMonths, setExpandedMonths] = useState([]);
 
@@ -130,7 +131,27 @@ export default function UserRequests({
               className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-slate-900"
               onClick={() => toggleGroup(group.key)}
             >
-              <span>{group.label}</span>
+              <div className="flex items-center gap-2">
+                <span>{group.label}</span>
+                {selectedName?.trim().toLowerCase() !== 'admin' && (
+                  (() => {
+                    const limit = Number(settings?.monthly_request_limit) || 10;
+                    const count = group.items.length;
+                    const isOverLimit = count >= limit;
+                    let badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-100/70';
+                    if (isOverLimit) {
+                      badgeColor = 'bg-rose-50 text-rose-700 border-rose-200 font-bold';
+                    } else if (count >= limit - 2) {
+                      badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                    }
+                    return (
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${badgeColor}`}>
+                        {count} / {limit} used
+                      </span>
+                    );
+                  })()
+                )}
+              </div>
               <span className="flex items-center gap-2 text-xs font-semibold text-slate-500">
                 {group.items.length} request{group.items.length === 1 ? '' : 's'}
                 <span className="rounded-full border border-slate-300 px-2 py-0.5 text-slate-600">

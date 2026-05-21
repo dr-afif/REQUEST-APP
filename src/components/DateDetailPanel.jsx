@@ -47,6 +47,8 @@ export default function DateDetailPanel({
   limitGroups = [],
   shiftBlocks = [],
   error = '',
+  settings = {},
+  names = [],
 }) {
   const [open, setOpen] = useState(false);
 
@@ -219,6 +221,8 @@ export default function DateDetailPanel({
               shiftTypes={shiftTypes}
               limitGroups={limitGroups}
               shiftBlocks={shiftBlocks}
+              settings={settings}
+              names={names}
             />
           </div>
         </div>
