@@ -69,6 +69,9 @@ export default function AdminPanel({
   const [monthlyWeekendLimitInput, setMonthlyWeekendLimitInput] = useState(() => {
     return settings?.monthly_weekend_limit || '4';
   });
+  const [weekendLimitGroupIdInput, setWeekendLimitGroupIdInput] = useState(() => {
+    return settings?.weekend_limit_group_id || 'ALL';
+  });
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
 
   useEffect(() => {
@@ -77,6 +80,9 @@ export default function AdminPanel({
     }
     if (settings?.monthly_weekend_limit) {
       setMonthlyWeekendLimitInput(settings.monthly_weekend_limit);
+    }
+    if (settings?.weekend_limit_group_id) {
+      setWeekendLimitGroupIdInput(settings.weekend_limit_group_id);
     }
   }, [settings]);
 
@@ -304,6 +310,7 @@ export default function AdminPanel({
     try {
       await onUpdateSetting('monthly_request_limit', monthlyRequestLimitInput);
       await onUpdateSetting('monthly_weekend_limit', monthlyWeekendLimitInput);
+      await onUpdateSetting('weekend_limit_group_id', weekendLimitGroupIdInput);
     } catch (err) {
       alert(err.message || 'Failed to update settings');
     } finally {
@@ -1177,22 +1184,42 @@ export default function AdminPanel({
               </p>
             </div>
             
-            <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                Weekend Request Limit
-              </label>
-              <input
-                type="number"
-                min="0"
-                max="99"
-                value={monthlyWeekendLimitInput}
-                onChange={(e) => setMonthlyWeekendLimitInput(e.target.value)}
-                required
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-              />
-              <p className="mt-1 text-[10px] text-slate-400">
-                Limits how many of a user's monthly requests can fall on a weekend (Saturday or Sunday). Set to e.g. 4.
-              </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Weekend Request Limit
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="99"
+                  value={monthlyWeekendLimitInput}
+                  onChange={(e) => setMonthlyWeekendLimitInput(e.target.value)}
+                  required
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Applies to Limit Group
+                </label>
+                <select
+                  value={weekendLimitGroupIdInput}
+                  onChange={(e) => setWeekendLimitGroupIdInput(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                >
+                  <option value="ALL">All Requests</option>
+                  {limitGroups.map(lg => (
+                    <option key={lg.ID} value={lg.ID}>{lg.GroupName}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="col-span-2">
+                <p className="text-[10px] text-slate-400">
+                  Limits how many of a user's monthly requests can fall on a weekend (Saturday or Sunday). If a specific limit group is selected, this limit will ONLY restrict requests belonging to that group. Set limit to e.g. 4.
+                </p>
+              </div>
             </div>
           </div>
           

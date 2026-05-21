@@ -36,8 +36,17 @@ export default function UserSection({
       return isUser && isActive;
     });
 
+    const limitGroupIdByShiftType = (shiftTypes || []).reduce((acc, st) => {
+      if (st.GroupID) {
+        acc[st.Name.toUpperCase()] = st.GroupID;
+      }
+      return acc;
+    }, {});
+
     const counts = {};
     const weekendCounts = {};
+
+    const weekendLimitGroupId = settings?.weekend_limit_group_id || 'ALL';
 
     userActiveRequests.forEach((r) => {
       if (!r.date) return;
@@ -49,7 +58,16 @@ export default function UserSection({
       
       const day = d.getDay();
       if (day === 0 || day === 6) {
-        weekendCounts[key] = (weekendCounts[key] || 0) + 1;
+        let applies = true;
+        if (weekendLimitGroupId !== 'ALL') {
+          const reqType = (r.request ?? '').toString().trim().toUpperCase();
+          if (limitGroupIdByShiftType[reqType] !== weekendLimitGroupId) {
+            applies = false;
+          }
+        }
+        if (applies) {
+          weekendCounts[key] = (weekendCounts[key] || 0) + 1;
+        }
       }
     });
 
@@ -64,6 +82,10 @@ export default function UserSection({
       ? Number(settings.monthly_weekend_limit) 
       : 4;
 
+    const weekendTargetName = weekendLimitGroupId === 'ALL' 
+      ? 'Weekend' 
+      : `Weekend ${(limitGroups || []).find(g => g.ID === weekendLimitGroupId)?.GroupName || ''}`.trim();
+
     const labelOf = (yearMonthKey) => {
       const [y, m] = yearMonthKey.split('-');
       const dateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
@@ -77,7 +99,8 @@ export default function UserSection({
         count: counts[currentKey] || 0, 
         limit,
         weekendCount: weekendCounts[currentKey] || 0,
-        weekendLimit
+        weekendLimit,
+        weekendLabel: weekendTargetName
       },
       { 
         key: nextKey, 
@@ -85,10 +108,11 @@ export default function UserSection({
         count: counts[nextKey] || 0, 
         limit,
         weekendCount: weekendCounts[nextKey] || 0,
-        weekendLimit
+        weekendLimit,
+        weekendLabel: weekendTargetName
       },
     ];
-  }, [requests, selectedName, settings]);
+  }, [requests, selectedName, settings, shiftTypes, limitGroups]);
 
 
 
@@ -241,7 +265,7 @@ export default function UserSection({
                 {/* Weekend Quota Progress Bar Container */}
                 <div className="mb-1">
                   <div className="flex justify-between mb-1 text-[10px] font-bold">
-                    <span className="text-slate-500">Weekend Requests</span>
+                    <span className="text-slate-500">{stat.weekendLabel} Requests</span>
                     <span className={stat.weekendCount >= stat.weekendLimit ? 'text-rose-700' : 'text-slate-600'}>
                       {stat.weekendCount} / {stat.weekendLimit}
                     </span>
@@ -256,7 +280,7 @@ export default function UserSection({
 
                 {(stat.count >= stat.limit || stat.weekendCount >= stat.weekendLimit) && (
                   <p className="mt-2 text-[10px] font-semibold text-rose-600 flex items-center gap-1">
-                    ⚠️ {stat.count >= stat.limit ? 'Total Limit reached!' : 'Weekend limit reached!'}
+                    ⚠️ {stat.count >= stat.limit ? 'Total Limit reached!' : `${stat.weekendLabel} limit reached!`}
                   </p>
                 )}
               </div>

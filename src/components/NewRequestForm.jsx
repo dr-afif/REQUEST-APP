@@ -194,6 +194,7 @@ export default function NewRequestForm({
     const targetMonth = targetDate.getMonth();
     
     const normalizedTargetName = targetName.trim().toLowerCase();
+    const weekendLimitGroupId = settings?.weekend_limit_group_id || 'ALL';
 
     const userActiveWeekendRequests = (requests ?? []).filter((r) => {
       const isUser = r.name && r.name.trim().toLowerCase() === normalizedTargetName;
@@ -205,7 +206,15 @@ export default function NewRequestForm({
       const day = d.getDay();
       const isWeekend = day === 0 || day === 6;
       
-      return d.getFullYear() === targetYear && d.getMonth() === targetMonth && isWeekend;
+      if (!isWeekend) return false;
+
+      if (weekendLimitGroupId !== 'ALL') {
+        const reqType = (r.request ?? '').toString().trim().toUpperCase();
+        const reqGroupId = limitGroupIdByShiftType[reqType];
+        if (reqGroupId !== weekendLimitGroupId) return false;
+      }
+      
+      return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
     });
 
     let count = userActiveWeekendRequests.length;
@@ -259,16 +268,29 @@ export default function NewRequestForm({
       const isWeekend = d.getDay() === 0 || d.getDay() === 6;
       
       if (isWeekend) {
-        const weekendCount = getMonthlyWeekendRequestCount(finalName, normalizedDate);
-        const weekendLimit = settings?.monthly_weekend_limit !== undefined 
-          ? Number(settings.monthly_weekend_limit) 
-          : 4; // Default to 4 if not set
+        const weekendLimitGroupId = settings?.weekend_limit_group_id || 'ALL';
+        let appliesToThisRequest = true;
         
-        if (weekendLimit >= 0 && weekendCount >= weekendLimit) {
-          setValidationError(
-            `Monthly weekend request limit reached for ${finalName} (${weekendLimit} weekend requests allowed per month).`
-          );
-          return;
+        if (weekendLimitGroupId !== 'ALL') {
+           const requestedType = (formState.request || '').trim().toUpperCase();
+           const reqGroupId = limitGroupIdByShiftType[requestedType];
+           if (reqGroupId !== weekendLimitGroupId) {
+             appliesToThisRequest = false;
+           }
+        }
+
+        if (appliesToThisRequest) {
+          const weekendCount = getMonthlyWeekendRequestCount(finalName, normalizedDate);
+          const weekendLimit = settings?.monthly_weekend_limit !== undefined 
+            ? Number(settings.monthly_weekend_limit) 
+            : 4; // Default to 4 if not set
+          
+          if (weekendLimit >= 0 && weekendCount >= weekendLimit) {
+            setValidationError(
+              `Monthly weekend request limit reached for ${finalName} (${weekendLimit} weekend requests allowed per month for this category).`
+            );
+            return;
+          }
         }
       }
     }
