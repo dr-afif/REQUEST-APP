@@ -61,6 +61,7 @@ export default function CalendarView({
   referenceDate,
   onDateSelect,
   selectedDate,
+  onMonthChange,
 }) {
   const [autoReferenceDate, setAutoReferenceDate] = useState(() =>
     getUpcomingMonthReference(),
@@ -92,6 +93,12 @@ export default function CalendarView({
       return referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
     return addMonths(autoReferenceDate, monthOffset);
   }, [autoReferenceDate, monthOffset, referenceDate]);
+
+  useEffect(() => {
+    if (onMonthChange) {
+      onMonthChange(effectiveReferenceDate);
+    }
+  }, [effectiveReferenceDate, onMonthChange]);
 
   const monthToken = `${effectiveReferenceDate.getFullYear()}-${effectiveReferenceDate.getMonth()}`;
   const calendarWeeks = useMemo(

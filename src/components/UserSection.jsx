@@ -23,6 +23,7 @@ export default function UserSection({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingRequest, setEditingRequest] = useState(null);
   const [error, setError] = useState('');
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
   const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'table'
 
@@ -71,11 +72,8 @@ export default function UserSection({
       }
     });
 
-    const now = new Date();
-    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    
-    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    const nextKey = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
+    const targetMonth = calendarMonth || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+    const targetKey = `${targetMonth.getFullYear()}-${String(targetMonth.getMonth() + 1).padStart(2, '0')}`;
 
     const limit = Number(settings?.monthly_request_limit) || 10;
     const weekendLimit = settings?.monthly_weekend_limit !== undefined 
@@ -94,16 +92,16 @@ export default function UserSection({
 
     return [
       { 
-        key: nextKey, 
-        label: labelOf(nextKey), 
-        count: counts[nextKey] || 0, 
+        key: targetKey, 
+        label: labelOf(targetKey), 
+        count: counts[targetKey] || 0, 
         limit,
-        weekendCount: weekendCounts[nextKey] || 0,
+        weekendCount: weekendCounts[targetKey] || 0,
         weekendLimit,
         weekendLabel: weekendTargetName
       },
     ];
-  }, [requests, selectedName, settings, shiftTypes, limitGroups]);
+  }, [requests, selectedName, settings, shiftTypes, limitGroups, calendarMonth]);
 
 
 
@@ -286,6 +284,7 @@ export default function UserSection({
           requests={requests}
           onDateSelect={handleDateSelect}
           selectedDate={selectedDate}
+          onMonthChange={setCalendarMonth}
         />
       ) : (
         <div className="rounded-3xl border border-slate-150/70 bg-white p-4 shadow-sm sm:p-6">
