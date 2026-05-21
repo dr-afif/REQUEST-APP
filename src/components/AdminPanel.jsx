@@ -56,6 +56,9 @@ export default function AdminPanel({
   const [actRequest, setActRequest] = useState('');
   const [actSwapPartner, setActSwapPartner] = useState('');
   const [actComment, setActComment] = useState('');
+  const [actMemberShiftType, setActMemberShiftType] = useState('');
+  const [actSwapPartnerDate, setActSwapPartnerDate] = useState('');
+  const [actSwapPartnerShiftType, setActSwapPartnerShiftType] = useState('');
 
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
@@ -134,33 +137,56 @@ export default function AdminPanel({
       });
       setActCustomText('');
     } else {
-      if (!actName || !actDate) {
-        alert('Please fill out Name and Date.');
-        return;
+      if (actRequestType === 'Swap') {
+        if (!actName || !actDate || !actMemberShiftType || !actSwapPartner || !actSwapPartnerDate || !actSwapPartnerShiftType) {
+          alert('Please fill out all swap details (names, dates, shift types).');
+          return;
+        }
+        const isSameDay = actDate === actSwapPartnerDate;
+        let customText = '';
+        if (isSameDay) {
+          customText = `SWAP ALERT! [${actDate}] ${actName} (${actMemberShiftType}) ↔ ${actSwapPartner} (${actSwapPartnerShiftType})`;
+        } else {
+          customText = `SWAP ALERT! [${actDate}] ${actName} (${actMemberShiftType}) ↔ [${actSwapPartnerDate}] ${actSwapPartner} (${actSwapPartnerShiftType})`;
+        }
+
+        onAddActivity({
+          customText,
+          requestType: 'Swap',
+          name: actName,
+          swapPartner: actSwapPartner,
+          date: actDate,
+          approvalStatus: 'Approved',
+          comment: actComment,
+        });
+      } else {
+        if (!actName || !actDate) {
+          alert('Please fill out Name and Date.');
+          return;
+        }
+        if (!actRequest) {
+          alert('Please enter shift name.');
+          return;
+        }
+        onAddActivity({
+          name: actName,
+          requestType: actRequestType,
+          date: actDate,
+          request: actRequest,
+          approvalStatus: 'Approved',
+          comment: actComment,
+        });
       }
-      if (actRequestType === 'Swap' && !actSwapPartner) {
-        alert('Please select a swap partner.');
-        return;
-      }
-      if (actRequestType === 'Off-Duty' && !actRequest) {
-        alert('Please enter shift name.');
-        return;
-      }
-      onAddActivity({
-        name: actName,
-        requestType: actRequestType,
-        date: actDate,
-        request: actRequestType === 'Swap' ? '' : actRequest,
-        swapPartner: actRequestType === 'Swap' ? actSwapPartner : '',
-        approvalStatus: 'Approved',
-        comment: actComment,
-      });
+
       // reset form
       setActName('');
       setActDate('');
       setActRequest('');
       setActSwapPartner('');
       setActComment('');
+      setActMemberShiftType('');
+      setActSwapPartnerDate('');
+      setActSwapPartnerShiftType('');
     }
   };
 
@@ -304,6 +330,21 @@ export default function AdminPanel({
                 <div className="space-y-3">
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Request Type
+                    </label>
+                    <select
+                      value={actRequestType}
+                      onChange={(e) => setActRequestType(e.target.value)}
+                      required
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                    >
+                      <option value="Off-Duty">Off-Duty</option>
+                      <option value="Swap">Swap</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                       Member Name
                     </label>
                     <select
@@ -319,68 +360,110 @@ export default function AdminPanel({
                     </select>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Request Type
-                      </label>
-                      <select
-                        value={actRequestType}
-                        onChange={(e) => setActRequestType(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      >
-                        <option value="Off-Duty">Off-Duty</option>
-                        <option value="Swap">Swap</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Shift Date
-                      </label>
-                      <input
-                        type="date"
-                        value={actDate}
-                        onChange={(e) => setActDate(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      />
-                    </div>
-                  </div>
-
                   {actRequestType === 'Swap' ? (
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Swap Partner
-                      </label>
-                      <select
-                        value={actSwapPartner}
-                        onChange={(e) => setActSwapPartner(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      >
-                        <option value="" disabled>Select Partner</option>
-                        {names.map(name => (
-                          name !== actName && (
-                            <option key={name} value={name}>{name}</option>
-                          )
-                        ))}
-                      </select>
+                    <div className="space-y-3 border-t border-slate-100 pt-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Shift Date
+                          </label>
+                          <input
+                            type="date"
+                            value={actDate}
+                            onChange={(e) => setActDate(e.target.value)}
+                            required
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Shift Type
+                          </label>
+                          <input
+                            type="text"
+                            value={actMemberShiftType}
+                            onChange={(e) => setActMemberShiftType(e.target.value)}
+                            required
+                            placeholder="e.g. AM"
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                          Swap Partner
+                        </label>
+                        <select
+                          value={actSwapPartner}
+                          onChange={(e) => setActSwapPartner(e.target.value)}
+                          required
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                        >
+                          <option value="" disabled>Select Partner</option>
+                          {names.map(name => (
+                            name !== actName && (
+                              <option key={name} value={name}>{name}</option>
+                            )
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Partner Shift Date
+                          </label>
+                          <input
+                            type="date"
+                            value={actSwapPartnerDate}
+                            onChange={(e) => setActSwapPartnerDate(e.target.value)}
+                            required
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Partner Shift Type
+                          </label>
+                          <input
+                            type="text"
+                            value={actSwapPartnerShiftType}
+                            onChange={(e) => setActSwapPartnerShiftType(e.target.value)}
+                            required
+                            placeholder="e.g. PM"
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                          />
+                        </div>
+                      </div>
                     </div>
                   ) : (
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Requested Shift Name / Code
-                      </label>
-                      <input
-                        type="text"
-                        value={actRequest}
-                        onChange={(e) => setActRequest(e.target.value)}
-                        required
-                        placeholder="e.g. AM, Night, PM"
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
-                      />
+                    <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                          Shift Date
+                        </label>
+                        <input
+                          type="date"
+                          value={actDate}
+                          onChange={(e) => setActDate(e.target.value)}
+                          required
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                          Requested Shift
+                        </label>
+                        <input
+                          type="text"
+                          value={actRequest}
+                          onChange={(e) => setActRequest(e.target.value)}
+                          required
+                          placeholder="e.g. AM, Night"
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                        />
+                      </div>
                     </div>
                   )}
 
@@ -415,7 +498,7 @@ export default function AdminPanel({
             {activities.length > 0 ? (
               <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-2 space-y-3">
                 {activities.map((act) => {
-                  const isCustom = !!act.CustomText;
+                  const isCustom = !!act.CustomText && !act.RequestType;
                   return (
                     <div key={act.ID} className="flex items-start justify-between py-3 text-xs gap-4 border-b border-slate-100 last:border-0">
                       <div className="flex-1 space-y-1">
@@ -436,13 +519,19 @@ export default function AdminPanel({
                           <p className="text-sm text-slate-800 font-semibold">{act.CustomText}</p>
                         ) : (
                           <p className="text-sm text-slate-800">
-                            <strong>{act.Name}</strong>{' '}
-                            {act.RequestType?.toLowerCase() === 'swap' ? (
-                              <span>swapped shift with <strong>{act.SwapPartner}</strong></span>
+                            {act.CustomText && act.RequestType === 'Swap' ? (
+                              <span className="font-semibold">{act.CustomText}</span>
                             ) : (
-                              <span>requested off-duty for <strong>{act.Request}</strong></span>
-                            )}{' '}
-                            on <strong>{act.Date}</strong> ({act.ApprovalStatus || 'Approved'})
+                              <>
+                                <strong>{act.Name}</strong>{' '}
+                                {act.RequestType?.toLowerCase() === 'swap' ? (
+                                  <span>swapped shift with <strong>{act.SwapPartner}</strong></span>
+                                ) : (
+                                  <span>requested off-duty for <strong>{act.Request}</strong></span>
+                                )}{' '}
+                                on <strong>{act.Date}</strong> ({act.ApprovalStatus || 'Approved'})
+                              </>
+                            )}
                             {act.Comment && <span className="block text-xs text-slate-500 italic mt-1">"{act.Comment}"</span>}
                           </p>
                         )}
