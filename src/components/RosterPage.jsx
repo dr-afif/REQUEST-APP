@@ -265,7 +265,7 @@ export default function RosterPage({
   const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 md:px-8 animate-fadeIn">
+    <div className="mx-auto max-w-5xl px-2 sm:px-6 py-6 sm:py-8 md:px-8 animate-fadeIn">
       {/* 🧭 Header Details */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -364,32 +364,32 @@ export default function RosterPage({
               <tr className="bg-slate-800 text-white border border-slate-800 select-none">
                 <th
                   rowSpan={2}
-                  className="border border-slate-300 px-1.5 sm:px-4 py-2.5 sm:py-3 font-bold align-middle uppercase tracking-wider text-[10px] sm:text-xs w-10 sm:w-16"
+                  className="border border-slate-300 px-1 sm:px-4 py-2 sm:py-3 font-bold align-middle uppercase tracking-wider text-[9px] sm:text-xs w-8 sm:w-16"
                 >
                   DATE
                 </th>
                 <th
                   rowSpan={2}
-                  className="border border-slate-300 px-1.5 sm:px-4 py-2.5 sm:py-3 font-bold align-middle uppercase tracking-wider text-[10px] sm:text-xs w-12 sm:w-16"
+                  className="border border-slate-300 px-1 sm:px-4 py-2 sm:py-3 font-bold align-middle uppercase tracking-wider text-[9px] sm:text-xs w-10 sm:w-16"
                 >
                   DAY
                 </th>
                 <th
                   colSpan={3}
-                  className="border border-slate-300 px-2 sm:px-4 py-2 sm:py-2.5 font-bold uppercase tracking-wider text-[10px] sm:text-xs bg-slate-750"
+                  className="border border-slate-300 px-1.5 sm:px-4 py-2 sm:py-2.5 font-bold uppercase tracking-wider text-[10px] sm:text-xs bg-slate-750"
                 >
                   MEDICAL OFFICER
                 </th>
               </tr>
               {/* Row 2 Header */}
               <tr className="bg-slate-700 text-white border border-slate-700 select-none">
-                <th className="border border-slate-300 px-2 sm:px-4 py-1.5 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/3">
+                <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/3">
                   AM
                 </th>
-                <th className="border border-slate-300 px-2 sm:px-4 py-1.5 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/3">
+                <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/3">
                   PM
                 </th>
-                <th className="border border-slate-300 px-2 sm:px-4 py-1.5 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/3">
+                <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/3">
                   NIGHT
                 </th>
               </tr>
@@ -409,12 +409,12 @@ export default function RosterPage({
                     }`}
                   >
                     {/* Date */}
-                    <td className="border border-slate-300 px-1.5 sm:px-4 py-2 sm:py-3 font-bold text-slate-800 align-middle select-none text-xs sm:text-sm">
+                    <td className="border border-slate-300 px-0.5 sm:px-4 py-1.5 sm:py-3 font-bold text-slate-800 align-middle select-none text-[10px] sm:text-sm">
                       {dayNum}
                     </td>
 
                     {/* Day Name */}
-                    <td className={`border border-slate-300 px-1.5 sm:px-4 py-2 sm:py-3 font-bold align-middle select-none text-xs sm:text-sm ${
+                    <td className={`border border-slate-300 px-0.5 sm:px-4 py-1.5 sm:py-3 font-bold align-middle select-none text-[10px] sm:text-sm ${
                       isWeekend ? 'text-indigo-600' : 'text-slate-600'
                     }`}>
                       {dayName}
@@ -430,17 +430,17 @@ export default function RosterPage({
                             onChange={(e) => handleCellChange(dateStr, shiftCol, e.target.value)}
                             onKeyDown={(e) => handleKeyDown(e, dateStr, shiftCol, dayIndex, shiftIndex)}
                             onPaste={(e) => handlePaste(e, dayIndex, shiftIndex)}
-                            className={`w-full h-full min-h-[3.5rem] px-1 sm:px-4 py-1.5 sm:py-2 text-center text-xs sm:text-sm font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500 transition-all hover:bg-slate-50 focus:bg-white resize-none overflow-hidden ${
+                            className={`w-full h-full min-h-[3.5rem] px-0.5 sm:px-4 py-1 sm:py-2 text-center text-[10px] sm:text-sm font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500 transition-all hover:bg-slate-50 focus:bg-white resize-none overflow-hidden ${
                               isWeekend ? 'text-indigo-900' : 'text-slate-800'
                             }`}
                           />
                         ) : (
-                          <div className="flex flex-col items-center justify-center gap-1 py-1.5 sm:py-2">
+                          <div className="flex flex-col items-center justify-center gap-0.5 sm:gap-1 py-1 sm:py-2">
                             {dayAssignments[shiftCol].length > 0 ? (
                               dayAssignments[shiftCol].map((name) => (
                                 <span
                                   key={name}
-                                  className={`block tracking-wide uppercase text-[10px] sm:text-xs font-bold transition-all px-1.5 py-0.5 rounded-lg ${
+                                  className={`block tracking-wide uppercase text-[9px] sm:text-xs font-bold transition-all px-1 sm:px-1.5 py-0.5 rounded-lg ${
                                     isMatch(name)
                                       ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-300 animate-pulse scale-105 shadow-sm'
                                       : 'text-slate-700'
