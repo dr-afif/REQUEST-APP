@@ -106,7 +106,7 @@ export default function OnboardingOverlay({ names = [], onSelect, onAdminInit, i
           <div className="flex flex-col gap-2 sm:gap-2.5">
             <button
               type="button"
-              onClick={() => onSelect('')}
+              onClick={() => onSelect('Guest')}
               className="w-full rounded-2xl bg-slate-100 py-2 sm:py-2.5 text-xs font-bold text-slate-600 transition hover:bg-slate-200 hover:text-slate-700 active:scale-95 text-center shadow-inner"
             >
               👁️ Enter as Guest (Read-Only)

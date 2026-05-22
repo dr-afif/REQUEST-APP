@@ -10,6 +10,8 @@ export default function HomeDashboard({
   onUpdateApproval,
   onNavigate,
 }) {
+  const isGuest = selectedName?.trim().toLowerCase() === 'guest';
+
   // Helpers to format ISO Date (YYYY-MM-DD)
   const getLocalDateString = (offsetDays = 0) => {
     const d = new Date();
@@ -241,17 +243,19 @@ export default function HomeDashboard({
             </h1>
             <p className="mt-2 max-w-md text-emerald-50 text-sm sm:text-base">
               {selectedName 
-                ? 'Check your personalized shifts today, approve pending swaps, or submit new shift requests for next month.'
-                : 'Please select your name in the dropdown above to access your personal dashboard and alerts.'}
+                ? (isGuest 
+                    ? 'Check roster schedules and active requests. Log out and select your profile to submit new shift requests.'
+                    : 'Check your personalized shifts today, approve pending swaps, or submit new shift requests for next month.')
+                : 'Please select your name to access your personal dashboard and alerts.'}
             </p>
           </div>
           
           <button
             type="button"
-            onClick={() => onNavigate(selectedName ? 'requests' : 'roster')}
+            onClick={() => onNavigate(selectedName && !isGuest ? 'requests' : 'roster')}
             className="self-start rounded-2xl bg-white px-5 py-3 text-sm font-bold text-teal-800 shadow-lg hover:bg-slate-50 transition active:scale-95 sm:self-auto"
           >
-            {selectedName ? '📝 Submit Request' : '📅 View Roster'}
+            {selectedName && !isGuest ? '📝 Submit Request' : '📅 View Roster'}
           </button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import UserSection from './components/UserSection';
-import Navbar from './components/Navbar';
+import AppNavigation from './components/AppNavigation';
 import NotificationBanner from './components/NotificationBanner';
 import HomeDashboard from './components/HomeDashboard';
 import RosterPage from './components/RosterPage';
@@ -971,31 +971,34 @@ export default function App() {
   }, [requests]);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans">
       
-      {/* 🧭 Sticky Glassmorphic Header & Bulletin Wrapper */}
-      <div className="sticky top-0 z-40 flex flex-col shadow-md">
-        <Navbar
-          currentPage={currentPage}
-          onPageChange={setCurrentPage}
-          selectedName={selectedName}
-          onSelectName={handleSelectName}
-          names={rosterNames}
-          syncStatus={isSyncing ? 'loading' : refreshError ? 'error' : 'connected'}
-          onRefresh={loadAllData}
-        />
+      {/* 🧭 Sticky Glassmorphic Navigation Component */}
+      <AppNavigation
+        currentPage={currentPage}
+        onPageChange={setCurrentPage}
+        selectedName={selectedName}
+        onSelectName={handleSelectName}
+        names={rosterNames}
+        syncStatus={isSyncing ? 'loading' : refreshError ? 'error' : 'connected'}
+        onRefresh={loadAllData}
+      />
 
+      {/* Content wrapper which translates right on desktop */}
+      <div className="flex-1 flex flex-col min-w-0 lg:pl-64">
+        
         {/* 📣 Marquee Notifications Banner */}
-        <NotificationBanner
-          requests={requests}
-          shiftBlocks={shiftBlocks}
-          activities={activities}
-          onBannerClick={() => setCurrentPage('updates')}
-        />
-      </div>
+        <div className="sticky top-14 lg:top-0 z-30 shadow-xs flex flex-col">
+          <NotificationBanner
+            requests={requests}
+            shiftBlocks={shiftBlocks}
+            activities={activities}
+            onBannerClick={() => setCurrentPage('updates')}
+          />
+        </div>
 
-      {/* ⚙️ Page Router Layout */}
-      <main className="flex-1 pb-16">
+        {/* ⚙️ Page Router Layout */}
+        <main className="flex-1 pb-24 lg:pb-8">
         
         {currentPage === 'dashboard' && (
           <div className="animate-fadeIn">
@@ -1085,6 +1088,7 @@ export default function App() {
         )}
 
       </main>
+      </div>
 
       {/* Onboarding Screen Dialog Overlay */}
       {selectedName === '' && (

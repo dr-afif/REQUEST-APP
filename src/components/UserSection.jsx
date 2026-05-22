@@ -28,7 +28,7 @@ export default function UserSection({
   const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'table'
 
   const monthlyStats = useMemo(() => {
-    if (!selectedName || selectedName.trim().toLowerCase() === 'admin' || !requests?.length) return [];
+    if (!selectedName || selectedName.trim().toLowerCase() === 'admin' || selectedName.trim().toLowerCase() === 'guest' || !requests?.length) return [];
     
     const targetName = selectedName.trim().toLowerCase();
     const userActiveRequests = requests.filter((r) => {
@@ -202,7 +202,7 @@ export default function UserSection({
       )}
 
       {/* 📊 Monthly Request Limits Summary Cards */}
-      {selectedName && selectedName.trim().toLowerCase() !== 'admin' && monthlyStats.length > 0 && (
+      {selectedName && selectedName.trim().toLowerCase() !== 'admin' && selectedName.trim().toLowerCase() !== 'guest' && monthlyStats.length > 0 && (
         <div className="animate-fadeIn mb-2 max-w-sm">
           {monthlyStats.map((stat) => {
             const pct = Math.min(100, (stat.count / stat.limit) * 100);
@@ -296,7 +296,7 @@ export default function UserSection({
       )}
 
       {/* 📋 Personal Request History Section */}
-      {selectedName && selectedName.trim().toLowerCase() !== 'admin' && (
+      {selectedName && selectedName.trim().toLowerCase() !== 'admin' && selectedName.trim().toLowerCase() !== 'guest' && (
         <div className="mt-4 border-t border-slate-100 pt-6">
           <UserRequests
             requests={requests}

@@ -51,6 +51,7 @@ export default function DateDetailPanel({
   names = [],
 }) {
   const [open, setOpen] = useState(false);
+  const isGuest = selectedName?.trim().toLowerCase() === 'guest';
 
   // Trigger entry animation on mount
   useEffect(() => {
@@ -208,23 +209,34 @@ export default function DateDetailPanel({
           )}
 
           {/* Request form */}
-          <div className="date-panel__section">
-            <h3 className="date-panel__section-title">
-              {editingRequest ? 'Update request' : 'Add a request'}
-            </h3>
-            <NewRequestForm
-              selectedName={selectedName}
-              onSubmit={onSubmit}
-              isSubmitting={isSubmitting}
-              initialValues={formInitialValues}
-              requests={requests}
-              shiftTypes={shiftTypes}
-              limitGroups={limitGroups}
-              shiftBlocks={shiftBlocks}
-              settings={settings}
-              names={names}
-            />
-          </div>
+          {!isGuest ? (
+            <div className="date-panel__section">
+              <h3 className="date-panel__section-title">
+                {editingRequest ? 'Update request' : 'Add a request'}
+              </h3>
+              <NewRequestForm
+                selectedName={selectedName}
+                onSubmit={onSubmit}
+                isSubmitting={isSubmitting}
+                initialValues={formInitialValues}
+                requests={requests}
+                shiftTypes={shiftTypes}
+                limitGroups={limitGroups}
+                shiftBlocks={shiftBlocks}
+                settings={settings}
+                names={names}
+              />
+            </div>
+          ) : (
+            <div className="date-panel__section p-4 bg-slate-50 border border-slate-100 rounded-2xl text-center">
+              <p className="text-xs font-semibold text-slate-500">
+                👁️ Guest Mode (Read-Only)
+              </p>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Log out and select your profile name to submit or edit requests.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </>,
