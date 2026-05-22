@@ -160,17 +160,17 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
 
       {isCollapsed ? null : (
         <div className="mt-4 overflow-auto">
-          <table className="min-w-full border-separate border-spacing-0 text-xs">
+          <table className="min-w-full border-separate border-spacing-0 text-[10px] sm:text-xs">
             <thead>
               <tr>
-                <th className="sticky left-0 z-10 bg-white px-3 py-2 text-left font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200">
+                <th className="sticky left-0 z-10 bg-white px-1.5 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200">
                   Name
                 </th>
                 {dates.map((day) => (
                   <th
                     key={day.key}
                     className={[
-                      'whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-700',
+                      'whitespace-nowrap border-b border-slate-200 px-1.5 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-slate-700',
                       isWeekend(day.raw) ? 'bg-indigo-50' : '',
                     ]
                       .filter(Boolean)
@@ -185,20 +185,20 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
               {isLoadingNames ? (
                 [1, 2, 3, 4, 5].map((n) => (
                   <tr key={n} className="animate-pulse">
-                    <td className="sticky left-0 z-10 bg-white px-3 py-2.5 shadow-sm ring-1 ring-slate-200">
-                      <div className="h-4 bg-slate-200 rounded-full w-24"></div>
+                    <td className="sticky left-0 z-10 bg-white px-1.5 sm:px-3 py-2 shadow-sm ring-1 ring-slate-200">
+                      <div className="h-3.5 bg-slate-200 rounded-full w-16 sm:w-24"></div>
                     </td>
                     {dates.map((day) => (
                       <td
                         key={day.key}
                         className={[
-                          'border-b border-slate-100 px-3 py-2.5',
+                          'border-b border-slate-100 px-1.5 sm:px-3 py-2',
                           isWeekend(day.raw) ? 'bg-slate-50' : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
                       >
-                        <div className="h-4 bg-slate-200 rounded w-8 mx-auto opacity-40"></div>
+                        <div className="h-3.5 bg-slate-200 rounded w-6 sm:w-8 mx-auto opacity-40"></div>
                       </td>
                     ))}
                   </tr>
@@ -206,7 +206,7 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
               ) : !nameOrder.length ? (
                 <tr>
                   <td
-                    className="px-3 py-3 text-sm text-slate-500"
+                    className="px-3 py-3 text-xs sm:text-sm text-slate-500"
                     colSpan={dates.length + 1}
                   >
                     No team members available.
@@ -215,14 +215,14 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
               ) : (
                 nameOrder.map((name) => (
                   <tr key={name}>
-                    <th className="sticky left-0 z-10 bg-white px-3 py-2 text-left font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200">
+                    <th className="sticky left-0 z-10 bg-white px-1.5 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200">
                       {name}
                     </th>
                     {dates.map((day) => (
                       <td
                         key={day.key}
                         className={[
-                          'border-b border-slate-100 px-3 py-2 text-slate-700',
+                          'border-b border-slate-100 px-1.5 sm:px-3 py-1.5 sm:py-2 text-slate-700',
                           isWeekend(day.raw) ? 'bg-slate-50' : '',
                         ]
                           .filter(Boolean)
