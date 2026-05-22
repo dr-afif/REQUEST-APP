@@ -124,6 +124,13 @@ export default function UserSection({
   };
 
   const handleEdit = (request) => {
+    if (request.date) {
+      const d = new Date(request.date);
+      if (!isNaN(d.getTime())) {
+        setSelectedDate(d);
+        setViewMode('calendar');
+      }
+    }
     setEditingRequest(request);
   };
 
