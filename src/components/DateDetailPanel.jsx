@@ -139,12 +139,13 @@ export default function DateDetailPanel({
                 {allDateRequests.map((r) => {
                   const isSaving = r.isOptimistic;
                   const style = getVariantStyle(r.request);
-                  const isOwn =
-                    selectedName &&
-                    normalizeForComparison(r.name) === normalizeForComparison(selectedName);
+                  const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+                  const isOwnOrAdmin =
+                    isAdmin ||
+                    (selectedName && normalizeForComparison(r.name) === normalizeForComparison(selectedName));
                   const itemClass = [
                     'date-panel__request-item',
-                    isOwn ? 'date-panel__request-item--own' : '',
+                    isOwnOrAdmin ? 'date-panel__request-item--own' : '',
                     isSaving ? 'opacity-65 animate-pulse border border-dashed border-indigo-200/80 bg-indigo-50/20' : '',
                   ].filter(Boolean).join(' ');
 
@@ -176,7 +177,7 @@ export default function DateDetailPanel({
                           <span className="date-panel__request-comment">{r.comment}</span>
                         )}
                       </div>
-                      {isOwn && (
+                      {isOwnOrAdmin && (
                         <div className="date-panel__request-actions shrink-0">
                           <button
                             type="button"
