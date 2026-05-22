@@ -88,7 +88,7 @@ export default function NewRequestForm({
   useEffect(() => {
     if (initialValues) {
       setFormState({
-        date: initialValues.date ? initialValues.date.slice(0, 10) : '',
+        date: initialValues.date ? toIsoDate(initialValues.date) : '',
         request: initialValues.request ?? availableShiftTypes[0],
         comment: initialValues.comment ?? '',
       });
