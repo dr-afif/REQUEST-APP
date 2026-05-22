@@ -199,7 +199,7 @@ export default function HomeDashboard({
     if (!todayStr) return [];
     const [year, month] = todayStr.split('-').map(Number);
     const firstDay = new Date(year, month - 1, 1);
-    const startingDayOfWeek = firstDay.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+    const startingDayOfWeek = (firstDay.getDay() + 6) % 7; // 0 = Mon, ..., 6 = Sun
     
     const days = [];
     
@@ -384,7 +384,7 @@ export default function HomeDashboard({
                 <div>
                   {/* Calendar weekday headers */}
                   <div className="grid grid-cols-7 gap-1 text-center font-bold text-[10px] text-slate-400 uppercase mb-3">
-                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                    {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
                       <div key={d}>{d}</div>
                     ))}
                   </div>

@@ -14,6 +14,8 @@ export default function RosterPage({
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  const todayStr = useMemo(() => toIsoDate(new Date()), []);
+
   // 1. Set the initial roster month to the current month (YYYY-MM)
   const [rosterMonth, setRosterMonth] = useState(() => {
     const d = new Date();
@@ -398,24 +400,30 @@ export default function RosterPage({
               {daysInMonthList.map(({ dayNum, dayName, dateStr }, dayIndex) => {
                 const dayAssignments = rosterGrid[dateStr] || { AM: [], PM: [], NIGHT: [] };
                 const isWeekend = dayName === 'SAT' || dayName === 'SUN';
+                const isToday = dateStr === todayStr;
 
                 return (
                   <tr
                     key={dateStr}
                     className={`transition-colors border border-slate-300 ${
-                      isWeekend 
+                      isToday
+                        ? 'bg-indigo-50/80 hover:bg-indigo-100/60 ring-1 ring-inset ring-indigo-300'
+                        : isWeekend 
                         ? 'bg-slate-100/80 hover:bg-slate-200/50' 
                         : 'bg-white hover:bg-slate-50/50'
                     }`}
                   >
                     {/* Date */}
-                    <td className="border border-slate-300 px-0.5 sm:px-4 py-1.5 sm:py-3 font-bold text-slate-800 align-middle select-none text-[10px] sm:text-sm">
+                    <td className={`border border-slate-300 px-0.5 sm:px-4 py-1.5 sm:py-3 font-bold align-middle select-none text-[10px] sm:text-sm ${
+                      isToday ? 'text-indigo-900 bg-indigo-100/50' : 'text-slate-800'
+                    }`}>
                       {dayNum}
+                      {isToday && <span className="block text-[8px] sm:text-[9px] text-indigo-600 mt-0.5">TODAY</span>}
                     </td>
 
                     {/* Day Name */}
                     <td className={`border border-slate-300 px-0.5 sm:px-4 py-1.5 sm:py-3 font-bold align-middle select-none text-[10px] sm:text-sm ${
-                      isWeekend ? 'text-indigo-600' : 'text-slate-600'
+                      isToday ? 'text-indigo-900 bg-indigo-100/50' : isWeekend ? 'text-indigo-600' : 'text-slate-600'
                     }`}>
                       {dayName}
                     </td>
