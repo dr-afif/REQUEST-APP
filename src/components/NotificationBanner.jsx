@@ -54,7 +54,7 @@ export default function NotificationBanner({ requests = [], shiftBlocks = [], ac
 
     // Fallback standard announcement if empty
     if (limitedList.length === 0) {
-      limitedList.push('📢 Welcome to the RESQ Roster portal! Select your member profile to view shifts, request changes, or process swaps online.');
+      limitedList.push('📢 Welcome to the ED Roster portal! Select your member profile to view shifts, request changes, or process swaps online.');
       limitedList.push('✨ Quick Tip: You can now copy-paste full months of rosters directly from Microsoft Excel or Google Sheets in the Admin Panel.');
     }
 

@@ -105,8 +105,28 @@ export default function UserRequests({
 
   if (isLoading) {
     return (
-      <div className="rounded-3xl bg-white p-4 text-center text-sm text-slate-500">
-        Loading your requests...
+      <div className="flex flex-col gap-3">
+        <div className="h-5 bg-slate-200 rounded-full w-28 animate-pulse mb-1"></div>
+        <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 animate-pulse space-y-4">
+          <div className="flex justify-between items-center">
+            <div className="h-4 bg-slate-200 rounded-full w-1/4"></div>
+            <div className="h-4 bg-slate-200 rounded-full w-16"></div>
+          </div>
+          <div className="border-t border-slate-105 pt-4 space-y-3">
+            {[1, 2, 3].map((n) => (
+              <div key={n} className="flex justify-between items-center rounded-2xl bg-slate-50/70 p-3">
+                <div className="space-y-2 w-2/3">
+                  <div className="h-4 bg-slate-200 rounded-full w-3/4"></div>
+                  <div className="h-3 bg-slate-200 rounded-full w-1/2"></div>
+                </div>
+                <div className="flex gap-2">
+                  <div className="h-7 bg-slate-200 rounded-full w-12"></div>
+                  <div className="h-7 bg-slate-200 rounded-full w-14"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }

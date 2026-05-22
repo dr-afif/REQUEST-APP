@@ -16,7 +16,7 @@ export default function UpdatesPage({
       {
         ID: 'act-1',
         Timestamp: new Date().toISOString(),
-        CustomText: '📢 Welcome to the new dynamic RESQ Roster portal! All activity updates are now managed dynamically from Google Sheets.',
+        CustomText: '📢 Welcome to the new dynamic ED Roster portal! All activity updates are now managed dynamically from Google Sheets.',
         ApprovalStatus: 'Approved',
         RequestType: 'custom',
       }

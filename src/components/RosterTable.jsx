@@ -183,14 +183,26 @@ export default function RosterTable({ names, requests, referenceDate, isLoadingN
             </thead>
             <tbody>
               {isLoadingNames ? (
-                <tr>
-                  <td
-                    className="px-3 py-3 text-sm text-slate-500"
-                    colSpan={dates.length + 1}
-                  >
-                    Loading team members...
-                  </td>
-                </tr>
+                [1, 2, 3, 4, 5].map((n) => (
+                  <tr key={n} className="animate-pulse">
+                    <td className="sticky left-0 z-10 bg-white px-3 py-2.5 shadow-sm ring-1 ring-slate-200">
+                      <div className="h-4 bg-slate-200 rounded-full w-24"></div>
+                    </td>
+                    {dates.map((day) => (
+                      <td
+                        key={day.key}
+                        className={[
+                          'border-b border-slate-100 px-3 py-2.5',
+                          isWeekend(day.raw) ? 'bg-slate-50' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      >
+                        <div className="h-4 bg-slate-200 rounded w-8 mx-auto opacity-40"></div>
+                      </td>
+                    ))}
+                  </tr>
+                ))
               ) : !nameOrder.length ? (
                 <tr>
                   <td

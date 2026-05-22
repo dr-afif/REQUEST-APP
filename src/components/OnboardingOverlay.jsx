@@ -5,10 +5,10 @@ export default function OnboardingOverlay({ names = [], onSelect, onAdminInit, i
 
   const filteredNames = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
-    if (!cleanSearch) return names.slice(0, 5); // show first 5 initially
+    if (!cleanSearch) return names.slice(0, 12); // show first 12 initially (3x4 grid)
     return names
       .filter((name) => name.toLowerCase().includes(cleanSearch))
-      .slice(0, 5); // limit visible search results
+      .slice(0, 12); // limit visible search results to fit 3x4 grid
   }, [names, search]);
 
   return (
@@ -36,10 +36,10 @@ export default function OnboardingOverlay({ names = [], onSelect, onAdminInit, i
           
           {/* Brand Logo & Header */}
           <div className="flex flex-col items-center text-center">
-            <div className="flex h-10 w-10 sm:h-16 sm:w-16 items-center justify-center rounded-xl sm:rounded-2xl bg-gradient-to-tr from-indigo-500 to-indigo-700 text-white font-black text-lg sm:text-2xl shadow-lg shadow-indigo-200 mb-2 sm:mb-4 animate-pulse">
-              R
+            <div className="flex h-10 w-10 sm:h-16 sm:w-16 items-center justify-center rounded-xl sm:rounded-2xl bg-gradient-to-tr from-indigo-500 to-indigo-700 text-white font-black text-base sm:text-2xl shadow-lg shadow-indigo-200 mb-2 sm:mb-4 animate-pulse">
+              ED
             </div>
-            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">Welcome to RESQ</h2>
+            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 tracking-tight">Welcome to ED Roster</h2>
             <p className="mt-1 text-[10px] sm:text-xs font-semibold text-slate-500 uppercase tracking-widest">
               Medical Staff Roster Portal
             </p>
@@ -64,33 +64,29 @@ export default function OnboardingOverlay({ names = [], onSelect, onAdminInit, i
             </div>
 
             {/* Quick Select Filter */}
-            <div className="flex flex-col gap-1.5 max-h-36 sm:max-h-48 overflow-y-auto no-scrollbar pr-1">
+            <div className="grid grid-cols-3 gap-2 max-h-48 sm:max-h-64 overflow-y-auto no-scrollbar pr-1 py-1">
               {isLoading ? (
-                <div className="py-4 sm:py-6 text-center text-xs font-medium text-slate-400">
-                  ⏳ Synchronizing clinical team roster list...
-                </div>
+                <>
+                  {[...Array(12)].map((_, i) => (
+                    <div key={i} className="animate-pulse h-8 bg-slate-200 rounded-full w-full" />
+                  ))}
+                </>
               ) : filteredNames.length > 0 ? (
                 filteredNames.map((name) => {
-                  const initial = name.charAt(0).toUpperCase();
                   return (
                     <button
                       key={name}
                       type="button"
                       onClick={() => onSelect(name)}
-                      className="flex items-center justify-between rounded-2xl border border-slate-100/60 bg-white px-4 py-2 sm:py-2.5 shadow-sm transition hover:border-indigo-100 hover:bg-indigo-50/50 hover:shadow-indigo-50 hover:scale-[1.01] active:scale-95 text-left"
+                      title={name}
+                      className="inline-flex items-center justify-center gap-1 rounded-full border border-slate-200/80 bg-white px-2 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50/40 hover:text-indigo-700 active:scale-95 cursor-pointer w-full min-w-0"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-xl bg-indigo-50 font-bold text-xs sm:text-sm text-indigo-700 shadow-sm shadow-indigo-100">
-                          {initial}
-                        </div>
-                        <span className="text-sm font-bold text-slate-700">{name}</span>
-                      </div>
-                      <span className="text-xs font-semibold text-indigo-500">Select →</span>
+                      <span className="truncate">👤 {name}</span>
                     </button>
                   );
                 })
               ) : (
-                <div className="py-4 sm:py-6 text-center text-xs font-medium text-slate-400">
+                <div className="col-span-3 py-4 sm:py-6 text-center text-xs font-medium text-slate-400 w-full">
                   ⚠️ No team members match "{search}"
                 </div>
               )}

@@ -9,6 +9,7 @@ import AdminPanel from './components/AdminPanel';
 import AdminPinModal from './components/AdminPinModal';
 import OnboardingOverlay from './components/OnboardingOverlay';
 import ToastNotification from './components/ToastNotification';
+import PwaInstallBanner from './components/PwaInstallBanner';
 
 import {
   deleteRequest,
@@ -97,7 +98,14 @@ function adaptRequestsResponse(data) {
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
-  const [requests, setRequests] = useState([]);
+  const [requests, setRequests] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_requests');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [toasts, setToasts] = useState([]);
 
   const addToast = (message, type = 'info', duration = 3000) => {
@@ -115,14 +123,63 @@ export default function App() {
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
     );
   };
-  const [masterRoster, setMasterRoster] = useState([]);
-  const [shiftBlocks, setShiftBlocks] = useState([]);
-  const [shiftTypes, setShiftTypes] = useState([]);
-  const [limitGroups, setLimitGroups] = useState([]);
-  const [activities, setActivities] = useState([]);
-  const [settings, setSettings] = useState({ monthly_request_limit: '10' });
+  const [masterRoster, setMasterRoster] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_masterRoster');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [shiftBlocks, setShiftBlocks] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_shiftBlocks');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [shiftTypes, setShiftTypes] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_shiftTypes');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [limitGroups, setLimitGroups] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_limitGroups');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activities, setActivities] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_activities');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [settings, setSettings] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_settings');
+      return cached ? JSON.parse(cached) : { monthly_request_limit: '10' };
+    } catch {
+      return { monthly_request_limit: '10' };
+    }
+  });
   
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_requests');
+      return !cached;
+    } catch {
+      return true;
+    }
+  });
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedName, setSelectedName] = useState(() => {
     const stored = localStorage.getItem('resq_member_name') || '';
@@ -136,9 +193,54 @@ export default function App() {
   const [pendingSelectName, setPendingSelectName] = useState('');
   const [refreshError, setRefreshError] = useState('');
   
-  const [teamMembers, setTeamMembers] = useState([]);
+  const [teamMembers, setTeamMembers] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_teamMembers');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [teamMembersError, setTeamMembersError] = useState('');
-  const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(true);
+  const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(() => {
+    try {
+      const cached = localStorage.getItem('resq_cache_teamMembers');
+      return !cached;
+    } catch {
+      return true;
+    }
+  });
+
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+      const isDismissed = localStorage.getItem('resq_pwa_dismissed') === 'true';
+      if (!isDismissed) {
+        setShowInstallBanner(true);
+      }
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    window.addEventListener('appinstalled', () => {
+      setInstallPrompt(null);
+      setShowInstallBanner(false);
+      console.log('ED Roster App was installed successfully');
+    });
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleDismissPwaBanner = () => {
+    localStorage.setItem('resq_pwa_dismissed', 'true');
+    setShowInstallBanner(false);
+  };
 
   // Automatic navigation guard for admin page access control
   useEffect(() => {
@@ -293,6 +395,22 @@ export default function App() {
           }).filter(act => act.ID && act.ID.trim().toLowerCase() !== 'id' && (act.CustomText || act.Name))
         : [];
       setActivities(validActivities);
+
+      // Cache the loaded data in localStorage for Cache-First rendering
+      try {
+        localStorage.setItem('resq_cache_teamMembers', JSON.stringify(deduped));
+        localStorage.setItem('resq_cache_requests', JSON.stringify(adapted));
+        localStorage.setItem('resq_cache_masterRoster', JSON.stringify(validMasterRoster));
+        localStorage.setItem('resq_cache_shiftBlocks', JSON.stringify(validShiftBlocks));
+        localStorage.setItem('resq_cache_shiftTypes', JSON.stringify(validShiftTypes));
+        localStorage.setItem('resq_cache_limitGroups', JSON.stringify(validLimitGroups));
+        localStorage.setItem('resq_cache_activities', JSON.stringify(validActivities));
+        if (response && typeof response === 'object' && response.settings) {
+          localStorage.setItem('resq_cache_settings', JSON.stringify(response.settings));
+        }
+      } catch (cacheErr) {
+        console.warn('Failed to save data to localStorage cache:', cacheErr);
+      }
     } catch (error) {
       setRefreshError(error.message ?? 'Could not synchronize roster data.');
     } finally {
@@ -488,94 +606,267 @@ export default function App() {
 
   // Handle Excel Baseline Uploads
   const handleUploadBaseline = async (rows) => {
-    await uploadMasterRoster(rows);
-    // Give Google Sheets ~1.5 s to commit the write before reading back
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    await loadAllData();
+    const toastId = addToast('🔄 Uploading roster baseline to Google Sheets...', 'info', Infinity);
+    try {
+      await uploadMasterRoster(rows);
+      updateToast(toastId, {
+        message: '✅ Roster baseline uploaded successfully!',
+        type: 'success',
+        duration: 3000,
+      });
+      // Give Google Sheets ~1.5 s to commit the write before reading back
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await loadAllData();
+    } catch (err) {
+      console.error('Failed to upload baseline:', err);
+      updateToast(toastId, {
+        message: `❌ Upload failed: ${err.message || 'Network error'}`,
+        type: 'error',
+        duration: 5000,
+      });
+    }
   };
 
   // Handle Block Consolidation Additions
   const handleAddBlock = async (payload) => {
+    const previousBlocks = [...shiftBlocks];
+    const tempId = `opt_${Date.now()}`;
+    const newBlock = {
+      ID: tempId,
+      id: tempId,
+      Date: payload.date,
+      ShiftType: payload.shiftType,
+      MaxSlots: payload.maxSlots,
+      isOptimistic: true
+    };
+    setShiftBlocks((prev) => [...prev, newBlock]);
+    const toastId = addToast('🔄 Applying limit block cap...', 'info', Infinity);
     try {
       await submitShiftBlock(payload);
+      updateToast(toastId, {
+        message: '✅ Limit block cap applied!',
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to apply shift cap: ${error.message}`);
+      setShiftBlocks(previousBlocks);
+      updateToast(toastId, {
+        message: `❌ Failed to apply limit cap: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   // Handle Block Consolidation Deletions
   const handleDeleteBlock = async (id) => {
+    const previousBlocks = [...shiftBlocks];
+    setShiftBlocks((prev) => prev.filter(b => b.ID !== id && b.id !== id));
+    const toastId = addToast('🔄 Deleting limit block cap...', 'info', Infinity);
     try {
       await deleteShiftBlock(id);
+      updateToast(toastId, {
+        message: '✅ Limit block cap deleted.',
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to delete limit cap: ${error.message}`);
+      setShiftBlocks(previousBlocks);
+      updateToast(toastId, {
+        message: `❌ Failed to delete limit cap: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   // Handle Shift Types Configuration
   const handleAddShiftType = async (payload) => {
+    const previousShiftTypes = [...shiftTypes];
+    const tempId = `opt_${Date.now()}`;
+    const newShiftType = {
+      ID: tempId,
+      id: tempId,
+      Name: payload.name,
+      IsPublic: payload.isPublic,
+      GroupID: payload.groupId,
+      isOptimistic: true
+    };
+    setShiftTypes((prev) => [...prev, newShiftType]);
+    const toastId = addToast(`🔄 Adding shift type "${payload.name}"...`, 'info', Infinity);
     try {
       await submitShiftType(payload);
+      updateToast(toastId, {
+        message: `✅ Shift type "${payload.name}" added successfully!`,
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to add shift type: ${error.message}`);
+      setShiftTypes(previousShiftTypes);
+      updateToast(toastId, {
+        message: `❌ Failed to add shift type: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   const handleUpdateShiftType = async (id, payload) => {
+    const previousShiftTypes = [...shiftTypes];
+    setShiftTypes((prev) =>
+      prev.map(s => (s.ID === id || s.id === id)
+        ? { ...s, Name: payload.name, IsPublic: payload.isPublic, GroupID: payload.groupId, isOptimistic: true }
+        : s
+      )
+    );
+    const toastId = addToast(`🔄 Updating shift type "${payload.name}"...`, 'info', Infinity);
     try {
       await updateShiftType(id, payload);
+      updateToast(toastId, {
+        message: `✅ Shift type "${payload.name}" updated!`,
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to update shift type: ${error.message}`);
+      setShiftTypes(previousShiftTypes);
+      updateToast(toastId, {
+        message: `❌ Failed to update shift type: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   const handleDeleteShiftType = async (id) => {
+    const previousShiftTypes = [...shiftTypes];
+    const shiftType = shiftTypes.find(s => s.ID === id || s.id === id);
+    const label = shiftType ? shiftType.Name : 'shift type';
+    setShiftTypes((prev) => prev.filter(s => s.ID !== id && s.id !== id));
+    const toastId = addToast(`🔄 Deleting shift type "${label}"...`, 'info', Infinity);
     try {
       await deleteShiftType(id);
+      updateToast(toastId, {
+        message: `✅ Shift type "${label}" deleted.`,
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to delete shift type: ${error.message}`);
+      setShiftTypes(previousShiftTypes);
+      updateToast(toastId, {
+        message: `❌ Failed to delete shift type: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   const handleReorderShiftTypes = async (ids) => {
+    const previousShiftTypes = [...shiftTypes];
+    const reordered = ids.map(id => shiftTypes.find(s => s.ID === id || s.id === id)).filter(Boolean);
+    setShiftTypes(reordered);
+    const toastId = addToast('🔄 Reordering shift types configuration...', 'info', Infinity);
     try {
       await reorderShiftTypes(ids);
+      updateToast(toastId, {
+        message: '✅ Shift types order updated!',
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to reorder shift types: ${error.message}`);
+      setShiftTypes(previousShiftTypes);
+      updateToast(toastId, {
+        message: `❌ Failed to reorder shift types: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   // Handle Limit Groups Configuration
   const handleAddLimitGroup = async (payload) => {
+    const previousLimitGroups = [...limitGroups];
+    const tempId = `opt_${Date.now()}`;
+    const newGroup = {
+      ID: tempId,
+      id: tempId,
+      GroupName: payload.groupName,
+      DefaultLimit: payload.defaultLimit,
+      isOptimistic: true
+    };
+    setLimitGroups((prev) => [...prev, newGroup]);
+    const toastId = addToast(`🔄 Adding limit group "${payload.groupName}"...`, 'info', Infinity);
     try {
       await submitLimitGroup(payload);
+      updateToast(toastId, {
+        message: `✅ Limit group "${payload.groupName}" added!`,
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to add limit group: ${error.message}`);
+      setLimitGroups(previousLimitGroups);
+      updateToast(toastId, {
+        message: `❌ Failed to add limit group: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   const handleUpdateLimitGroup = async (id, payload) => {
+    const previousLimitGroups = [...limitGroups];
+    setLimitGroups((prev) =>
+      prev.map(g => (g.ID === id || g.id === id)
+        ? { ...g, GroupName: payload.groupName, DefaultLimit: payload.defaultLimit, isOptimistic: true }
+        : g
+      )
+    );
+    const toastId = addToast(`🔄 Updating limit group "${payload.groupName}"...`, 'info', Infinity);
     try {
       await updateLimitGroup(id, payload);
+      updateToast(toastId, {
+        message: `✅ Limit group "${payload.groupName}" updated!`,
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to update limit group: ${error.message}`);
+      setLimitGroups(previousLimitGroups);
+      updateToast(toastId, {
+        message: `❌ Failed to update limit group: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
   const handleDeleteLimitGroup = async (id) => {
+    const previousLimitGroups = [...limitGroups];
+    const group = limitGroups.find(g => g.ID === id || g.id === id);
+    const label = group ? group.GroupName : 'limit group';
+    setLimitGroups((prev) => prev.filter(g => g.ID !== id && g.id !== id));
+    const toastId = addToast(`🔄 Deleting limit group "${label}"...`, 'info', Infinity);
     try {
       await deleteLimitGroup(id);
+      updateToast(toastId, {
+        message: `✅ Limit group "${label}" deleted.`,
+        type: 'success',
+        duration: 3000,
+      });
       await loadAllData();
     } catch (error) {
-      alert(`Failed to delete limit group: ${error.message}`);
+      setLimitGroups(previousLimitGroups);
+      updateToast(toastId, {
+        message: `❌ Failed to delete limit group: ${error.message}`,
+        type: 'error',
+        duration: 5000,
+      });
     }
   };
 
@@ -707,26 +998,30 @@ export default function App() {
       <main className="flex-1 pb-16">
         
         {currentPage === 'dashboard' && (
-          <HomeDashboard
-            selectedName={selectedName}
-            names={rosterNames}
-            requests={requests}
-            masterRoster={masterRoster}
-            shiftBlocks={shiftBlocks}
-            onUpdateApproval={handleUpdateApproval}
-            onNavigate={setCurrentPage}
-          />
+          <div className="animate-fadeIn">
+            <HomeDashboard
+              selectedName={selectedName}
+              names={rosterNames}
+              requests={requests}
+              masterRoster={masterRoster}
+              shiftBlocks={shiftBlocks}
+              onUpdateApproval={handleUpdateApproval}
+              onNavigate={setCurrentPage}
+            />
+          </div>
         )}
 
         {currentPage === 'roster' && (
-          <RosterPage
-            selectedName={selectedName}
-            names={rosterNames}
-            requests={requests}
-            masterRoster={masterRoster}
-            onUploadMasterRoster={handleUploadBaseline}
-            onRefresh={loadAllData}
-          />
+          <div className="animate-fadeIn">
+            <RosterPage
+              selectedName={selectedName}
+              names={rosterNames}
+              requests={requests}
+              masterRoster={masterRoster}
+              onUploadMasterRoster={handleUploadBaseline}
+              onRefresh={loadAllData}
+            />
+          </div>
         )}
 
         {currentPage === 'requests' && (
@@ -751,38 +1046,42 @@ export default function App() {
         )}
 
         {currentPage === 'updates' && (
-          <UpdatesPage
-            requests={requests}
-            shiftBlocks={shiftBlocks}
-            activities={activities}
-            selectedName={selectedName}
-            onDeleteActivity={handleDeleteActivity}
-          />
+          <div className="animate-fadeIn">
+            <UpdatesPage
+              requests={requests}
+              shiftBlocks={shiftBlocks}
+              activities={activities}
+              selectedName={selectedName}
+              onDeleteActivity={handleDeleteActivity}
+            />
+          </div>
         )}
 
         {currentPage === 'admin' && selectedName?.trim().toLowerCase() === 'admin' && (
-          <AdminPanel
-            requests={requests}
-            shiftBlocks={shiftBlocks}
-            names={rosterNames}
-            onUpdateApproval={handleUpdateApproval}
-            onAddBlock={handleAddBlock}
-            onDeleteBlock={handleDeleteBlock}
-            shiftTypes={shiftTypes}
-            onAddShiftType={handleAddShiftType}
-            onUpdateShiftType={handleUpdateShiftType}
-            onDeleteShiftType={handleDeleteShiftType}
-            onReorderShiftTypes={handleReorderShiftTypes}
-            limitGroups={limitGroups}
-            onAddLimitGroup={handleAddLimitGroup}
-            onUpdateLimitGroup={handleUpdateLimitGroup}
-            onDeleteLimitGroup={handleDeleteLimitGroup}
-            activities={activities}
-            onAddActivity={handleAddActivity}
-            onDeleteActivity={handleDeleteActivity}
-            settings={settings}
-            onUpdateSetting={handleUpdateSetting}
-          />
+          <div className="animate-fadeIn">
+            <AdminPanel
+              requests={requests}
+              shiftBlocks={shiftBlocks}
+              names={rosterNames}
+              onUpdateApproval={handleUpdateApproval}
+              onAddBlock={handleAddBlock}
+              onDeleteBlock={handleDeleteBlock}
+              shiftTypes={shiftTypes}
+              onAddShiftType={handleAddShiftType}
+              onUpdateShiftType={handleUpdateShiftType}
+              onDeleteShiftType={handleDeleteShiftType}
+              onReorderShiftTypes={handleReorderShiftTypes}
+              limitGroups={limitGroups}
+              onAddLimitGroup={handleAddLimitGroup}
+              onUpdateLimitGroup={handleUpdateLimitGroup}
+              onDeleteLimitGroup={handleDeleteLimitGroup}
+              activities={activities}
+              onAddActivity={handleAddActivity}
+              onDeleteActivity={handleDeleteActivity}
+              settings={settings}
+              onUpdateSetting={handleUpdateSetting}
+            />
+          </div>
         )}
 
       </main>
@@ -803,6 +1102,14 @@ export default function App() {
         onClose={handlePinClose}
         onSuccess={handlePinSuccess}
       />
+
+      {/* PWA Install Banner */}
+      {showInstallBanner && (
+        <PwaInstallBanner
+          installPrompt={installPrompt}
+          onDismiss={handleDismissPwaBanner}
+        />
+      )}
 
       {/* Toast notifications container */}
       <ToastNotification toasts={toasts} onRemove={removeToast} />

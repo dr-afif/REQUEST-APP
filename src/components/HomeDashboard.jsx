@@ -237,7 +237,7 @@ export default function HomeDashboard({
               🏥 Medical Staff Hub
             </span>
             <h1 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
-              {selectedName ? `Welcome back, ${selectedName}!` : 'Welcome to RESQ'}
+              {selectedName ? `Welcome back, ${selectedName}!` : 'Welcome to ED Roster'}
             </h1>
             <p className="mt-2 max-w-md text-emerald-50 text-sm sm:text-base">
               {selectedName 

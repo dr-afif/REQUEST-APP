@@ -1,6 +1,6 @@
 {
-  "name": "RESQ Roster Requests",
-  "short_name": "RESQ Roster",
+  "name": "ED Roster Requests",
+  "short_name": "ED Roster",
   "start_url": "/REQUEST-APP/",
   "display": "standalone",
   "background_color": "#eef2ff",

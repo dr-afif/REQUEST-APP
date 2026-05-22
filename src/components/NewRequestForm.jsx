@@ -384,29 +384,42 @@ export default function NewRequestForm({
           })()
         )}
 
-        <label className="text-sm font-medium text-slate-700">
-          Request type
-          <select
-            name="request"
-            value={formState.request}
-            onChange={handleChange}
-            className="mt-1 w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:text-slate-400"
-          >
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-semibold text-slate-700">Request type</span>
+          <div className="grid grid-cols-4 gap-2">
             {availableShiftTypes.map((type) => {
               const limitStatus = getLimitStatusForType(type, selectedDateKey);
               const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+              const isCapped = !isAdmin && limitStatus.isLimited && limitStatus.isAtLimit;
+              const isSelected = formState.request === type;
+
+              let btnClass = "border text-xs font-bold py-2.5 rounded-full text-center transition duration-200 active:scale-[0.96] flex items-center justify-center min-w-0 px-1 truncate cursor-pointer";
+              if (isSelected) {
+                btnClass += " bg-gradient-to-tr from-indigo-600 to-indigo-700 border-indigo-600 text-white shadow-sm shadow-indigo-100 font-extrabold";
+              } else if (isCapped) {
+                btnClass += " bg-slate-100 border-slate-200/50 text-slate-400 cursor-not-allowed opacity-60";
+              } else {
+                btnClass += " bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50/50";
+              }
+
               return (
-                <option
+                <button
                   key={type}
-                  value={type}
-                  disabled={!isAdmin && limitStatus.isLimited && limitStatus.isAtLimit}
+                  type="button"
+                  disabled={isCapped}
+                  title={type + (isCapped ? ' (Full/Capped)' : '')}
+                  onClick={() => {
+                    setValidationError('');
+                    setFormState((prev) => ({ ...prev, request: type }));
+                  }}
+                  className={btnClass}
                 >
-                  {type} {(!isAdmin && limitStatus.isLimited && limitStatus.isAtLimit) ? '(Full)' : ''}
-                </option>
+                  <span className="truncate">{type}</span>
+                </button>
               );
             })}
-          </select>
-          <p className="mt-1 text-xs text-slate-500">
+          </div>
+          <p className="mt-1 text-[11px] font-medium text-slate-500">
             {selectedDateKey && selectedTypeStatus.isLimited ? (
               <>
                 {selectedTypeStatus.usage}/{selectedTypeStatus.limit} requests for group '{selectedTypeStatus.groupName}' on this date.
@@ -416,7 +429,7 @@ export default function NewRequestForm({
               selectedTypeStatus.isLimited ? `Group '${selectedTypeStatus.groupName}' is subject to limits.` : 'This shift type is unlimited.'
             )}
           </p>
-        </label>
+        </div>
 
         <label className="text-sm font-medium text-slate-700">
           Comment (optional)

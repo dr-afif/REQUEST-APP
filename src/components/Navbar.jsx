@@ -44,8 +44,8 @@ export default function Navbar({
           
           {/* 🏷️ Left: Logo and App Title */}
           <div className="flex items-center gap-2" onClick={() => onPageChange('dashboard')} role="button">
-            <div className="flex shrink-0 h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-teal-500 to-indigo-600 text-white font-bold text-lg shadow-md shadow-indigo-100">
-              R
+            <div className="flex shrink-0 h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-teal-500 to-indigo-600 text-white font-bold text-sm shadow-md shadow-indigo-100">
+              ED
             </div>
             <div>
               <span className="whitespace-nowrap text-lg font-bold bg-gradient-to-r from-teal-600 to-indigo-700 bg-clip-text text-transparent">
@@ -177,11 +177,11 @@ export default function Navbar({
             <div>
               <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
                 <div className="flex items-center gap-2">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-teal-500 to-indigo-600 text-white font-bold text-md shadow-sm">
-                    R
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-tr from-teal-500 to-indigo-600 text-white font-bold text-xs shadow-sm">
+                    ED
                   </div>
                   <span className="text-md font-bold bg-gradient-to-r from-teal-600 to-indigo-700 bg-clip-text text-transparent">
-                    RESQ Navigation
+                    ED Navigation
                   </span>
                 </div>
                 <button

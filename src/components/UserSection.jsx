@@ -133,7 +133,7 @@ export default function UserSection({
       setError('');
       await onSubmitRequest(payload);
       setEditingRequest(null);
-      // Keep panel open so user sees the updated calendar
+      handlePanelClose(); // Auto close the request form panel
     } catch (err) {
       setError(err.message ?? 'Unable to save request.');
     } finally {
