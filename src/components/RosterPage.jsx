@@ -272,8 +272,9 @@ export default function RosterPage({
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-extrabold bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">
-              📅 Current Roster
+            <h1 className="text-3xl font-extrabold flex items-center gap-2">
+              <span>📅</span>
+              <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Current Roster</span>
             </h1>
             {isAdmin && (
               <button
