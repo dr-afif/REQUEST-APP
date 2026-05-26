@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { buildUserMonthlyUsage } from '../utils/quota';
 
 export default function AdminPanel({
   requests = [],
@@ -220,67 +221,13 @@ export default function AdminPanel({
 
   // Group ALL users' requests by user and by month
   const userMonthlyUsage = useMemo(() => {
-    const usage = {};
-    const globalLimit = Number(settings?.monthly_request_limit) || 10;
-    const weekendLimit = settings?.monthly_weekend_limit !== undefined 
-      ? Number(settings.monthly_weekend_limit) 
-      : 4;
-    const weekendLimitGroupId = settings?.weekend_limit_group_id || 'ALL';
-    
-    // Initialize for all active users
-    names.forEach(name => {
-      usage[name] = {};
+    return buildUserMonthlyUsage({
+      requests,
+      names,
+      settings,
+      quotaOverviewMonth,
+      shiftTypes: localShiftTypes,
     });
-
-    const limitGroupIdByShiftType = localShiftTypes.reduce((acc, st) => {
-      if (st.GroupID) acc[st.Name.toUpperCase()] = st.GroupID;
-      return acc;
-    }, {});
-
-    // We only care about active requests for quota
-    const activeRequests = requests.filter(r => r.status?.toLowerCase() === 'active');
-    
-    activeRequests.forEach(r => {
-      if (!r.date || !r.name) return;
-      if (!names.includes(r.name)) return; // Only track currently active names
-      const d = new Date(r.date);
-      if (isNaN(d.getTime())) return;
-      
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!usage[r.name][key]) {
-        usage[r.name][key] = { count: 0, weekendCount: 0 };
-      }
-      usage[r.name][key].count++;
-
-      const day = d.getDay();
-      if (day === 0 || day === 6) {
-        let applies = true;
-        if (weekendLimitGroupId !== 'ALL') {
-          const reqType = (r.request ?? '').toString().trim().toUpperCase();
-          if (limitGroupIdByShiftType[reqType] !== weekendLimitGroupId) {
-            applies = false;
-          }
-        }
-        if (applies) {
-          usage[r.name][key].weekendCount++;
-        }
-      }
-    });
-
-    const labelOf = (yearMonthKey) => {
-      if (!yearMonthKey) return '';
-      const [y, m] = yearMonthKey.split('-');
-      const dateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
-      return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-    };
-
-    return {
-      limit: globalLimit,
-      weekendLimit,
-      monthKey: quotaOverviewMonth,
-      monthLabel: labelOf(quotaOverviewMonth),
-      data: usage
-    };
   }, [requests, names, settings, quotaOverviewMonth, localShiftTypes]);
 
   const handleAddBlockSubmit = (e) => {

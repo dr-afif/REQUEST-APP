@@ -34,67 +34,17 @@ import {
   deleteActivity,
   updateSetting,
 } from './api';
+import {
+  adaptRequestsResponse,
+  normalizeActivities,
+  validateLimitGroups,
+  validateMasterRoster,
+  validateShiftBlocks,
+  validateShiftTypes,
+} from './utils/adapters';
 import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
 
 const REFRESH_INTERVAL = 60 * 1000; // 1 minute
-
-function adaptRequestsResponse(data) {
-  const rows = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.rows)
-      ? data.rows
-      : Array.isArray(data?.values)
-        ? data.values
-        : [];
-
-  return rows.map((entry) => {
-    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-      const pick = (...keys) => {
-        for (const key of keys) {
-          if (Object.prototype.hasOwnProperty.call(entry, key)) {
-            return entry[key];
-          }
-        }
-        return undefined;
-      };
-
-      const nameVal = pick('name', 'Name') ?? '';
-      const dateVal = pick('date', 'Date') ?? '';
-      const dayVal = pick('day', 'Day') ?? '';
-      const requestVal = pick('request', 'Request') ?? '';
-      const statusVal = pick('status', 'Status') ?? '';
-      const commentVal = pick('comment', 'Comment') ?? '';
-      const approvalStatusVal = pick('approvalStatus', 'ApprovalStatus') || 'Approved';
-      const swapPartnerVal = pick('swapPartner', 'SwapPartner') ?? '';
-      const requestTypeVal = pick('requestType', 'RequestType') ?? 'Leave';
-
-      return {
-        id: pick('id', 'ID', 'Id'),
-        timestamp: pick('timestamp', 'Timestamp'),
-        name: nameVal,
-        Name: nameVal,
-        date: dateVal,
-        Date: dateVal,
-        day: dayVal,
-        Day: dayVal,
-        request: requestVal,
-        Request: requestVal,
-        status: statusVal,
-        Status: statusVal,
-        comment: commentVal,
-        Comment: commentVal,
-        ApprovalStatus: approvalStatusVal,
-        approvalStatus: approvalStatusVal,
-        SwapPartner: swapPartnerVal,
-        swapPartner: swapPartnerVal,
-        RequestType: requestTypeVal,
-        requestType: requestTypeVal,
-      };
-    }
-
-    return entry;
-  });
-}
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -346,54 +296,23 @@ export default function App() {
       setRequests(adapted);
 
       // Set Master Baseline Roster with validation (ensure items are not request fallbacks)
-      const validMasterRoster = Array.isArray(rawMasterRoster)
-        ? rawMasterRoster.filter(r => r && (Object.prototype.hasOwnProperty.call(r, 'Shift') || Object.prototype.hasOwnProperty.call(r, 'shift')))
-        : [];
+      const validMasterRoster = validateMasterRoster(rawMasterRoster);
       setMasterRoster(validMasterRoster);
 
       // Set Date caps/limits blocks with validation (ensure items are not request fallbacks)
-      const validShiftBlocks = Array.isArray(rawShiftBlocks)
-        ? rawShiftBlocks.filter(b => b && (Object.prototype.hasOwnProperty.call(b, 'MaxSlots') || Object.prototype.hasOwnProperty.call(b, 'maxSlots')))
-        : [];
+      const validShiftBlocks = validateShiftBlocks(rawShiftBlocks);
       setShiftBlocks(validShiftBlocks);
 
       // Set Shift Types Configuration
-      const validShiftTypes = Array.isArray(rawShiftTypes)
-        ? rawShiftTypes.filter(t => t && (Object.prototype.hasOwnProperty.call(t, 'Name') || Object.prototype.hasOwnProperty.call(t, 'name')))
-        : [];
+      const validShiftTypes = validateShiftTypes(rawShiftTypes);
       setShiftTypes(validShiftTypes);
 
       // Set Limit Groups Configuration
-      const validLimitGroups = Array.isArray(rawLimitGroups)
-        ? rawLimitGroups.filter(g => g && (Object.prototype.hasOwnProperty.call(g, 'GroupName') || Object.prototype.hasOwnProperty.call(g, 'groupName')))
-        : [];
+      const validLimitGroups = validateLimitGroups(rawLimitGroups);
       setLimitGroups(validLimitGroups);
 
       // Parse & set Activity History Configuration
-      const validActivities = Array.isArray(rawActivities)
-        ? rawActivities.map(act => {
-            const pick = (...keys) => {
-              for (const key of keys) {
-                if (act && Object.prototype.hasOwnProperty.call(act, key)) {
-                  return act[key];
-                }
-              }
-              return undefined;
-            };
-            return {
-              ID: String(pick('ID', 'id', 'Id') || ''),
-              Timestamp: pick('Timestamp', 'timestamp') || '',
-              CustomText: pick('CustomText', 'customText') || '',
-              Name: pick('Name', 'name') || '',
-              RequestType: pick('RequestType', 'requestType') || '',
-              Request: pick('Request', 'request') || '',
-              SwapPartner: pick('SwapPartner', 'swapPartner') || '',
-              Date: pick('Date', 'date') || '',
-              ApprovalStatus: pick('ApprovalStatus', 'approvalStatus') || 'Approved',
-              Comment: pick('Comment', 'comment') || ''
-            };
-          }).filter(act => act.ID && act.ID.trim().toLowerCase() !== 'id' && (act.CustomText || act.Name))
-        : [];
+      const validActivities = normalizeActivities(rawActivities);
       setActivities(validActivities);
 
       // Cache the loaded data in localStorage for Cache-First rendering

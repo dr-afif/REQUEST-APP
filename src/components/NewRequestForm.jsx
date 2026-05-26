@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toIsoDate } from '../utils/normalise';
+import {
+  buildLimitGroupById,
+  buildLimitGroupIdByShiftType,
+  buildLimitOverridesByDateAndGroup,
+  buildUsageByDateAndGroup,
+  getLimitStatusForType as getQuotaLimitStatusForType,
+  getMonthlyRequestCount,
+  getMonthlyWeekendRequestCount,
+} from '../utils/quota';
 
 const DAILY_LIMIT = 3;
 
@@ -30,45 +39,19 @@ export default function NewRequestForm({
   }, [shiftTypes, selectedName]);
 
   const limitGroupById = useMemo(() => {
-    return limitGroups.reduce((acc, group) => {
-      acc[group.ID] = group;
-      return acc;
-    }, {});
+    return buildLimitGroupById(limitGroups);
   }, [limitGroups]);
 
   const limitGroupIdByShiftType = useMemo(() => {
-    return shiftTypes.reduce((acc, st) => {
-      if (st.GroupID) {
-        acc[st.Name.toUpperCase()] = st.GroupID;
-      }
-      return acc;
-    }, {});
+    return buildLimitGroupIdByShiftType(shiftTypes);
   }, [shiftTypes]);
 
   const limitOverridesByDateAndGroup = useMemo(() => {
-    return shiftBlocks.reduce((acc, block) => {
-      if (!acc[block.Date]) acc[block.Date] = {};
-      acc[block.Date][block.ShiftType] = block.MaxSlots; // ShiftType in shiftBlocks is actually GroupID
-      return acc;
-    }, {});
+    return buildLimitOverridesByDateAndGroup(shiftBlocks);
   }, [shiftBlocks]);
 
   const usageByDateAndGroup = useMemo(() => {
-    return (requests ?? []).reduce((acc, request) => {
-      const status = (request?.status ?? '').toLowerCase();
-      if (status && status !== 'active') return acc;
-      
-      const requestType = (request?.request ?? '').toString().trim().toUpperCase();
-      const groupId = limitGroupIdByShiftType[requestType];
-      if (!groupId) return acc; // unlimited
-
-      const dateKey = toIsoDate(request?.date);
-      if (!dateKey) return acc;
-
-      if (!acc[dateKey]) acc[dateKey] = {};
-      acc[dateKey][groupId] = (acc[dateKey][groupId] ?? 0) + 1;
-      return acc;
-    }, {});
+    return buildUsageByDateAndGroup(requests, limitGroupIdByShiftType);
   }, [requests, limitGroupIdByShiftType]);
 
   const getDefaultState = () => ({
@@ -113,37 +96,15 @@ export default function NewRequestForm({
   const selectedDateKey = toIsoDate(formState.date);
 
   const getLimitStatusForType = (type, date) => {
-    const groupId = limitGroupIdByShiftType[(type || '').toUpperCase()];
-    if (!groupId) return { isLimited: false }; 
-    
-    const group = limitGroupById[groupId];
-    if (!group) return { isLimited: false };
-
-    // Check if there is an override
-    const override = limitOverridesByDateAndGroup[date]?.[groupId];
-    const limit = override !== undefined ? override : group.DefaultLimit;
-
-    // Current usage
-    const usage = usageByDateAndGroup[date]?.[groupId] ?? 0;
-    
-    // Adjust if editing the same type
-    let effectiveUsage = usage;
-    if (initialValues?.id) {
-       const editingDateKey = toIsoDate(initialValues?.date);
-       const editingType = (initialValues?.request ?? '').toUpperCase();
-       const editingGroupId = limitGroupIdByShiftType[editingType];
-       if (editingDateKey === date && editingGroupId === groupId) {
-         effectiveUsage = Math.max(0, usage - 1);
-       }
-    }
-
-    return {
-      isLimited: true,
-      groupName: group.GroupName,
-      limit,
-      usage: effectiveUsage,
-      isAtLimit: effectiveUsage >= limit
-    };
+    return getQuotaLimitStatusForType({
+      type,
+      date,
+      limitGroupIdByShiftType,
+      limitGroupById,
+      limitOverridesByDateAndGroup,
+      usageByDateAndGroup,
+      initialValues,
+    });
   };
 
   const selectedTypeStatus = getLimitStatusForType(formState.request, selectedDateKey);
@@ -152,79 +113,6 @@ export default function NewRequestForm({
     const { name, value } = event.target;
     setValidationError('');
     setFormState((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const getMonthlyRequestCount = (targetName, dateString) => {
-    if (!targetName || !dateString) return 0;
-    const targetDate = new Date(dateString);
-    if (isNaN(targetDate.getTime())) return 0;
-    
-    const targetYear = targetDate.getFullYear();
-    const targetMonth = targetDate.getMonth();
-    
-    const normalizedTargetName = targetName.trim().toLowerCase();
-
-    const userActiveRequests = (requests ?? []).filter((r) => {
-      const isUser = r.name && r.name.trim().toLowerCase() === normalizedTargetName;
-      const isActive = r.status?.toLowerCase() === 'active';
-      if (!isUser || !isActive || !r.date) return false;
-      
-      const d = new Date(r.date);
-      if (isNaN(d.getTime())) return false;
-      
-      return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
-    });
-
-    let count = userActiveRequests.length;
-    if (initialValues?.id) {
-      const isEditingInSameMonth = userActiveRequests.some((r) => r.id === initialValues.id);
-      if (isEditingInSameMonth) {
-        count = Math.max(0, count - 1);
-      }
-    }
-    return count;
-  };
-
-  const getMonthlyWeekendRequestCount = (targetName, dateString) => {
-    if (!targetName || !dateString) return 0;
-    const targetDate = new Date(dateString);
-    if (isNaN(targetDate.getTime())) return 0;
-    
-    const targetYear = targetDate.getFullYear();
-    const targetMonth = targetDate.getMonth();
-    
-    const normalizedTargetName = targetName.trim().toLowerCase();
-    const weekendLimitGroupId = settings?.weekend_limit_group_id || 'ALL';
-
-    const userActiveWeekendRequests = (requests ?? []).filter((r) => {
-      const isUser = r.name && r.name.trim().toLowerCase() === normalizedTargetName;
-      const isActive = r.status?.toLowerCase() === 'active';
-      if (!isUser || !isActive || !r.date) return false;
-      
-      const d = new Date(r.date);
-      if (isNaN(d.getTime())) return false;
-      const day = d.getDay();
-      const isWeekend = day === 0 || day === 6;
-      
-      if (!isWeekend) return false;
-
-      if (weekendLimitGroupId !== 'ALL') {
-        const reqType = (r.request ?? '').toString().trim().toUpperCase();
-        const reqGroupId = limitGroupIdByShiftType[reqType];
-        if (reqGroupId !== weekendLimitGroupId) return false;
-      }
-      
-      return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
-    });
-
-    let count = userActiveWeekendRequests.length;
-    if (initialValues?.id) {
-      const isEditingInSameMonth = userActiveWeekendRequests.some((r) => r.id === initialValues.id);
-      if (isEditingInSameMonth) {
-        count = Math.max(0, count - 1);
-      }
-    }
-    return count;
   };
 
   const handleSubmit = (event) => {
@@ -252,7 +140,12 @@ export default function NewRequestForm({
 
     // 2. Check monthly limit (skip if Admin)
     if (!isAdmin) {
-      const monthlyCount = getMonthlyRequestCount(finalName, normalizedDate);
+      const monthlyCount = getMonthlyRequestCount({
+        requests,
+        targetName: finalName,
+        dateString: normalizedDate,
+        initialRequestId: initialValues?.id,
+      });
       const monthlyLimit = Number(settings?.monthly_request_limit) || 10;
       if (monthlyCount >= monthlyLimit) {
         setValidationError(
@@ -280,7 +173,14 @@ export default function NewRequestForm({
         }
 
         if (appliesToThisRequest) {
-          const weekendCount = getMonthlyWeekendRequestCount(finalName, normalizedDate);
+          const weekendCount = getMonthlyWeekendRequestCount({
+            requests,
+            targetName: finalName,
+            dateString: normalizedDate,
+            weekendLimitGroupId,
+            limitGroupIdByShiftType,
+            initialRequestId: initialValues?.id,
+          });
           const weekendLimit = settings?.monthly_weekend_limit !== undefined 
             ? Number(settings.monthly_weekend_limit) 
             : 4; // Default to 4 if not set
@@ -360,7 +260,12 @@ export default function NewRequestForm({
         {selectedName?.trim().toLowerCase() !== 'admin' && formState.date && (
           (() => {
             const monthlyLimit = Number(settings?.monthly_request_limit) || 10;
-            const monthlyCount = getMonthlyRequestCount(selectedName, formState.date);
+            const monthlyCount = getMonthlyRequestCount({
+              requests,
+              targetName: selectedName,
+              dateString: formState.date,
+              initialRequestId: initialValues?.id,
+            });
             const isOverLimit = monthlyCount >= monthlyLimit;
             
             let colorClass = 'text-emerald-600 bg-emerald-50/50 border-emerald-100/70';

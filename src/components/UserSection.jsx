@@ -3,6 +3,7 @@ import CalendarView from './CalendarView';
 import DateDetailPanel from './DateDetailPanel';
 import RosterTable from './RosterTable';
 import UserRequests from './UserRequests';
+import { getMonthlyStatsForUser } from '../utils/quota';
 
 export default function UserSection({
   requests,
@@ -28,79 +29,14 @@ export default function UserSection({
   const [viewMode, setViewMode] = useState('calendar'); // 'calendar' | 'table'
 
   const monthlyStats = useMemo(() => {
-    if (!selectedName || selectedName.trim().toLowerCase() === 'admin' || selectedName.trim().toLowerCase() === 'guest' || !requests?.length) return [];
-    
-    const targetName = selectedName.trim().toLowerCase();
-    const userActiveRequests = requests.filter((r) => {
-      const isUser = r.name && r.name.trim().toLowerCase() === targetName;
-      const isActive = r.status?.toLowerCase() === 'active';
-      return isUser && isActive;
+    return getMonthlyStatsForUser({
+      requests,
+      selectedName,
+      settings,
+      shiftTypes,
+      limitGroups,
+      calendarMonth,
     });
-
-    const limitGroupIdByShiftType = (shiftTypes || []).reduce((acc, st) => {
-      if (st.GroupID) {
-        acc[st.Name.toUpperCase()] = st.GroupID;
-      }
-      return acc;
-    }, {});
-
-    const counts = {};
-    const weekendCounts = {};
-
-    const weekendLimitGroupId = settings?.weekend_limit_group_id || 'ALL';
-
-    userActiveRequests.forEach((r) => {
-      if (!r.date) return;
-      const d = new Date(r.date);
-      if (isNaN(d.getTime())) return;
-      
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      counts[key] = (counts[key] || 0) + 1;
-      
-      const day = d.getDay();
-      if (day === 0 || day === 6) {
-        let applies = true;
-        if (weekendLimitGroupId !== 'ALL') {
-          const reqType = (r.request ?? '').toString().trim().toUpperCase();
-          if (limitGroupIdByShiftType[reqType] !== weekendLimitGroupId) {
-            applies = false;
-          }
-        }
-        if (applies) {
-          weekendCounts[key] = (weekendCounts[key] || 0) + 1;
-        }
-      }
-    });
-
-    const targetMonth = calendarMonth || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
-    const targetKey = `${targetMonth.getFullYear()}-${String(targetMonth.getMonth() + 1).padStart(2, '0')}`;
-
-    const limit = Number(settings?.monthly_request_limit) || 10;
-    const weekendLimit = settings?.monthly_weekend_limit !== undefined 
-      ? Number(settings.monthly_weekend_limit) 
-      : 4;
-
-    const weekendTargetName = weekendLimitGroupId === 'ALL' 
-      ? 'Weekend' 
-      : `Weekend ${(limitGroups || []).find(g => g.ID === weekendLimitGroupId)?.GroupName || ''}`.trim();
-
-    const labelOf = (yearMonthKey) => {
-      const [y, m] = yearMonthKey.split('-');
-      const dateObj = new Date(parseInt(y), parseInt(m) - 1, 1);
-      return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-    };
-
-    return [
-      { 
-        key: targetKey, 
-        label: labelOf(targetKey), 
-        count: counts[targetKey] || 0, 
-        limit,
-        weekendCount: weekendCounts[targetKey] || 0,
-        weekendLimit,
-        weekendLabel: weekendTargetName
-      },
-    ];
   }, [requests, selectedName, settings, shiftTypes, limitGroups, calendarMonth]);
 
 
