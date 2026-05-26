@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toIsoDate } from '../utils/normalise';
+import { getHolidayName } from '../utils/holidays';
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -200,12 +201,15 @@ export default function CalendarView({
             const dayNumber = dateObj.getDate();
             const isToday = dateKey === todayKey;
             const isSelected = dateKey === selectedKey;
+            const holidayName = getHolidayName(dateKey);
+            const isHoliday = !!holidayName;
 
             const cellClass = [
               'calendar__cell',
               onDateSelect ? 'calendar__cell--clickable' : '',
               isToday ? 'calendar__cell--today' : '',
               isSelected ? 'calendar__cell--selected' : '',
+              isHoliday ? 'calendar__cell--holiday' : '',
             ]
               .filter(Boolean)
               .join(' ');
@@ -218,10 +222,20 @@ export default function CalendarView({
               .filter(Boolean)
               .join(' ');
 
+            const cellTitle = isHoliday ? holidayName : undefined;
+
             const inner = (
               <>
-                <div className="calendar__cell-header">
+                <div className="calendar__cell-header flex-col items-start gap-0.5 w-full">
                   <span className={dateNumClass}>{dayNumber}</span>
+                  {holidayName && (
+                    <span 
+                      className="text-[8px] sm:text-[9px] font-extrabold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded leading-none truncate max-w-full block mt-0.5 border border-rose-100 uppercase"
+                      title={holidayName}
+                    >
+                      {holidayName}
+                    </span>
+                  )}
                 </div>
                 <div className="calendar__requests">
                   {dayRequests.map((entry) => {
@@ -266,12 +280,13 @@ export default function CalendarView({
                   key={dateKey}
                   type="button"
                   className={cellClass}
+                  title={cellTitle}
                   onClick={() => onDateSelect(dateObj)}
                   aria-label={dateObj.toLocaleDateString(undefined, {
                     weekday: 'long',
                     day: 'numeric',
                     month: 'long',
-                  })}
+                  }) + (isHoliday ? ` - Public Holiday: ${holidayName}` : '')}
                   aria-pressed={isSelected}
                 >
                   {inner}
@@ -280,7 +295,7 @@ export default function CalendarView({
             }
 
             return (
-              <div key={dateKey} className={cellClass}>
+              <div key={dateKey} className={cellClass} title={cellTitle}>
                 {inner}
               </div>
             );

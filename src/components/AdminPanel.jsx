@@ -322,19 +322,60 @@ export default function AdminPanel({
     setIsSavingShiftEdit(false);
   };
 
-  const moveShift = async (index, direction) => {
+  // Shift reordering states
+  const [hasPendingReorder, setHasPendingReorder] = useState(false);
+  const [draggedIdx, setDraggedIdx] = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
+
+  // Debounced save for reordering shift types in the background
+  useEffect(() => {
+    if (!hasPendingReorder) return;
+    
+    const timer = setTimeout(async () => {
+      setIsReorderingShift(true);
+      try {
+        await onReorderShiftTypes(localShiftTypes.map(s => s.ID));
+        setHasPendingReorder(false);
+      } catch (e) {
+        setLocalShiftTypes(shiftTypes); // revert on error
+        setHasPendingReorder(false);
+      }
+      setIsReorderingShift(false);
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [localShiftTypes, hasPendingReorder, shiftTypes, onReorderShiftTypes]);
+
+  const handleDragStart = (e, index) => {
+    setDraggedIdx(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', index);
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+    if (draggedIdx === null || draggedIdx === index) return;
+    setDragOverIdx(index);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  };
+
+  const handleDrop = (e, targetIdx) => {
+    e.preventDefault();
+    if (draggedIdx === null || draggedIdx === targetIdx) return;
+    
     const newList = [...localShiftTypes];
-    const swapIdx = index + direction;
-    if (swapIdx < 0 || swapIdx >= newList.length) return;
-    [newList[index], newList[swapIdx]] = [newList[swapIdx], newList[index]];
+    const draggedItem = newList[draggedIdx];
+    newList.splice(draggedIdx, 1);
+    newList.splice(targetIdx, 0, draggedItem);
+    
     setLocalShiftTypes(newList);
-    setIsReorderingShift(true);
-    try {
-      await onReorderShiftTypes(newList.map(s => s.ID));
-    } catch (e) {
-      setLocalShiftTypes(shiftTypes); // revert
-    }
-    setIsReorderingShift(false);
+    setHasPendingReorder(true);
+    setDraggedIdx(null);
+    setDragOverIdx(null);
   };
 
   const handleAddActivitySubmit = (e) => {
@@ -1027,7 +1068,7 @@ export default function AdminPanel({
             </h3>
 
             {localTeamMembers.length > 0 ? (
-              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-1">
+              <div className="divide-y divide-slate-100 pr-1">
                 {localTeamMembers.map((member, idx) => {
                   return (
                     <div
@@ -1106,7 +1147,7 @@ export default function AdminPanel({
             </h3>
 
             {localEmergencyPhysicians.length > 0 ? (
-              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-1">
+              <div className="divide-y divide-slate-100 pr-1">
                 {localEmergencyPhysicians.map((member, idx) => {
                   return (
                     <div
@@ -1217,18 +1258,32 @@ export default function AdminPanel({
 
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-t border-slate-100 pt-6 flex items-center gap-2">
               Active Shift Types
-              {isReorderingShift && <span className="text-[10px] font-normal text-indigo-400 animate-pulse">Saving order…</span>}
+              {(isReorderingShift || hasPendingReorder) && (
+                <span className="text-[10px] font-normal text-indigo-400 animate-pulse">
+                  {isReorderingShift ? 'Saving order…' : 'Order changed (saving soon…)'}
+                </span>
+              )}
             </h3>
 
             {localShiftTypes.length > 0 ? (
-              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-1">
+              <div className="divide-y divide-slate-100 pr-1">
                 {localShiftTypes.map((st, idx) => {
                   const group = limitGroups.find(lg => lg.ID === st.GroupID);
                   const isEditing = editingShiftId === st.ID;
                   return (
                     <div
                       key={st.ID}
-                      className={`py-3 text-xs transition-colors ${isEditing ? 'bg-indigo-50/60 rounded-xl px-3 -mx-1' : ''}`}
+                      draggable={!editingShiftId}
+                      onDragStart={(e) => handleDragStart(e, idx)}
+                      onDragOver={(e) => handleDragOver(e, idx)}
+                      onDragEnd={handleDragEnd}
+                      onDrop={(e) => handleDrop(e, idx)}
+                      onDragLeave={() => setDragOverIdx(null)}
+                      className={`py-3 text-xs transition-all duration-200 border border-transparent rounded-xl px-2 -mx-2 my-0.5
+                        ${isEditing ? 'bg-indigo-50/60' : 'hover:bg-slate-50/40'}
+                        ${draggedIdx === idx ? 'opacity-40 bg-slate-100/50 border-dashed border-slate-300 scale-[0.98]' : ''}
+                        ${dragOverIdx === idx ? 'bg-indigo-50/50 border-indigo-200 scale-[1.01] shadow-xs' : ''}
+                      `}
                     >
                       {isEditing ? (
                         /* ── EDIT MODE ── */
@@ -1295,26 +1350,11 @@ export default function AdminPanel({
                       ) : (
                         /* ── VIEW MODE ── */
                         <div className="flex items-center gap-2">
-                          {/* Up/Down reorder buttons */}
-                          <div className="flex flex-col gap-0.5 flex-shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => moveShift(idx, -1)}
-                              disabled={idx === 0 || isReorderingShift}
-                              title="Move up"
-                              className="flex h-5 w-5 items-center justify-center rounded bg-slate-100 text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 disabled:opacity-25 transition text-[10px] leading-none"
-                            >
-                              ▲
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => moveShift(idx, 1)}
-                              disabled={idx === localShiftTypes.length - 1 || isReorderingShift}
-                              title="Move down"
-                              className="flex h-5 w-5 items-center justify-center rounded bg-slate-100 text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 disabled:opacity-25 transition text-[10px] leading-none"
-                            >
-                              ▼
-                            </button>
+                          {/* Grip handle */}
+                          <div className="flex-shrink-0 cursor-grab active:cursor-grabbing p-1 -ml-1 text-slate-400 hover:text-slate-600 transition-colors">
+                            <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M8.5 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 7.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 7.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zM15.5 6a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 7.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3zm0 7.5a1.5 1.5 0 110-3 1.5 1.5 0 010 3z" />
+                            </svg>
                           </div>
 
                           {/* Info */}

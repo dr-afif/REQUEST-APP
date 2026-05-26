@@ -241,7 +241,8 @@ function getDirectoryMembersData(sheetName) {
 
     const fullName = fullNameIndex < finalRows[i].length ? String(finalRows[i][fullNameIndex] || '').trim() : '';
     const phone = phoneIndex < finalRows[i].length ? String(finalRows[i][phoneIndex] || '').trim() : '';
-    const activeValue = activeIndex < finalRows[i].length ? String(finalRows[i][activeIndex] || '').trim().toLowerCase() : '';
+    const rawActive = activeIndex < finalRows[i].length ? finalRows[i][activeIndex] : '';
+    const activeValue = (rawActive !== undefined && rawActive !== null) ? String(rawActive).trim().toLowerCase() : '';
 
     members.push({
       name: name,

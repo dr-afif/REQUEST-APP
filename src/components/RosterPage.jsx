@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 import { openRosterPdfExport } from '../utils/rosterPdfExport';
+import { getHolidayName } from '../utils/holidays';
 
 // Helper to parse standby status and extended shift status from a shift name string
 const parseShiftValue = (rawVal) => {
@@ -189,7 +190,7 @@ export default function RosterPage({
   }, [shiftTypes]);
 
   // 1.0.1 Helper to return CSS class names based on shift type value
-  const getShiftBadgeClass = (val) => {
+  const getShiftBadgeClass = (val, isRequested = false) => {
     if (!val) return 'bg-slate-50 text-slate-400 border-slate-200';
     const { cleanShift } = parseShiftValue(val);
     const token = cleanShift.toLowerCase();
@@ -197,28 +198,44 @@ export default function RosterPage({
     if (token === 'total leave') return 'bg-indigo-50 text-indigo-900 border-indigo-200 font-extrabold';
     
     // am : green
-    if (token === 'am') return 'bg-green-50 text-green-800 border-green-500';
+    if (token === 'am') {
+      return isRequested
+        ? 'bg-green-600 text-white border-green-700 font-bold'
+        : 'bg-green-50 text-green-800 border-green-500';
+    }
     
     // pm : yellow
-    if (token === 'pm') return 'bg-amber-50 text-amber-800 border-amber-400';
+    if (token === 'pm') {
+      return isRequested
+        ? 'bg-amber-500 text-white border-amber-600 font-bold'
+        : 'bg-amber-50 text-amber-800 border-amber-400';
+    }
     
     // night (on/on1/on2) : red
     if (token === 'night' || token === 'n' || token === 'on' || token === 'on1' || token === 'on2' || token.includes('night')) {
-      return 'bg-red-50 text-red-800 border-red-500';
+      return isRequested
+        ? 'bg-red-600 text-white border-red-700 font-bold'
+        : 'bg-red-50 text-red-800 border-red-500';
     }
     
     // course : orange
     if (token.includes('course')) {
-      return 'bg-orange-50 text-orange-800 border-orange-400';
+      return isRequested
+        ? 'bg-orange-600 text-white border-orange-700 font-bold'
+        : 'bg-orange-50 text-orange-800 border-orange-400';
     }
     
     // off : blue
     if (token === 'off') {
-      return 'bg-blue-50 text-blue-800 border-blue-400';
+      return isRequested
+        ? 'bg-blue-600 text-white border-blue-700 font-bold'
+        : 'bg-blue-50 text-blue-800 border-blue-400';
     }
     
     // others : grey (AL/ hka/ ghka/ mc/ el/ goff etc)
-    return 'bg-slate-50 text-slate-700 border-slate-300';
+    return isRequested
+      ? 'bg-slate-600 text-white border-slate-700 font-bold'
+      : 'bg-slate-50 text-slate-700 border-slate-300';
   };
 
   // 1.1 Group masterRoster by Name and Date for Table View (allowing all shift types)
@@ -1287,6 +1304,8 @@ export default function RosterPage({
                   const dayAssignments = rosterGrid[dateStr] || { AM: [], PM: [], NIGHT: [] };
                   const isWeekend = dayName === 'SAT' || dayName === 'SUN';
                   const isToday = dateStr === todayStr;
+                  const holidayName = getHolidayName(dateStr);
+                  const isHoliday = !!holidayName;
 
                   return (
                     <tr
@@ -1294,6 +1313,8 @@ export default function RosterPage({
                       className={`transition-colors border border-slate-300 ${
                         isToday
                           ? 'bg-indigo-50/80 hover:bg-indigo-100/60 ring-1 ring-inset ring-indigo-300'
+                          : isHoliday
+                          ? 'bg-rose-50/60 hover:bg-rose-100/50'
                           : isWeekend 
                           ? 'bg-slate-100/80 hover:bg-slate-200/50' 
                           : 'bg-white hover:bg-slate-50/50'
@@ -1301,18 +1322,21 @@ export default function RosterPage({
                     >
                       {/* Date */}
                       <td className={`border border-slate-300 px-0.5 sm:px-4 py-1.5 sm:py-3 font-bold align-middle select-none text-[10px] sm:text-sm ${
-                        isToday ? 'text-indigo-900 bg-indigo-100/50' : 'text-slate-800'
+                        isToday ? 'text-indigo-900 bg-indigo-100/50' : isHoliday ? 'text-rose-700' : 'text-slate-800'
                       }`}>
                         {dayNum}
                         {isToday && <span className="block text-[8px] sm:text-[9px] text-indigo-600 mt-0.5">TODAY</span>}
+                        {isHoliday && !isToday && <span className="block text-[7px] sm:text-[8px] text-rose-500 font-extrabold mt-0.5 uppercase leading-tight">PH</span>}
                       </td>
 
                       {/* Day Name */}
                       <td className={`border border-slate-300 px-0.5 sm:px-4 py-1.5 sm:py-3 font-bold align-middle select-none text-[10px] sm:text-sm ${
-                        isToday ? 'text-indigo-900 bg-indigo-100/50' : isWeekend ? 'text-indigo-600' : 'text-slate-600'
+                        isToday ? 'text-indigo-900 bg-indigo-100/50' : isHoliday ? 'text-rose-700' : isWeekend ? 'text-indigo-600' : 'text-slate-600'
                       }`}>
                         {dayName}
+                        {isHoliday && <span className="block text-[7px] sm:text-[8px] text-rose-500 font-bold mt-0.5 normal-case truncate max-w-[4rem]" title={holidayName}>{holidayName}</span>}
                       </td>
+
 
                       {/* Medical Officer Shift Cells (AM, PM, NIGHT) */}
                       {['AM', 'PM', 'NIGHT'].map((shiftCol, shiftIndex) => (
@@ -1449,15 +1473,19 @@ export default function RosterPage({
                     </th>
                     {daysInMonthList.map((day) => {
                       const isWeekendDay = day.dayName === 'SAT' || day.dayName === 'SUN';
+                      const holidayName = getHolidayName(day.dateStr);
+                      const isHoliday = !!holidayName;
                       return (
                         <th
                           key={day.dateStr}
                           className={`whitespace-nowrap border-b border-slate-200 px-2.5 py-3 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
-                            isWeekendDay ? 'bg-slate-750' : 'bg-slate-800'
+                            isHoliday ? 'bg-rose-950 text-rose-100 ring-1 ring-rose-900/20' : isWeekendDay ? 'bg-slate-750' : 'bg-slate-800'
                           }`}
+                          title={isHoliday ? holidayName : undefined}
                         >
                           <div>{day.dayNum}</div>
-                          <div className="text-[8px] opacity-75">{day.dayName}</div>
+                          <div className={`text-[8px] ${isHoliday ? 'text-rose-200 font-extrabold' : 'opacity-75'}`}>{day.dayName}</div>
+                          {isHoliday && <div className="text-[7px] text-rose-300 font-bold truncate max-w-[3.5rem]">{holidayName.toUpperCase()}</div>}
                         </th>
                       );
                     })}
@@ -1491,9 +1519,13 @@ export default function RosterPage({
                         {daysInMonthList.map((day) => {
                           const isWeekendDay = day.dayName === 'SAT' || day.dayName === 'SUN';
                           const isToday = day.dateStr === todayStr;
+                          const holidayName = getHolidayName(day.dateStr);
+                          const isHoliday = !!holidayName;
                           
                           let cellBg = isToday 
                             ? 'bg-indigo-50/40' 
+                            : isHoliday
+                            ? 'bg-rose-50/40'
                             : isWeekendDay 
                             ? 'bg-slate-50/80' 
                             : 'bg-white';
@@ -1511,15 +1543,17 @@ export default function RosterPage({
                             }
                           }
   
-                          const reqData = isUpcomingMonth ? requestsRosterMap.get(nameKey)?.get(day.dateStr) : null;
-                          const hasOverride = reqData && val !== reqData.shift;
+                          const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
+                          const cleanVal = val ? parseShiftValue(val).cleanShift : '';
+                          const isRequested = !!(reqData && cleanVal.toUpperCase() === reqData.shift.toUpperCase());
+                          const hasOverride = reqData && cleanVal.toUpperCase() !== reqData.shift.toUpperCase();
 
                           let cellTooltip = '';
-                          if (reqData) {
+                          if (hasOverride) {
                             cellTooltip = `Requested: ${reqData.shift}`;
                           }
 
-                          const selectClass = `w-full text-center text-[10px] sm:text-xs font-bold rounded-lg border px-1.5 py-1 outline-none transition-all cursor-pointer ${getShiftBadgeClass(val)}`;
+                          const selectClass = `w-full text-center text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} rounded-lg border px-1.5 py-1 outline-none transition-all cursor-pointer ${getShiftBadgeClass(val, isRequested)}`;
  
                           return (
                             <td
@@ -1531,7 +1565,7 @@ export default function RosterPage({
                                   val ? (
                                     <button
                                       onClick={() => handleToggleStandby(day.dateStr, name)}
-                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs font-bold transition-all shadow-sm active:scale-95 ${
+                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} transition-all shadow-sm active:scale-95 ${
                                         parseShiftValue(val).isStandby
                                           ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600'
                                           : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
@@ -1557,7 +1591,7 @@ export default function RosterPage({
                                   val ? (
                                     <button
                                       onClick={() => handleToggleExtended(day.dateStr, name)}
-                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs font-bold transition-all shadow-sm active:scale-95 ${
+                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} transition-all shadow-sm active:scale-95 ${
                                         parseShiftValue(val).isExtended
                                           ? 'bg-blue-500 hover:bg-blue-600 text-white border-blue-600'
                                           : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
@@ -1595,7 +1629,7 @@ export default function RosterPage({
                                   </select>
                                 ) : (
                                   val ? (
-                                    <span className={`req inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs font-bold ${getShiftBadgeClass(val)}`} title={cellTooltip}>
+                                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} ${getShiftBadgeClass(val, isRequested)}`} title={cellTooltip}>
                                       {parseShiftValue(val).cleanShift}
                                       {parseShiftValue(val).isStandby && (
                                         <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-amber-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Standby">
@@ -1648,12 +1682,15 @@ export default function RosterPage({
                   </th>
                   {daysInMonthList.map((day) => {
                     const isWeekendDay = day.dayName === 'SAT' || day.dayName === 'SUN';
+                    const holidayName = getHolidayName(day.dateStr);
+                    const isHoliday = !!holidayName;
                     return (
                       <th
                         key={day.dateStr}
                         className={`whitespace-nowrap border-b border-slate-100 px-2.5 py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
-                          isWeekendDay ? 'bg-slate-100/50' : 'bg-slate-50'
+                          isHoliday ? 'bg-rose-100/60 text-rose-800' : isWeekendDay ? 'bg-slate-100/50' : 'bg-slate-50'
                         }`}
+                        title={isHoliday ? holidayName : undefined}
                       >
                         <div>{day.dayNum}</div>
                       </th>

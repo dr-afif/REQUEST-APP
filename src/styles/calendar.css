@@ -129,6 +129,15 @@
   background: #e0e7ff;
 }
 
+/* Holiday highlight */
+.calendar__cell--holiday {
+  background: #fff5f5; /* soft rose red */
+}
+
+.calendar__cell--holiday:hover {
+  background: #ffe3e3;
+}
+
 /* ─── Cell header & date number ──────────────────────────────────────── */
 .calendar__cell-header {
   display: flex;

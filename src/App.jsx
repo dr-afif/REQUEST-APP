@@ -345,6 +345,13 @@ export default function App() {
     return fallbackNames;
   }, [teamMembers, fallbackNames]);
 
+  const allRosterNames = useMemo(() => {
+    if (teamMembers.length) {
+      return teamMembers.map(m => typeof m === 'string' ? m : m.name);
+    }
+    return fallbackNames;
+  }, [teamMembers, fallbackNames]);
+
   // Ensure current verified selector choice is valid after names sync
   useEffect(() => {
     if (isLoading || isLoadingTeamMembers) return;
@@ -959,7 +966,7 @@ export default function App() {
           <div className="animate-fadeIn">
             <RosterPage
               selectedName={selectedName}
-              names={rosterNames}
+              names={allRosterNames}
               requests={requests}
               masterRoster={masterRoster}
               onUploadMasterRoster={handleUploadBaseline}
