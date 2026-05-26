@@ -5,6 +5,8 @@ export default function AdminPanel({
   requests = [],
   shiftBlocks = [],
   names = [],
+  teamMembers = [],
+  emergencyPhysicians = [],
   onUpdateApproval,
   onAddBlock,
   onDeleteBlock,
@@ -22,6 +24,8 @@ export default function AdminPanel({
   onDeleteActivity,
   settings = {},
   onUpdateSetting,
+  onUpdateTeamMembers,
+  onUpdateEmergencyPhysicians,
 }) {
 
   // Shift block inputs
@@ -79,6 +83,196 @@ export default function AdminPanel({
     return `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
   });
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
+
+  // Team members states
+  const [localTeamMembers, setLocalTeamMembers] = useState(() => {
+    if (teamMembers && teamMembers.length > 0) return teamMembers;
+    return names.map(n => ({ name: n, fullName: '', phone: '', active: true }));
+  });
+  const [localEmergencyPhysicians, setLocalEmergencyPhysicians] = useState(() => emergencyPhysicians || []);
+  const [isSavingTeamMembers, setIsSavingTeamMembers] = useState(false);
+  const [isSavingEmergencyPhysicians, setIsSavingEmergencyPhysicians] = useState(false);
+  const [activeAdminPage, setActiveAdminPage] = useState('overview');
+
+  // Modal form states
+  const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
+  const [memberModalMode, setMemberModalMode] = useState('add'); // 'add' or 'edit'
+  const [memberModalDirectory, setMemberModalDirectory] = useState('team'); // 'team' or 'ep'
+  const [memberModalOriginalName, setMemberModalOriginalName] = useState('');
+  const [memberModalName, setMemberModalName] = useState('');
+  const [memberModalFullName, setMemberModalFullName] = useState('');
+  const [memberModalPhone, setMemberModalPhone] = useState('');
+  const [memberModalActive, setMemberModalActive] = useState(true);
+
+  // Keep localTeamMembers in sync with teamMembers/names prop when it changes
+  useEffect(() => {
+    if (teamMembers && teamMembers.length > 0) {
+      setLocalTeamMembers(teamMembers);
+    } else {
+      setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+    }
+  }, [teamMembers, names]);
+
+  useEffect(() => {
+    setLocalEmergencyPhysicians(emergencyPhysicians || []);
+  }, [emergencyPhysicians]);
+
+  // Close modal on Escape key press
+  useEffect(() => {
+    if (!isMemberModalOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsMemberModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMemberModalOpen]);
+
+  const handleOpenAddModal = (directory = 'team') => {
+    setMemberModalMode('add');
+    setMemberModalDirectory(directory);
+    setMemberModalOriginalName('');
+    setMemberModalName('');
+    setMemberModalFullName('');
+    setMemberModalPhone('');
+    setMemberModalActive(true);
+    setIsMemberModalOpen(true);
+  };
+
+  const handleOpenEditModal = (member, directory = 'team') => {
+    setMemberModalMode('edit');
+    setMemberModalDirectory(directory);
+    setMemberModalOriginalName(member.name);
+    setMemberModalName(member.name);
+    setMemberModalFullName(member.fullName || '');
+    setMemberModalPhone(member.phone || '');
+    setMemberModalActive(member.active !== false);
+    setIsMemberModalOpen(true);
+  };
+
+  const handleSaveMemberModal = async (e) => {
+    if (e) e.preventDefault();
+    const cleanName = memberModalName.trim();
+    const cleanFullName = memberModalFullName.trim();
+    const cleanPhone = memberModalPhone.trim();
+    if (!cleanName) return;
+    const activeMembers = memberModalDirectory === 'ep' ? localEmergencyPhysicians : localTeamMembers;
+
+    // Check duplicate
+    const isDuplicate = activeMembers.some(m => {
+      if (memberModalMode === 'edit' && m.name.toLowerCase() === memberModalOriginalName.toLowerCase()) {
+        return false;
+      }
+      return m.name.toLowerCase() === cleanName.toLowerCase();
+    });
+
+    if (isDuplicate) {
+      alert(`"${cleanName}" is already in the list.`);
+      return;
+    }
+
+    let updatedMembers;
+    const savedMember = {
+      name: cleanName,
+      fullName: cleanFullName,
+      phone: cleanPhone,
+      active: memberModalDirectory === 'team' ? memberModalActive : true,
+    };
+    if (memberModalMode === 'add') {
+      updatedMembers = [...activeMembers, savedMember];
+    } else {
+      updatedMembers = activeMembers.map(m => 
+        m.name.toLowerCase() === memberModalOriginalName.toLowerCase()
+          ? savedMember
+          : m
+      );
+    }
+
+    if (memberModalDirectory === 'ep') {
+      setLocalEmergencyPhysicians(updatedMembers);
+      setIsMemberModalOpen(false);
+      setIsSavingEmergencyPhysicians(true);
+      try {
+        await onUpdateEmergencyPhysicians(updatedMembers);
+      } catch (err) {
+        setLocalEmergencyPhysicians(emergencyPhysicians || []);
+      } finally {
+        setIsSavingEmergencyPhysicians(false);
+      }
+      return;
+    }
+
+    setLocalTeamMembers(updatedMembers);
+    setIsMemberModalOpen(false);
+    setIsSavingTeamMembers(true);
+    try {
+      await onUpdateTeamMembers(updatedMembers);
+    } catch (err) {
+      if (teamMembers && teamMembers.length > 0) {
+        setLocalTeamMembers(teamMembers);
+      } else {
+        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+      }
+    } finally {
+      setIsSavingTeamMembers(false);
+    }
+  };
+
+  const handleDeleteMember = async (nameToDelete) => {
+    if (!confirm(`Are you sure you want to remove "${nameToDelete}"? This will not delete their historical request logs, but they will no longer appear in name selectors.`)) {
+      return;
+    }
+    const updatedMembers = localTeamMembers.filter(m => m.name !== nameToDelete);
+    setLocalTeamMembers(updatedMembers);
+    setIsSavingTeamMembers(true);
+    try {
+      await onUpdateTeamMembers(updatedMembers);
+    } catch (err) {
+      if (teamMembers && teamMembers.length > 0) {
+        setLocalTeamMembers(teamMembers);
+      } else {
+        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+      }
+    } finally {
+      setIsSavingTeamMembers(false);
+    }
+  };
+
+  const handleToggleMemberActive = async (member) => {
+    const updatedMembers = localTeamMembers.map(m =>
+      m.name === member.name ? { ...m, active: m.active === false } : m
+    );
+    setLocalTeamMembers(updatedMembers);
+    setIsSavingTeamMembers(true);
+    try {
+      await onUpdateTeamMembers(updatedMembers);
+    } catch (err) {
+      if (teamMembers && teamMembers.length > 0) {
+        setLocalTeamMembers(teamMembers);
+      } else {
+        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+      }
+    } finally {
+      setIsSavingTeamMembers(false);
+    }
+  };
+
+  const handleDeleteEmergencyPhysician = async (nameToDelete) => {
+    if (!confirm(`Are you sure you want to remove "${nameToDelete}" from the emergency physicians directory?`)) {
+      return;
+    }
+    const updatedMembers = localEmergencyPhysicians.filter(m => m.name !== nameToDelete);
+    setLocalEmergencyPhysicians(updatedMembers);
+    setIsSavingEmergencyPhysicians(true);
+    try {
+      await onUpdateEmergencyPhysicians(updatedMembers);
+    } catch (err) {
+      setLocalEmergencyPhysicians(emergencyPhysicians || []);
+    } finally {
+      setIsSavingEmergencyPhysicians(false);
+    }
+  };
 
   useEffect(() => {
     if (settings?.monthly_request_limit) {
@@ -289,6 +483,14 @@ export default function AdminPanel({
     }
   };
 
+  const adminPages = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'team', label: 'Team Members' },
+    { key: 'shifts', label: 'Shift Setup' },
+    { key: 'rules', label: 'Limit Rules' },
+    { key: 'activity', label: 'Activity' },
+  ];
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 md:px-8">
       
@@ -301,7 +503,29 @@ export default function AdminPanel({
       </div>
 
       {/* 📢 Activity & Announcement Manager — moved to top */}
-      <div className="mb-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+      <div className="mb-8 overflow-x-auto border-b border-slate-200">
+        <div className="flex min-w-max gap-2">
+          {adminPages.map((page) => {
+            const isActive = activeAdminPage === page.key;
+            return (
+              <button
+                key={page.key}
+                type="button"
+                onClick={() => setActiveAdminPage(page.key)}
+                className={`rounded-t-xl border border-b-0 px-4 py-2 text-xs font-bold transition ${
+                  isActive
+                    ? 'border-indigo-200 bg-white text-indigo-700 shadow-sm'
+                    : 'border-transparent bg-transparent text-slate-500 hover:bg-white/70 hover:text-slate-700'
+                }`}
+              >
+                {page.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className={`${activeAdminPage === 'activity' ? 'mb-8' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
         <h2 className="text-xl font-bold text-slate-800 mb-2">📢 Manage Activity History &amp; Bulletins</h2>
         <p className="text-xs text-slate-400 mb-6">
           Add custom alerts or request logs that will be displayed in the scrolling announcement banner and updates timeline.
@@ -618,13 +842,13 @@ export default function AdminPanel({
         </div>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-2">
+      <div className={`${['team', 'shifts', 'rules'].includes(activeAdminPage) ? 'grid' : 'hidden'} gap-8 ${activeAdminPage === 'rules' ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
         
         {/* Left Column: Operations */}
         <div className="space-y-8">
           {/* Roster Approval Requests Queue — hidden until approval workflow is activated */}
           {APPROVAL_WORKFLOW_ENABLED && (
-          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+          <div className={`${activeAdminPage === 'rules' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-slate-800">📋 Roster Approval Requests Queue</h2>
               <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-bold text-indigo-700">
@@ -692,7 +916,7 @@ export default function AdminPanel({
           )} {/* end APPROVAL_WORKFLOW_ENABLED */}
 
           {/* Date-Specific Shift Blocker Console */}
-          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+          <div className={`${activeAdminPage === 'rules' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
             <h2 className="text-lg font-bold text-slate-800 mb-4">🛑 Date-Specific Shift Blocker</h2>
             
             <form onSubmit={handleAddBlockSubmit} className="space-y-4">
@@ -782,13 +1006,160 @@ export default function AdminPanel({
             </div>
           </div>
 
+          {/* 👥 Team Members Directory Card */}
+          <div className={`${activeAdminPage === 'team' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-slate-800">👥 Team Members Directory</h2>
+              <button
+                type="button"
+                onClick={() => handleOpenAddModal('team')}
+                className="rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 text-xs transition whitespace-nowrap"
+              >
+                ➕ Add Member
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 mb-6">
+              Add, edit, or remove roster participants. Names here populate the onboarding selection and request fields.
+            </p>
+
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-t border-slate-100 pt-6">
+              Members ({localTeamMembers.filter(member => member.active !== false).length} active / {localTeamMembers.length} total)
+            </h3>
+
+            {localTeamMembers.length > 0 ? (
+              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-1">
+                {localTeamMembers.map((member, idx) => {
+                  return (
+                    <div
+                      key={member.name || idx}
+                      className="py-3 text-xs flex items-center justify-between hover:bg-slate-50/50 transition rounded-lg px-2 -mx-2"
+                    >
+                      <div className="flex-1 min-w-0 pr-2">
+                        <div className="flex items-center flex-wrap gap-2">
+                          <span className="font-bold text-slate-800 text-sm truncate">{member.name}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${member.active === false ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                            {member.active === false ? 'Inactive' : 'Active'}
+                          </span>
+                          {member.phone && (
+                            <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                              📞 {member.phone}
+                            </span>
+                          )}
+                        </div>
+                        {member.fullName && (
+                          <span className="block text-[11px] text-slate-400 mt-0.5 font-medium truncate">
+                            {member.fullName}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-1.5 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleMemberActive(member)}
+                          disabled={isSavingTeamMembers}
+                          className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold transition ${member.active === false ? 'border-emerald-100 bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+                        >
+                          {member.active === false ? 'Set Active' : 'Set Inactive'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditModal(member)}
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
+                        >
+                          ✏️ Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMember(member.name)}
+                          className="rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-500 hover:bg-rose-100 transition"
+                        >
+                          🗑
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs italic text-slate-400">No team members in database.</p>
+            )}
+          </div>
+
+          {/* Emergency Physicians Directory Card */}
+          <div className={`${activeAdminPage === 'team' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-slate-800">Emergency Physicians Directory</h2>
+              <button
+                type="button"
+                onClick={() => handleOpenAddModal('ep')}
+                className="rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 text-xs transition whitespace-nowrap"
+              >
+                Add EP
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 mb-6">
+              Add, edit, or remove EP contact details used for roster PDF export contact boxes.
+            </p>
+
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-t border-slate-100 pt-6">
+              Active EPs ({localEmergencyPhysicians.length})
+            </h3>
+
+            {localEmergencyPhysicians.length > 0 ? (
+              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-1">
+                {localEmergencyPhysicians.map((member, idx) => {
+                  return (
+                    <div
+                      key={member.name || idx}
+                      className="py-3 text-xs flex items-center justify-between hover:bg-slate-50/50 transition rounded-lg px-2 -mx-2"
+                    >
+                      <div className="flex-1 min-w-0 pr-2">
+                        <div className="flex items-center flex-wrap gap-2">
+                          <span className="font-bold text-slate-800 text-sm truncate">{member.name}</span>
+                          {member.phone && (
+                            <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                              Phone {member.phone}
+                            </span>
+                          )}
+                        </div>
+                        {member.fullName && (
+                          <span className="block text-[11px] text-slate-400 mt-0.5 font-medium truncate">
+                            {member.fullName}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-1.5 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditModal(member, 'ep')}
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteEmergencyPhysician(member.name)}
+                          className="rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-500 hover:bg-rose-100 transition"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs italic text-slate-400">No emergency physicians in database.</p>
+            )}
+          </div>
+
         </div>{/* end left column */}
 
         {/* Right Column: Configuration */}
         <div className="space-y-8">
 
           {/* Shift Types Management Card */}
-          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+          <div className={`${activeAdminPage === 'shifts' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
             <h2 className="text-lg font-bold text-slate-800 mb-4">⚙️ Shift Types Configuration</h2>
             
             <form onSubmit={handleAddShiftTypeSubmit} className="space-y-4 mb-6">
@@ -994,7 +1365,7 @@ export default function AdminPanel({
           </div>
 
           {/* Quota Limit Groups Card */}
-          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+          <div className={`${activeAdminPage === 'rules' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
             <h2 className="text-lg font-bold text-slate-800 mb-4">📊 Quota Limit Groups</h2>
             
             <form onSubmit={handleAddLimitGroupSubmit} className="space-y-4 mb-6">
@@ -1071,7 +1442,7 @@ export default function AdminPanel({
       </div>
 
       {/* 📈 Users Monthly Quota Overview */}
-      <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+      <div className={`${activeAdminPage === 'overview' ? 'mt-8' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
             <h2 className="text-xl font-bold text-slate-800 mb-1">📈 Monthly Quota Overview</h2>
@@ -1158,7 +1529,7 @@ export default function AdminPanel({
       </div>
 
       {/* 🔧 Global Portal Settings */}
-      <div className="mt-8 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+      <div className={`${activeAdminPage === 'rules' ? 'mt-8' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
         <h2 className="text-xl font-bold text-slate-800 mb-2">🔧 Global Portal Settings</h2>
         <p className="text-xs text-slate-400 mb-6">
           Configure default values and global policies that apply to all roster portal members.
@@ -1234,6 +1605,118 @@ export default function AdminPanel({
           </div>
         </form>
       </div>
+
+      {/* 👤 Team Member Details Modal */}
+      {isMemberModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn flex items-center justify-center">
+          <style>{`
+            @keyframes scaleUp {
+              from { transform: scale(0.95); opacity: 0; }
+              to { transform: scale(1); opacity: 1; }
+            }
+            .animate-scaleUp {
+              animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            }
+          `}</style>
+
+          <div className="w-full max-w-md rounded-3xl border border-slate-100 bg-white p-6 shadow-2xl animate-scaleUp transition-all duration-300">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+              <h3 className="text-lg font-bold text-slate-800">
+                {memberModalMode === 'add'
+                  ? memberModalDirectory === 'ep' ? 'Add New EP' : '👤 Add New Team Member'
+                  : memberModalDirectory === 'ep' ? 'Edit EP' : '✏️ Edit Team Member'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsMemberModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-lg font-semibold leading-none p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleSaveMemberModal} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Display Name (Required)
+                </label>
+                <input
+                  type="text"
+                  value={memberModalName}
+                  onChange={(e) => setMemberModalName(e.target.value)}
+                  placeholder="e.g. Dr. John Doe"
+                  required
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                />
+                <p className="mt-1 text-[10px] text-slate-400">
+                  Used for roster assignments and name selection. Must be unique.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Full Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={memberModalFullName}
+                  onChange={(e) => setMemberModalFullName(e.target.value)}
+                  placeholder="e.g. Johnathan Doe"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Phone Number (Optional)
+                </label>
+                <input
+                  type="tel"
+                  value={memberModalPhone}
+                  onChange={(e) => setMemberModalPhone(e.target.value)}
+                  placeholder="e.g. +6012-3456789"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                />
+              </div>
+
+              {memberModalDirectory !== 'ep' && (
+                <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <span>
+                    <span className="block text-xs font-bold text-slate-700">Active in request list</span>
+                    <span className="block text-[10px] text-slate-400">Inactive keeps contacts but hides this member from new requests.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={memberModalActive}
+                    onChange={(e) => setMemberModalActive(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                </label>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsMemberModalOpen(false)}
+                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2 text-xs font-bold text-slate-500 transition hover:bg-slate-50 active:scale-95"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingTeamMembers || isSavingEmergencyPhysicians || !memberModalName.trim()}
+                  className="flex-1 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 py-2 text-xs font-bold text-white shadow-md shadow-indigo-100 transition hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50 disabled:shadow-none active:scale-95"
+                >
+                  {isSavingTeamMembers || isSavingEmergencyPhysicians ? 'Saving...' : memberModalMode === 'add' ? memberModalDirectory === 'ep' ? 'Add EP' : 'Add Member' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );

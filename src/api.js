@@ -70,6 +70,17 @@ export async function fetchTeamMembers() {
   return [];
 }
 
+export async function fetchEmergencyPhysicians() {
+  const response = await request({ query: { action: 'emergencyPhysicians' } });
+  if (Array.isArray(response)) {
+    return response;
+  }
+  if (Array.isArray(response?.rows)) {
+    return response.rows;
+  }
+  return [];
+}
+
 export async function submitRequest(payload) {
   return request({ method: 'POST', body: { action: 'submit', ...payload } });
 }
@@ -149,4 +160,12 @@ export async function deleteActivity(id) {
 
 export async function updateSetting(key, value) {
   return request({ method: 'POST', body: { action: 'updatesetting', key, value } });
+}
+
+export async function updateTeamMembers(members) {
+  return request({ method: 'POST', body: { action: 'updateteammembers', members } });
+}
+
+export async function updateEmergencyPhysicians(members) {
+  return request({ method: 'POST', body: { action: 'updateemergencyphysicians', members } });
 }

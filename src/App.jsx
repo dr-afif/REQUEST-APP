@@ -28,11 +28,14 @@ import {
   updateLimitGroup,
   deleteLimitGroup,
   fetchTeamMembers,
+  fetchEmergencyPhysicians,
   fetchMasterRoster,
   fetchShiftBlocks,
   submitActivity,
   deleteActivity,
   updateSetting,
+  updateTeamMembers,
+  updateEmergencyPhysicians,
 } from './api';
 import {
   adaptRequestsResponse,
@@ -46,6 +49,38 @@ import { hasCacheValue, readCache, writeCacheEntries } from './utils/cache';
 import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
 
 const REFRESH_INTERVAL = 60 * 1000; // 1 minute
+
+const normalizeDirectoryMembers = (rawMembers) => {
+  const members = Array.isArray(rawMembers)
+    ? rawMembers
+        .map((entry) => {
+          if (typeof entry === 'string') {
+            return { name: entry.trim(), fullName: '', phone: '', active: true };
+          }
+          const rawActive = entry?.active ?? entry?.Active;
+          return {
+            name: String(entry?.name || entry?.MemberName || '').trim(),
+            fullName: String(entry?.fullName || entry?.FullName || '').trim(),
+            phone: String(entry?.phone || entry?.Phone || '').trim(),
+            active: rawActive === undefined || rawActive === null || rawActive === ''
+              ? true
+              : !['false', 'inactive', 'no', '0'].includes(String(rawActive).trim().toLowerCase()),
+          };
+        })
+        .filter((member) => member.name)
+    : [];
+
+  const seen = new Set();
+  const dedupedMembers = [];
+  for (const member of members) {
+    const key = member.name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      dedupedMembers.push(member);
+    }
+  }
+  return dedupedMembers;
+};
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -90,6 +125,7 @@ export default function App() {
   const [refreshError, setRefreshError] = useState('');
   
   const [teamMembers, setTeamMembers] = useState(() => readCache('resq_cache_teamMembers', []));
+  const [emergencyPhysicians, setEmergencyPhysicians] = useState(() => readCache('resq_cache_emergencyPhysicians', []));
   const [teamMembersError, setTeamMembersError] = useState('');
   const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(() => !hasCacheValue('resq_cache_teamMembers'));
 
@@ -175,6 +211,7 @@ export default function App() {
       
       let rawRequests = [];
       let rawTeamMembers = [];
+      let rawEmergencyPhysicians = [];
       let rawMasterRoster = [];
       let rawShiftBlocks = [];
       let rawShiftTypes = [];
@@ -188,12 +225,14 @@ export default function App() {
 
         // Fallback: Fetch other sheets in parallel
         try {
-          const [teamMembersData, masterRosterData, shiftBlocksData] = await Promise.all([
+          const [teamMembersData, emergencyPhysiciansData, masterRosterData, shiftBlocksData] = await Promise.all([
             fetchTeamMembers().catch(() => []),
+            fetchEmergencyPhysicians().catch(() => []),
             fetchMasterRoster().catch(() => []),
             fetchShiftBlocks().catch(() => []),
           ]);
           rawTeamMembers = teamMembersData;
+          rawEmergencyPhysicians = emergencyPhysiciansData;
           rawMasterRoster = masterRosterData;
           rawShiftBlocks = shiftBlocksData;
         } catch (err) {
@@ -203,6 +242,7 @@ export default function App() {
         // Modern Apps Script format
         rawRequests = response.requests || [];
         rawTeamMembers = response.teamMembers || [];
+        rawEmergencyPhysicians = response.emergencyPhysicians || [];
         rawMasterRoster = response.masterRoster || [];
         rawShiftBlocks = response.shiftBlocks || [];
         rawShiftTypes = response.shiftTypes || [];
@@ -214,14 +254,10 @@ export default function App() {
       }
 
       // Parse & set Team Members
-      const names = Array.isArray(rawTeamMembers)
-        ? rawTeamMembers
-            .map((entry) => (typeof entry === 'string' ? entry : entry?.name ?? ''))
-            .map((name) => (typeof name === 'string' ? name.trim() : ''))
-            .filter(Boolean)
-        : [];
-      const deduped = Array.from(new Set(names));
-      setTeamMembers(deduped);
+      const dedupedMembers = normalizeDirectoryMembers(rawTeamMembers);
+      const dedupedEmergencyPhysicians = normalizeDirectoryMembers(rawEmergencyPhysicians);
+      setTeamMembers(dedupedMembers);
+      setEmergencyPhysicians(dedupedEmergencyPhysicians);
 
       // Parse & set Requests
       const adapted = adaptRequestsResponse(rawRequests);
@@ -250,7 +286,8 @@ export default function App() {
       // Keep cache keys stable; existing sessions depend on them for startup.
       try {
         writeCacheEntries([
-          ['resq_cache_teamMembers', deduped],
+          ['resq_cache_teamMembers', dedupedMembers],
+          ['resq_cache_emergencyPhysicians', dedupedEmergencyPhysicians],
           ['resq_cache_requests', adapted],
           ['resq_cache_masterRoster', validMasterRoster],
           ['resq_cache_shiftBlocks', validShiftBlocks],
@@ -301,7 +338,9 @@ export default function App() {
 
   const rosterNames = useMemo(() => {
     if (teamMembers.length) {
-      return [...teamMembers];
+      return teamMembers
+        .filter(m => typeof m === 'string' || m.active !== false)
+        .map(m => typeof m === 'string' ? m : m.name);
     }
     return fallbackNames;
   }, [teamMembers, fallbackNames]);
@@ -814,6 +853,60 @@ export default function App() {
     })();
   };
 
+  const handleUpdateTeamMembers = async (newNames) => {
+    const previousTeamMembers = [...teamMembers];
+    setTeamMembers(newNames);
+
+    const toastId = addToast(`🔄 Updating team members list...`, 'info', Infinity);
+
+    (async () => {
+      try {
+        await updateTeamMembers(newNames);
+        updateToast(toastId, {
+          message: `✅ Team members list updated successfully!`,
+          type: 'success',
+          duration: 3000,
+        });
+        await loadAllData();
+      } catch (err) {
+        console.error('Failed to update team members:', err);
+        setTeamMembers(previousTeamMembers);
+        updateToast(toastId, {
+          message: `❌ Failed to update team members: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
+  };
+
+  const handleUpdateEmergencyPhysicians = async (newNames) => {
+    const previousEmergencyPhysicians = [...emergencyPhysicians];
+    setEmergencyPhysicians(newNames);
+
+    const toastId = addToast(`🔄 Updating emergency physicians list...`, 'info', Infinity);
+
+    (async () => {
+      try {
+        await updateEmergencyPhysicians(newNames);
+        updateToast(toastId, {
+          message: `✅ Emergency physicians list updated successfully!`,
+          type: 'success',
+          duration: 3000,
+        });
+        await loadAllData();
+      } catch (err) {
+        console.error('Failed to update emergency physicians:', err);
+        setEmergencyPhysicians(previousEmergencyPhysicians);
+        updateToast(toastId, {
+          message: `❌ Failed to update emergency physicians: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
+  };
+
   const activeRequests = useMemo(() => {
     return requests.filter((request) => request.status?.toLowerCase() === 'active');
   }, [requests]);
@@ -871,6 +964,9 @@ export default function App() {
               masterRoster={masterRoster}
               onUploadMasterRoster={handleUploadBaseline}
               onRefresh={loadAllData}
+              shiftTypes={shiftTypes}
+              teamMembers={teamMembers}
+              emergencyPhysicians={emergencyPhysicians}
             />
           </div>
         )}
@@ -914,6 +1010,8 @@ export default function App() {
               requests={requests}
               shiftBlocks={shiftBlocks}
               names={rosterNames}
+              teamMembers={teamMembers}
+              emergencyPhysicians={emergencyPhysicians}
               onUpdateApproval={handleUpdateApproval}
               onAddBlock={handleAddBlock}
               onDeleteBlock={handleDeleteBlock}
@@ -931,6 +1029,8 @@ export default function App() {
               onDeleteActivity={handleDeleteActivity}
               settings={settings}
               onUpdateSetting={handleUpdateSetting}
+              onUpdateTeamMembers={handleUpdateTeamMembers}
+              onUpdateEmergencyPhysicians={handleUpdateEmergencyPhysicians}
             />
           </div>
         )}

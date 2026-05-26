@@ -9,6 +9,7 @@ const REQUEST_CLASS_MAP = {
   night: 'req--night',
   on: 'req--night',
   on1: 'req--night',
+  on2: 'req--night',
   course: 'req--course',
   off: 'req--off',
   leave: 'req--off',

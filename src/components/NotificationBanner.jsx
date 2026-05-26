@@ -6,26 +6,28 @@ export default function NotificationBanner({ requests = [], shiftBlocks = [], ac
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const isCurrentOrUpcoming = (dateStr) => {
+    const isPastDate = (dateStr) => {
       if (!dateStr) return false;
       const d = new Date(dateStr);
       if (isNaN(d.getTime())) return false;
       d.setHours(0, 0, 0, 0);
-      return d >= today;
+      return d < today;
     };
 
     // Process manually managed activities
     (activities || []).forEach((act) => {
+      if (act.Status && act.Status.toLowerCase() === 'archived') return;
+      if (isPastDate(act.Date)) return;
+
       if (act.CustomText) {
-        // Custom megaphone announcement - always show
+        // Custom megaphone announcement
         const ts = act.Timestamp ? new Date(act.Timestamp).getTime() : 0;
         list.push({
           text: act.CustomText,
           timeScore: ts
         });
       } else {
-        // Roster activity log - check if it is current or upcoming
-        if (!isCurrentOrUpcoming(act.Date)) return;
+        // Roster activity log
         const ts = act.Timestamp ? new Date(act.Timestamp).getTime() : 0;
         const formattedDate = act.Date ? new Date(act.Date).toLocaleDateString(undefined, {
           month: 'short',
@@ -49,8 +51,8 @@ export default function NotificationBanner({ requests = [], shiftBlocks = [], ac
     // Sort by timeScore descending (newest first)
     list.sort((a, b) => b.timeScore - a.timeScore);
 
-    // Slice to the top 5 latest notifications only
-    const limitedList = list.slice(0, 5).map((item) => item.text);
+    // Map to the text of the notifications (no slice/limit)
+    const limitedList = list.map((item) => item.text);
 
     // Fallback standard announcement if empty
     if (limitedList.length === 0) {

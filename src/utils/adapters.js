@@ -98,6 +98,7 @@ export function normalizeActivities(rawActivities) {
           Date: pick(activity, 'Date', 'date') || '',
           ApprovalStatus: pick(activity, 'ApprovalStatus', 'approvalStatus') || 'Approved',
           Comment: pick(activity, 'Comment', 'comment') || '',
+          Status: pick(activity, 'Status', 'status') || 'Active',
         }))
         .filter((activity) => activity.ID && activity.ID.trim().toLowerCase() !== 'id' && (activity.CustomText || activity.Name))
     : [];

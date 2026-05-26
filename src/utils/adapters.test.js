@@ -119,6 +119,7 @@ assert.deepEqual(
       Date: '',
       ApprovalStatus: 'Approved',
       Comment: '',
+      Status: 'Active',
     },
     {
       ID: 'a2',
@@ -131,6 +132,7 @@ assert.deepEqual(
       Date: '2026-06-06',
       ApprovalStatus: 'Approved',
       Comment: '',
+      Status: 'Active',
     },
   ]
 );

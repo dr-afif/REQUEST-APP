@@ -9,10 +9,12 @@ export default function UpdatesPage({
 }) {
   const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
 
-  // 1. Filter and sort manual activity history
-  const changesFeed = useMemo(() => {
-    const list = activities.length > 0 ? activities : [
+  // 1. Filter and sort active activity history
+  const activeFeed = useMemo(() => {
+    const filtered = activities.filter((a) => !a.Status || a.Status.toLowerCase() !== 'archived');
+    const list = filtered.length > 0 ? filtered : [
       {
         ID: 'act-1',
         Timestamp: new Date().toISOString(),
@@ -21,6 +23,16 @@ export default function UpdatesPage({
         RequestType: 'custom',
       }
     ];
+    return [...list].sort((a, b) => {
+      const timeA = a.Timestamp ? new Date(a.Timestamp).getTime() : 0;
+      const timeB = b.Timestamp ? new Date(b.Timestamp).getTime() : 0;
+      return timeB - timeA;
+    });
+  }, [activities]);
+
+  // 2. Filter and sort archived/deleted activity history
+  const archivedFeed = useMemo(() => {
+    const list = activities.filter((a) => a.Status && a.Status.toLowerCase() === 'archived');
     return [...list].sort((a, b) => {
       const timeA = a.Timestamp ? new Date(a.Timestamp).getTime() : 0;
       const timeB = b.Timestamp ? new Date(b.Timestamp).getTime() : 0;
@@ -95,9 +107,9 @@ export default function UpdatesPage({
           <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-bold text-slate-800 mb-6">🗓️ Roster Activity History</h2>
             
-            {changesFeed.length > 0 ? (
+            {activeFeed.length > 0 ? (
               <div className="relative border-l border-slate-150 pl-6 ml-3 space-y-6">
-                {changesFeed.map((log) => {
+                {activeFeed.map((log) => {
                   const isApproved = log.ApprovalStatus === 'Approved';
                   const isRejected = log.ApprovalStatus === 'Rejected';
                   const isSwap = log.RequestType?.toLowerCase() === 'swap';
@@ -189,6 +201,61 @@ export default function UpdatesPage({
               <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400">
                 <span className="text-3xl">📭</span>
                 <p className="mt-2 text-sm font-semibold">No recent activity logs available.</p>
+              </div>
+            )}
+
+            {/* Archived Updates Collapsible Section */}
+            {archivedFeed.length > 0 && (
+              <div className="mt-8 pt-6 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowArchived(!showArchived)}
+                  className="flex items-center gap-2 text-xs font-bold text-slate-500 hover:text-slate-700 transition outline-none"
+                >
+                  <span>{showArchived ? '📂 Hide' : '📁 Show'} Archived Updates ({archivedFeed.length})</span>
+                  <svg
+                    className={`h-4 w-4 transform transition-transform duration-200 ${showArchived ? 'rotate-180' : ''}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {showArchived && (
+                  <div className="mt-6 relative border-l border-dashed border-slate-200 pl-6 ml-3 space-y-6 animate-fadeIn">
+                    {archivedFeed.map((log) => {
+                      const isSwap = log.RequestType?.toLowerCase() === 'swap';
+                      const icon = log.CustomText ? '📢' : (isSwap ? '🔄' : '🌴');
+                      return (
+                        <div key={log.ID} className="relative opacity-65 grayscale-[30%]">
+                          {/* Timeline dot */}
+                          <span className="absolute -left-[35px] top-1 flex h-6.5 w-6.5 items-center justify-center rounded-full bg-slate-50 border border-slate-200 text-xs shadow-inner">
+                            {icon}
+                          </span>
+                          
+                          <div>
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <span className="font-bold text-slate-400">{formatTime(log.Timestamp)}</span>
+                              <span className="rounded-full px-2 py-0.5 text-[9px] font-bold uppercase bg-slate-100 text-slate-400 border border-slate-200">
+                                Archived
+                              </span>
+                            </div>
+
+                            {renderLogMessage(log)}
+
+                            {log.Comment && (
+                              <div className="mt-2 rounded-xl bg-slate-50 p-2.5 text-xs text-slate-400 italic">
+                                "{log.Comment}"
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>

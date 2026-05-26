@@ -1,5 +1,6 @@
 const REQUEST_SHEET_NAME = 'Requests';
 const TEAM_MEMBERS_SHEET_NAME = 'TeamMembers';
+const EMERGENCY_PHYSICIANS_SHEET_NAME = 'EmergencyPhysicians';
 const MASTER_ROSTER_SHEET_NAME = 'MasterRoster';
 const SHIFT_BLOCKS_SHEET_NAME = 'ShiftBlocks';
 const SHIFT_TYPES_SHEET_NAME = 'ShiftTypes';
@@ -21,6 +22,9 @@ function doGet(e) {
     const action = (e && e.parameter && e.parameter.action ? String(e.parameter.action) : '').toLowerCase();
     if (action === 'teammembers') {
       return getTeamMembersResponse();
+    }
+    if (action === 'emergencyphysicians') {
+      return getEmergencyPhysiciansResponse();
     }
     if (action === 'alldata') {
       return getAllDataResponse();
@@ -102,6 +106,12 @@ function doPost(e) {
     if (action === 'updatesetting') {
       return handleUpdateSetting(payload);
     }
+    if (action === 'updateteammembers') {
+      return handleUpdateTeamMembers(payload);
+    }
+    if (action === 'updateemergencyphysicians') {
+      return handleUpdateEmergencyPhysicians(payload);
+    }
 
     throw new Error('Unknown action: ' + action);
   } catch (error) {
@@ -113,6 +123,7 @@ function getAllDataResponse() {
   return createJsonResponse({
     requests: getRequestsData(),
     teamMembers: getTeamMembersData(),
+    emergencyPhysicians: getEmergencyPhysiciansData(),
     masterRoster: getMasterRosterData(),
     shiftBlocks: getShiftBlocksData(),
     shiftTypes: getShiftTypesData(),
@@ -155,27 +166,92 @@ function getTeamMembersResponse() {
 }
 
 function getTeamMembersData() {
-  const sheet = getSheetByName(TEAM_MEMBERS_SHEET_NAME);
+  return getDirectoryMembersData(TEAM_MEMBERS_SHEET_NAME);
+}
+
+function getEmergencyPhysiciansResponse() {
+  return createJsonResponse(getEmergencyPhysiciansData());
+}
+
+function getEmergencyPhysiciansData() {
+  return getDirectoryMembersData(EMERGENCY_PHYSICIANS_SHEET_NAME);
+}
+
+function getDirectoryMembersData(sheetName) {
+  const sheet = getSheetByName(sheetName);
   if (!sheet) {
-    createSheetIfNotExist(TEAM_MEMBERS_SHEET_NAME, ['MemberName']);
+    createSheetIfNotExist(sheetName, ['MemberName', 'FullName', 'Phone', 'Active']);
     return [];
   }
 
   const rows = sheet.getDataRange().getValues();
-  if (rows.length <= 1) {
+  if (rows.length <= 0) {
+    return [];
+  }
+
+  const headers = rows[0];
+  let nameIndex = headers.indexOf('MemberName');
+  let fullNameIndex = headers.indexOf('FullName');
+  let phoneIndex = headers.indexOf('Phone');
+  let activeIndex = headers.indexOf('Active');
+
+  // Automatically migrate/ensure columns exist in sheet if they are missing from headers
+  let changed = false;
+  if (nameIndex === -1) {
+    sheet.getRange(1, 1).setValue('MemberName');
+    nameIndex = 0;
+    changed = true;
+  }
+  if (fullNameIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('FullName');
+    fullNameIndex = colPos - 1;
+    changed = true;
+  }
+  if (phoneIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Phone');
+    phoneIndex = colPos - 1;
+    changed = true;
+  }
+  if (activeIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Active');
+    activeIndex = colPos - 1;
+    changed = true;
+  }
+
+  // Refetch rows if we changed headers so we have updated data dimensions
+  const finalRows = changed ? sheet.getDataRange().getValues() : rows;
+  if (finalRows.length <= 1) {
     return [];
   }
 
   const members = [];
-  for (let i = 1; i < rows.length; i += 1) {
-    const value = rows[i][0];
-    if (!value) continue;
-    const parsed = String(value).trim();
-    if (!parsed) continue;
-    members.push(parsed);
+  const seen = new Set();
+  for (let i = 1; i < finalRows.length; i += 1) {
+    const nameValue = finalRows[i][nameIndex];
+    if (nameValue === undefined || nameValue === null) continue;
+    const name = String(nameValue).trim();
+    if (!name) continue;
+
+    // Deduplicate by lowercase name
+    if (seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+
+    const fullName = fullNameIndex < finalRows[i].length ? String(finalRows[i][fullNameIndex] || '').trim() : '';
+    const phone = phoneIndex < finalRows[i].length ? String(finalRows[i][phoneIndex] || '').trim() : '';
+    const activeValue = activeIndex < finalRows[i].length ? String(finalRows[i][activeIndex] || '').trim().toLowerCase() : '';
+
+    members.push({
+      name: name,
+      fullName: fullName,
+      phone: phone,
+      active: activeValue === '' ? true : !['false', 'inactive', 'no', '0'].includes(activeValue)
+    });
   }
 
-  return Array.from(new Set(members));
+  return members;
 }
 
 function getMasterRosterData() {
@@ -833,7 +909,59 @@ function getActivityHistoryData() {
   }
 
   const headers = values[0];
-  const statusColIndex = headers.indexOf('Status');
+  let statusColIndex = headers.indexOf('Status');
+  if (statusColIndex === -1) {
+    statusColIndex = headers.length;
+    sheet.getRange(1, statusColIndex + 1).setValue('Status');
+  }
+
+  const dateColIndex = headers.indexOf('Date');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const status = String(row[statusColIndex] || '').trim().toLowerCase();
+    
+    if (status !== 'archived' && dateColIndex !== -1) {
+      const dateVal = row[dateColIndex];
+      if (dateVal) {
+        let isPast = false;
+        
+        if (dateVal instanceof Date) {
+          const d = new Date(dateVal);
+          d.setHours(0, 0, 0, 0);
+          isPast = d < today;
+        } else {
+          const dateStr = String(dateVal).trim();
+          if (dateStr) {
+            const parts = dateStr.split('-');
+            if (parts.length === 3) {
+              const year = parseInt(parts[0], 10);
+              const month = parseInt(parts[1], 10) - 1;
+              const day = parseInt(parts[2], 10);
+              const d = new Date(year, month, day);
+              isPast = d < today;
+            } else {
+              const d = new Date(dateStr);
+              if (!isNaN(d.getTime())) {
+                d.setHours(0, 0, 0, 0);
+                isPast = d < today;
+              }
+            }
+          }
+        }
+        
+        if (isPast) {
+          sheet.getRange(i + 1, statusColIndex + 1).setValue('Archived');
+          while (values[i].length <= statusColIndex) {
+            values[i].push('');
+          }
+          values[i][statusColIndex] = 'Archived';
+        }
+      }
+    }
+  }
 
   const data = values.slice(1).map((row) => {
     const record = {};
@@ -843,12 +971,7 @@ function getActivityHistoryData() {
     return record;
   });
 
-  // Only return Active entries; rows without a Status column are treated as Active (backward-compat)
-  return data.filter((record) => {
-    if (statusColIndex === -1) return true;
-    const status = String(record.Status || '').trim().toLowerCase();
-    return status !== 'archived';
-  });
+  return data;
 }
 
 function handleAddActivity(data) {
@@ -956,4 +1079,93 @@ function handleUpdateSetting(data) {
     sheet.appendRow([key, value]);
   }
   return createJsonResponse({ result: 'success', key: key, value: value });
+}
+
+function handleUpdateTeamMembers(data) {
+  return handleUpdateDirectoryMembers(data, TEAM_MEMBERS_SHEET_NAME);
+}
+
+function handleUpdateEmergencyPhysicians(data) {
+  return handleUpdateDirectoryMembers(data, EMERGENCY_PHYSICIANS_SHEET_NAME);
+}
+
+function handleUpdateDirectoryMembers(data, sheetName) {
+  const sheet = createSheetIfNotExist(sheetName, ['MemberName', 'FullName', 'Phone', 'Active']);
+  
+  // Ensure the sheet has the required columns
+  const headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getValues()[0];
+  let nameIndex = headers.indexOf('MemberName');
+  let fullNameIndex = headers.indexOf('FullName');
+  let phoneIndex = headers.indexOf('Phone');
+  let activeIndex = headers.indexOf('Active');
+
+  if (nameIndex === -1) {
+    sheet.getRange(1, 1).setValue('MemberName');
+    nameIndex = 0;
+  }
+  if (fullNameIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('FullName');
+    fullNameIndex = colPos - 1;
+  }
+  if (phoneIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Phone');
+    phoneIndex = colPos - 1;
+  }
+  if (activeIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Active');
+    activeIndex = colPos - 1;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    // Clear rows below headers
+    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  }
+
+  const members = data.members;
+  if (Array.isArray(members) && members.length > 0) {
+    const values = [];
+    const seen = new Set();
+    members.forEach(m => {
+      let name = '';
+      let fullName = '';
+      let phone = '';
+      let active = true;
+
+      if (typeof m === 'string') {
+        name = m.trim();
+      } else if (m && typeof m === 'object') {
+        name = String(m.name || '').trim();
+        fullName = String(m.fullName || '').trim();
+        phone = String(m.phone || '').trim();
+        active = m.active === undefined || m.active === null ? true : m.active !== false;
+      }
+
+      if (name && !seen.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        const row = [];
+        row[nameIndex] = name;
+        row[fullNameIndex] = fullName;
+        row[phoneIndex] = phone;
+        row[activeIndex] = active ? 'TRUE' : 'FALSE';
+        
+        // Fill empty indices to avoid array sparsity issues
+        const maxIdx = Math.max(nameIndex, fullNameIndex, phoneIndex, activeIndex);
+        for (let i = 0; i <= maxIdx; i++) {
+          if (row[i] === undefined) {
+            row[i] = '';
+          }
+        }
+        values.push(row);
+      }
+    });
+
+    if (values.length > 0) {
+      sheet.getRange(2, 1, values.length, values[0].length).setValues(values);
+    }
+  }
+  return createJsonResponse({ result: 'success', count: members ? members.length : 0 });
 }
