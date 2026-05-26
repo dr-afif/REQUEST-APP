@@ -195,19 +195,30 @@ export default function RosterPage({
     const token = cleanShift.toLowerCase();
     
     if (token === 'total leave') return 'bg-indigo-50 text-indigo-900 border-indigo-200 font-extrabold';
-    if (token === 'am') return 'bg-emerald-50 text-emerald-800 border-emerald-300';
-    if (token === 'pm') return 'bg-sky-50 text-sky-800 border-sky-300';
-    if (token === 'night' || token === 'n' || token === 'on') return 'bg-purple-50 text-purple-800 border-purple-300';
     
-    if (token === 'off' || token === 'al' || token === 'mc' || token === 'el' || token.includes('leave') || token.includes('off')) {
-      return 'bg-rose-50 text-rose-800 border-rose-300';
+    // am : green
+    if (token === 'am') return 'bg-green-50 text-green-800 border-green-500';
+    
+    // pm : yellow
+    if (token === 'pm') return 'bg-amber-50 text-amber-800 border-amber-400';
+    
+    // night (on/on1/on2) : red
+    if (token === 'night' || token === 'n' || token === 'on' || token === 'on1' || token === 'on2' || token.includes('night')) {
+      return 'bg-red-50 text-red-800 border-red-500';
     }
     
+    // course : orange
     if (token.includes('course')) {
-      return 'bg-amber-50 text-amber-800 border-amber-300';
+      return 'bg-orange-50 text-orange-800 border-orange-400';
     }
     
-    return 'bg-slate-100 text-slate-800 border-slate-300';
+    // off : blue
+    if (token === 'off') {
+      return 'bg-blue-50 text-blue-800 border-blue-400';
+    }
+    
+    // others : grey (AL/ hka/ ghka/ mc/ el/ goff etc)
+    return 'bg-slate-50 text-slate-700 border-slate-300';
   };
 
   // 1.1 Group masterRoster by Name and Date for Table View (allowing all shift types)
