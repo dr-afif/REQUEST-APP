@@ -49,6 +49,7 @@ const REFRESH_INTERVAL = 60 * 1000; // 1 minute
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
+  // Cache-first state shows last-known data while Apps Script refreshes in the background.
   const [requests, setRequests] = useState(() => readCache('resq_cache_requests', []));
   const [toasts, setToasts] = useState([]);
 
@@ -246,7 +247,7 @@ export default function App() {
       const validActivities = normalizeActivities(rawActivities);
       setActivities(validActivities);
 
-      // Cache the loaded data in localStorage for Cache-First rendering
+      // Keep cache keys stable; existing sessions depend on them for startup.
       try {
         writeCacheEntries([
           ['resq_cache_teamMembers', deduped],
@@ -320,7 +321,7 @@ export default function App() {
     }
   }, [rosterNames, selectedName, isLoading, isLoadingTeamMembers]);
 
-  // Handle Standard Submissions (Optimistic UI & Background save)
+  // Optimistic request writes update UI first, then refresh or revert after Apps Script responds.
   const handleSubmitRequest = async ({ name, date, request, id, comment, requestType, swapPartner }) => {
     const isoDate = toIsoDate(date);
     const normalizedDate = isoDate ?? date;
@@ -339,7 +340,6 @@ export default function App() {
     const previousRequests = [...requests];
     const tempId = id || `opt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
-    // Optimistically update local React state instantly
     setRequests((prev) => {
       if (id) {
         return prev.map((req) =>
@@ -361,7 +361,6 @@ export default function App() {
     const actionText = id ? 'Updating' : 'Submitting';
     const toastId = addToast(`🔄 ${actionText} request for ${name}...`, 'info', Infinity);
 
-    // Launch save process in background
     (async () => {
       try {
         if (id) {
@@ -387,7 +386,7 @@ export default function App() {
     })();
   };
 
-  // Handle Roster Cancellations / Deletions (Optimistic UI & Background delete)
+  // Optimistic request deletes mirror submit behavior: local update first, backend confirmation after.
   const handleDeleteRequest = async ({ id, name }) => {
     if (!id) {
       throw new Error('Missing request ID for deletion.');
@@ -395,12 +394,10 @@ export default function App() {
 
     const previousRequests = [...requests];
 
-    // Optimistically remove request from local state immediately
     setRequests((prev) => prev.filter((req) => req.id !== id));
 
     const toastId = addToast(`🔄 Deleting request for ${name || 'member'}...`, 'info', Infinity);
 
-    // Launch delete in background
     (async () => {
       try {
         await deleteRequest(id);
@@ -422,11 +419,10 @@ export default function App() {
     })();
   };
 
-  // Handle Approval Overrides (Admin and Swap Partners) (Optimistic UI & Background update)
+  // Approval changes share the same optimistic refresh/revert pattern.
   const handleUpdateApproval = async (id, approvalStatus) => {
     const previousRequests = [...requests];
 
-    // Optimistically update approval status locally
     setRequests((prev) =>
       prev.map((req) =>
         req.id === id ? { ...req, approvalStatus, isOptimistic: true } : req

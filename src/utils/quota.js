@@ -1,5 +1,6 @@
 import { toIsoDate } from './normalise.js';
 
+// Shared by the form, user summary, and admin overview; keep current count semantics stable.
 export function buildLimitGroupById(limitGroups = []) {
   return limitGroups.reduce((acc, group) => {
     acc[group.ID] = group;

@@ -30,6 +30,7 @@ async function request({ method = 'GET', body, headers, query } = {}) {
 
   if (body !== undefined) {
     options.body = JSON.stringify(body);
+    // Apps Script receives write actions from the JSON body while reads use query params.
     if (!options.headers['Content-Type']) {
       options.headers['Content-Type'] = 'text/plain;charset=UTF-8';
     }
