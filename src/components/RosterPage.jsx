@@ -3,13 +3,19 @@ import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 import { openRosterPdfExport } from '../utils/rosterPdfExport';
 
-// Helper to parse standby status from a shift name string
+// Helper to parse standby status and extended shift status from a shift name string
 const parseShiftValue = (rawVal) => {
-  if (!rawVal) return { cleanShift: '', isStandby: false };
+  if (!rawVal) return { cleanShift: '', isStandby: false, isExtended: false };
   const str = String(rawVal).trim().toUpperCase();
   const isStandby = str.endsWith('(S)') || str.endsWith('-S') || str.includes('(S)');
-  const cleanShift = str.replace(/\(S\)/g, '').replace(/-S/g, '').trim();
-  return { cleanShift, isStandby };
+  const isExtended = str.endsWith('(X)') || str.endsWith('-X') || str.includes('(X)');
+  const cleanShift = str
+    .replace(/\(S\)/g, '')
+    .replace(/-S/g, '')
+    .replace(/\(X\)/g, '')
+    .replace(/-X/g, '')
+    .trim();
+  return { cleanShift, isStandby, isExtended };
 };
 
 // Helper to identify night shift variants (NIGHT, N, ON, ON1, ON2)
@@ -84,6 +90,7 @@ export default function RosterPage({
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditMode, setIsEditMode] = useState(false);
   const [isStandbyEditMode, setIsStandbyEditMode] = useState(false);
+  const [isExtendedEditMode, setIsExtendedEditMode] = useState(false);
   const [editedGrid, setEditedGrid] = useState({});
   const [isSaving, setIsSaving] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -513,10 +520,11 @@ export default function RosterPage({
   };
 
   const toggleEditMode = () => {
-    if (isEditMode || isStandbyEditMode) {
+    if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
         setIsStandbyEditMode(false);
+        setIsExtendedEditMode(false);
         setEditedGrid({});
       }
     } else {
@@ -527,16 +535,33 @@ export default function RosterPage({
   };
 
   const toggleStandbyEditMode = () => {
-    if (isEditMode || isStandbyEditMode) {
+    if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
         setIsStandbyEditMode(false);
+        setIsExtendedEditMode(false);
         setEditedGrid({});
       }
     } else {
       const cloned = initializeEditedGrid();
       setEditedGrid(cloned);
       setIsStandbyEditMode(true);
+      setActiveTab('table');
+    }
+  };
+
+  const toggleExtendedEditMode = () => {
+    if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
+      if (confirm('Discard unsaved changes?')) {
+        setIsEditMode(false);
+        setIsStandbyEditMode(false);
+        setIsExtendedEditMode(false);
+        setEditedGrid({});
+      }
+    } else {
+      const cloned = initializeEditedGrid();
+      setEditedGrid(cloned);
+      setIsExtendedEditMode(true);
       setActiveTab('table');
     }
   };
@@ -575,10 +600,68 @@ export default function RosterPage({
 
       if (!currentShiftKey) return prev; // No shift to attach standby to
 
-      const { cleanShift, isStandby } = parseShiftValue(currentShiftKey);
+      const { cleanShift, isStandby, isExtended } = parseShiftValue(currentShiftKey);
       
       // Determine the new shift key
-      const newShiftKey = isStandby ? cleanShift : `${cleanShift} (S)`;
+      const nextStandby = !isStandby;
+      let newShiftKey = cleanShift;
+      if (nextStandby) newShiftKey += ' (S)';
+      if (isExtended) newShiftKey += ' (X)';
+
+      const nextDayData = { ...dayData };
+      // Remove from old shift
+      nextDayData[currentShiftKey] = removeNameFromList(nextDayData[currentShiftKey]);
+      // Add to new shift
+      nextDayData[newShiftKey] = addNameToList(nextDayData[newShiftKey] || '');
+
+      return {
+        ...prev,
+        [dateStr]: nextDayData
+      };
+    });
+  };
+
+  const handleToggleExtended = (dateStr, doctorName) => {
+    setEditedGrid((prev) => {
+      const dayData = prev[dateStr] || {};
+      const normalizedName = normalizeForComparison(doctorName);
+      
+      const removeNameFromList = (namesStr) => {
+        if (!namesStr) return '';
+        return namesStr
+          .split(/[\n,]+/)
+          .map(n => n.trim())
+          .filter(n => normalizeForComparison(n) !== normalizedName && n !== '')
+          .join(', ');
+      };
+
+      const addNameToList = (namesStr) => {
+        const list = namesStr ? namesStr.split(/[\n,]+/).map(n => n.trim()).filter(Boolean) : [];
+        if (!list.some(n => normalizeForComparison(n) === normalizedName)) {
+          list.push(doctorName.trim());
+        }
+        return list.join(', ');
+      };
+
+      // Find the current shift assigned to the doctor
+      let currentShiftKey = '';
+      Object.keys(dayData).forEach((shiftKey) => {
+        const valStr = dayData[shiftKey] || '';
+        const namesInShift = valStr.split(/[\n,]+/).map(n => normalizeForComparison(n.trim()));
+        if (namesInShift.includes(normalizedName)) {
+          currentShiftKey = shiftKey;
+        }
+      });
+
+      if (!currentShiftKey) return prev; // No shift to attach extended status to
+
+      const { cleanShift, isStandby, isExtended } = parseShiftValue(currentShiftKey);
+      
+      // Determine the new shift key
+      const nextExtended = !isExtended;
+      let newShiftKey = cleanShift;
+      if (isStandby) newShiftKey += ' (S)';
+      if (nextExtended) newShiftKey += ' (X)';
 
       const nextDayData = { ...dayData };
       // Remove from old shift
@@ -1045,7 +1128,7 @@ export default function RosterPage({
         {/* Action Buttons on the Right */}
         {isAdmin && (
           <div className="flex items-center gap-2 pb-1.5 pr-2">
-            {!isEditMode && !isStandbyEditMode && (
+            {!isEditMode && !isStandbyEditMode && !isExtendedEditMode && (
               <button
                 type="button"
                 onClick={openExportModal}
@@ -1054,7 +1137,7 @@ export default function RosterPage({
                 PDF Export
               </button>
             )}
-            {!isStandbyEditMode && (
+            {!isStandbyEditMode && !isExtendedEditMode && (
               <button
                 onClick={toggleEditMode}
                 disabled={isSaving}
@@ -1067,7 +1150,7 @@ export default function RosterPage({
                 {isEditMode ? '✕ Cancel Edit' : '✏️ Edit Roster'}
               </button>
             )}
-            {!isEditMode && (
+            {!isEditMode && !isExtendedEditMode && (
               <button
                 onClick={toggleStandbyEditMode}
                 disabled={isSaving}
@@ -1080,7 +1163,20 @@ export default function RosterPage({
                 {isStandbyEditMode ? '✕ Cancel Standby' : '⭐ Edit Standby'}
               </button>
             )}
-            {(isEditMode || isStandbyEditMode) && (
+            {!isEditMode && !isStandbyEditMode && (
+              <button
+                onClick={toggleExtendedEditMode}
+                disabled={isSaving}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                  isExtendedEditMode 
+                    ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
+                    : 'bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100'
+                }`}
+              >
+                {isExtendedEditMode ? '✕ Cancel Extended' : '✨ Edit Extended'}
+              </button>
+            )}
+            {(isEditMode || isStandbyEditMode || isExtendedEditMode) && (
               <button
                 onClick={handleSave}
                 disabled={isSaving || isRefreshing}
@@ -1111,6 +1207,14 @@ export default function RosterPage({
          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 shadow-sm animate-fadeIn">
            <span>
              <strong className="font-bold">Standby Editing Mode Active:</strong> You can click on any assigned shift or leave cell in the table below to toggle standby status (indicated by the amber <strong className="font-extrabold">S</strong> badge). Your changes will be saved to Google Sheets.
+           </span>
+         </div>
+      )}
+
+      {isExtendedEditMode && (
+         <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs text-blue-800 shadow-sm animate-fadeIn">
+           <span>
+             <strong className="font-bold">Extended Shift Editing Mode Active:</strong> You can click on any assigned shift or leave cell in the table below to toggle extended shift status (indicated by the blue <strong className="font-extrabold">X</strong> badge). Your changes will be saved to Google Sheets.
            </span>
          </div>
       )}
@@ -1237,6 +1341,11 @@ export default function RosterPage({
                                       {isDocStandby && (
                                         <span className="inline-flex items-center justify-center px-0.5 rounded bg-amber-500 text-white text-[8px] font-extrabold min-w-[10px] h-[10px] select-none" title="Standby">
                                           S
+                                        </span>
+                                      )}
+                                      {parseShiftValue(rawShift).isExtended && (
+                                        <span className="inline-flex items-center justify-center px-0.5 rounded bg-blue-500 text-white text-[8px] font-extrabold min-w-[10px] h-[10px] select-none" title="Extended Shift">
+                                          X
                                         </span>
                                       )}
                                     </span>
@@ -1424,6 +1533,37 @@ export default function RosterPage({
                                       }`}>
                                         S
                                       </span>
+                                      {parseShiftValue(val).isExtended && (
+                                        <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-blue-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">
+                                          X
+                                        </span>
+                                      )}
+                                    </button>
+                                  ) : (
+                                    <span className="text-slate-250 cursor-help" title={cellTooltip}>-</span>
+                                  )
+                                ) : isExtendedEditMode ? (
+                                  val ? (
+                                    <button
+                                      onClick={() => handleToggleExtended(day.dateStr, name)}
+                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs font-bold transition-all shadow-sm active:scale-95 ${
+                                        parseShiftValue(val).isExtended
+                                          ? 'bg-blue-500 hover:bg-blue-600 text-white border-blue-600'
+                                          : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                                      }`}
+                                      title={parseShiftValue(val).isExtended ? "Click to remove extended shift" : "Click to set extended shift"}
+                                    >
+                                      <span>{parseShiftValue(val).cleanShift}</span>
+                                      {parseShiftValue(val).isStandby && (
+                                        <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-amber-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Standby">
+                                          S
+                                        </span>
+                                      )}
+                                      <span className={`inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold leading-none min-w-[12px] h-[12px] ${
+                                        parseShiftValue(val).isExtended ? 'bg-white text-blue-600' : 'bg-slate-200 text-slate-600'
+                                      }`}>
+                                        X
+                                      </span>
                                     </button>
                                   ) : (
                                     <span className="text-slate-250 cursor-help" title={cellTooltip}>-</span>
@@ -1449,6 +1589,11 @@ export default function RosterPage({
                                       {parseShiftValue(val).isStandby && (
                                         <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-amber-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Standby">
                                           S
+                                        </span>
+                                      )}
+                                      {parseShiftValue(val).isExtended && (
+                                        <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-blue-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">
+                                          X
                                         </span>
                                       )}
                                     </span>
