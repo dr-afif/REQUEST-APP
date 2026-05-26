@@ -42,20 +42,14 @@ import {
   validateShiftBlocks,
   validateShiftTypes,
 } from './utils/adapters';
+import { hasCacheValue, readCache, writeCacheEntries } from './utils/cache';
 import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
 
 const REFRESH_INTERVAL = 60 * 1000; // 1 minute
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
-  const [requests, setRequests] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_requests');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [requests, setRequests] = useState(() => readCache('resq_cache_requests', []));
   const [toasts, setToasts] = useState([]);
 
   const addToast = (message, type = 'info', duration = 3000) => {
@@ -73,63 +67,14 @@ export default function App() {
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
     );
   };
-  const [masterRoster, setMasterRoster] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_masterRoster');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [shiftBlocks, setShiftBlocks] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_shiftBlocks');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [shiftTypes, setShiftTypes] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_shiftTypes');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [limitGroups, setLimitGroups] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_limitGroups');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [activities, setActivities] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_activities');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [settings, setSettings] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_settings');
-      return cached ? JSON.parse(cached) : { monthly_request_limit: '10' };
-    } catch {
-      return { monthly_request_limit: '10' };
-    }
-  });
+  const [masterRoster, setMasterRoster] = useState(() => readCache('resq_cache_masterRoster', []));
+  const [shiftBlocks, setShiftBlocks] = useState(() => readCache('resq_cache_shiftBlocks', []));
+  const [shiftTypes, setShiftTypes] = useState(() => readCache('resq_cache_shiftTypes', []));
+  const [limitGroups, setLimitGroups] = useState(() => readCache('resq_cache_limitGroups', []));
+  const [activities, setActivities] = useState(() => readCache('resq_cache_activities', []));
+  const [settings, setSettings] = useState(() => readCache('resq_cache_settings', { monthly_request_limit: '10' }));
   
-  const [isLoading, setIsLoading] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_requests');
-      return !cached;
-    } catch {
-      return true;
-    }
-  });
+  const [isLoading, setIsLoading] = useState(() => !hasCacheValue('resq_cache_requests'));
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedName, setSelectedName] = useState(() => {
     const stored = localStorage.getItem('resq_member_name') || '';
@@ -143,23 +88,9 @@ export default function App() {
   const [pendingSelectName, setPendingSelectName] = useState('');
   const [refreshError, setRefreshError] = useState('');
   
-  const [teamMembers, setTeamMembers] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_teamMembers');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [teamMembers, setTeamMembers] = useState(() => readCache('resq_cache_teamMembers', []));
   const [teamMembersError, setTeamMembersError] = useState('');
-  const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(() => {
-    try {
-      const cached = localStorage.getItem('resq_cache_teamMembers');
-      return !cached;
-    } catch {
-      return true;
-    }
-  });
+  const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(() => !hasCacheValue('resq_cache_teamMembers'));
 
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
@@ -317,15 +248,17 @@ export default function App() {
 
       // Cache the loaded data in localStorage for Cache-First rendering
       try {
-        localStorage.setItem('resq_cache_teamMembers', JSON.stringify(deduped));
-        localStorage.setItem('resq_cache_requests', JSON.stringify(adapted));
-        localStorage.setItem('resq_cache_masterRoster', JSON.stringify(validMasterRoster));
-        localStorage.setItem('resq_cache_shiftBlocks', JSON.stringify(validShiftBlocks));
-        localStorage.setItem('resq_cache_shiftTypes', JSON.stringify(validShiftTypes));
-        localStorage.setItem('resq_cache_limitGroups', JSON.stringify(validLimitGroups));
-        localStorage.setItem('resq_cache_activities', JSON.stringify(validActivities));
+        writeCacheEntries([
+          ['resq_cache_teamMembers', deduped],
+          ['resq_cache_requests', adapted],
+          ['resq_cache_masterRoster', validMasterRoster],
+          ['resq_cache_shiftBlocks', validShiftBlocks],
+          ['resq_cache_shiftTypes', validShiftTypes],
+          ['resq_cache_limitGroups', validLimitGroups],
+          ['resq_cache_activities', validActivities],
+        ]);
         if (response && typeof response === 'object' && response.settings) {
-          localStorage.setItem('resq_cache_settings', JSON.stringify(response.settings));
+          writeCacheEntries([['resq_cache_settings', response.settings]]);
         }
       } catch (cacheErr) {
         console.warn('Failed to save data to localStorage cache:', cacheErr);
