@@ -1488,7 +1488,7 @@ export default function RosterPage({
                             : 'bg-white';
  
                           let val = '';
-                          if (isEditMode || isStandbyEditMode) {
+                          if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
                             val = getEditingShift(day.dateStr, name);
                           } else {
                             val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
