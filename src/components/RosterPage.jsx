@@ -1214,7 +1214,7 @@ export default function RosterPage({
       {isExtendedEditMode && (
          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs text-blue-800 shadow-sm animate-fadeIn">
            <span>
-             <strong className="font-bold">Extended Shift Editing Mode Active:</strong> You can click on any assigned shift or leave cell in the table below to toggle extended shift status (indicated by the blue <strong className="font-extrabold">X</strong> badge). Your changes will be saved to Google Sheets.
+             <strong className="font-bold">Extended Shift Editing Mode Active:</strong> You can click on any assigned shift or leave cell in the table below to toggle extended shift status (indicated by the blue <strong className="font-extrabold">EX</strong> badge). Your changes will be saved to Google Sheets.
            </span>
          </div>
       )}
@@ -1345,7 +1345,7 @@ export default function RosterPage({
                                       )}
                                       {parseShiftValue(rawShift).isExtended && (
                                         <span className="inline-flex items-center justify-center px-0.5 rounded bg-blue-500 text-white text-[8px] font-extrabold min-w-[10px] h-[10px] select-none" title="Extended Shift">
-                                          X
+                                          EX
                                         </span>
                                       )}
                                     </span>
@@ -1535,7 +1535,7 @@ export default function RosterPage({
                                       </span>
                                       {parseShiftValue(val).isExtended && (
                                         <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-blue-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">
-                                          X
+                                          EX
                                         </span>
                                       )}
                                     </button>
@@ -1562,7 +1562,7 @@ export default function RosterPage({
                                       <span className={`inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold leading-none min-w-[12px] h-[12px] ${
                                         parseShiftValue(val).isExtended ? 'bg-white text-blue-600' : 'bg-slate-200 text-slate-600'
                                       }`}>
-                                        X
+                                        EX
                                       </span>
                                     </button>
                                   ) : (
@@ -1593,7 +1593,7 @@ export default function RosterPage({
                                       )}
                                       {parseShiftValue(val).isExtended && (
                                         <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-blue-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">
-                                          X
+                                          EX
                                         </span>
                                       )}
                                     </span>
