@@ -7,7 +7,7 @@
         "dev": "vite",
         "build": "vite build",
         "preview": "vite preview",
-        "test": "echo \"No tests configured\"",
+        "test": "node src/utils/adapters.test.js && node src/utils/cache.test.js && node src/utils/quota.test.js",
         "predeploy": "npm run build",
         "deploy": "gh-pages -d dist"
     },
