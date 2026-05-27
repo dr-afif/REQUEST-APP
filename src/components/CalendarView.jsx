@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toIsoDate } from '../utils/normalise';
 import { getHolidayName } from '../utils/holidays';
+import { mapName } from '../utils/adapters';
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -240,7 +241,7 @@ export default function CalendarView({
                 <div className="calendar__requests">
                   {dayRequests.map((entry) => {
                     const trimmedName =
-                      typeof entry.name === 'string' ? entry.name.trim() : '';
+                      typeof entry.name === 'string' ? mapName(entry.name.trim()) : '';
                     const trimmedComment =
                       typeof entry.comment === 'string' ? entry.comment.trim() : '';
                     const requestLabel = (entry.request ?? '').toString().trim();

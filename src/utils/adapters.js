@@ -11,6 +11,14 @@ function pick(entry, ...keys) {
   return undefined;
 }
 
+export const mapName = (name) => {
+  if (!name) return '';
+  const upper = String(name).trim().toUpperCase();
+  if (upper === 'SYU') return 'SYUHADA';
+  return String(name).trim();
+};
+
+
 export function adaptRequestsResponse(data) {
   const rows = Array.isArray(data)
     ? data
@@ -22,14 +30,14 @@ export function adaptRequestsResponse(data) {
 
   return rows.map((entry) => {
     if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-      const nameVal = pick(entry, 'name', 'Name') ?? '';
+      const nameVal = mapName(pick(entry, 'name', 'Name') ?? '');
       const dateVal = pick(entry, 'date', 'Date') ?? '';
       const dayVal = pick(entry, 'day', 'Day') ?? '';
       const requestVal = pick(entry, 'request', 'Request') ?? '';
       const statusVal = pick(entry, 'status', 'Status') ?? '';
       const commentVal = pick(entry, 'comment', 'Comment') ?? '';
       const approvalStatusVal = pick(entry, 'approvalStatus', 'ApprovalStatus') || 'Approved';
-      const swapPartnerVal = pick(entry, 'swapPartner', 'SwapPartner') ?? '';
+      const swapPartnerVal = mapName(pick(entry, 'swapPartner', 'SwapPartner') ?? '');
       const requestTypeVal = pick(entry, 'requestType', 'RequestType') ?? 'Leave';
 
       return {
@@ -61,9 +69,20 @@ export function adaptRequestsResponse(data) {
 }
 
 export function validateMasterRoster(rawMasterRoster) {
-  return Array.isArray(rawMasterRoster)
-    ? rawMasterRoster.filter((row) => row && (hasOwn(row, 'Shift') || hasOwn(row, 'shift')))
-    : [];
+  if (!Array.isArray(rawMasterRoster)) return [];
+  return rawMasterRoster
+    .filter((row) => row && (hasOwn(row, 'Shift') || hasOwn(row, 'shift')))
+    .map((row) => {
+      if (hasOwn(row, 'Name') || hasOwn(row, 'name')) {
+        const name = mapName(row.Name || row.name || '');
+        return {
+          ...row,
+          Name: name,
+          name: name,
+        };
+      }
+      return row;
+    });
 }
 
 export function validateShiftBlocks(rawShiftBlocks) {
@@ -91,10 +110,10 @@ export function normalizeActivities(rawActivities) {
           ID: String(pick(activity, 'ID', 'id', 'Id') || ''),
           Timestamp: pick(activity, 'Timestamp', 'timestamp') || '',
           CustomText: pick(activity, 'CustomText', 'customText') || '',
-          Name: pick(activity, 'Name', 'name') || '',
+          Name: mapName(pick(activity, 'Name', 'name') || ''),
           RequestType: pick(activity, 'RequestType', 'requestType') || '',
           Request: pick(activity, 'Request', 'request') || '',
-          SwapPartner: pick(activity, 'SwapPartner', 'swapPartner') || '',
+          SwapPartner: mapName(pick(activity, 'SwapPartner', 'swapPartner') || ''),
           Date: pick(activity, 'Date', 'date') || '',
           ApprovalStatus: pick(activity, 'ApprovalStatus', 'approvalStatus') || 'Approved',
           Comment: pick(activity, 'Comment', 'comment') || '',

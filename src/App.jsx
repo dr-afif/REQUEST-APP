@@ -85,7 +85,7 @@ const normalizeDirectoryMembers = (rawMembers) => {
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   // Cache-first state shows last-known data while Apps Script refreshes in the background.
-  const [requests, setRequests] = useState(() => readCache('resq_cache_requests', []));
+  const [requests, setRequests] = useState(() => adaptRequestsResponse(readCache('resq_cache_requests', [])));
   const [toasts, setToasts] = useState([]);
 
   const addToast = (message, type = 'info', duration = 3000) => {
@@ -103,7 +103,7 @@ export default function App() {
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
     );
   };
-  const [masterRoster, setMasterRoster] = useState(() => readCache('resq_cache_masterRoster', []));
+  const [masterRoster, setMasterRoster] = useState(() => validateMasterRoster(readCache('resq_cache_masterRoster', [])));
   const [shiftBlocks, setShiftBlocks] = useState(() => readCache('resq_cache_shiftBlocks', []));
   const [shiftTypes, setShiftTypes] = useState(() => readCache('resq_cache_shiftTypes', []));
   const [limitGroups, setLimitGroups] = useState(() => readCache('resq_cache_limitGroups', []));
@@ -974,6 +974,8 @@ export default function App() {
               shiftTypes={shiftTypes}
               teamMembers={teamMembers}
               emergencyPhysicians={emergencyPhysicians}
+              onSubmitRequest={handleSubmitRequest}
+              onDeleteRequest={handleDeleteRequest}
             />
           </div>
         )}

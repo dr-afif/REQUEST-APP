@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
+import { mapName } from '../utils/adapters';
 import { openRosterPdfExport } from '../utils/rosterPdfExport';
 import { getHolidayName } from '../utils/holidays';
 
@@ -87,9 +88,12 @@ export default function RosterPage({
   requests = [],
   teamMembers = [],
   emergencyPhysicians = [],
+  onSubmitRequest,
+  onDeleteRequest,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCommentDetail, setActiveCommentDetail] = useState(null);
+  const [adminCommentText, setAdminCommentText] = useState('');
   const [isEditMode, setIsEditMode] = useState(false);
   const [isStandbyEditMode, setIsStandbyEditMode] = useState(false);
   const [isExtendedEditMode, setIsExtendedEditMode] = useState(false);
@@ -167,8 +171,11 @@ export default function RosterPage({
       if (status !== 'active') return;
       
       const appStatus = r.ApprovalStatus || r.approvalStatus || '';
-      // Only consider Approved or Pending Admin requests for upcoming roster pre-population
-      if (appStatus !== 'Approved' && appStatus !== 'Pending Admin') return;
+      const rType = r.RequestType || r.requestType || 'Leave';
+      const isCustom = String(rType).toLowerCase() === 'admincomment';
+      
+      // Only consider Approved or Pending Admin requests, EXCEPT for custom comments
+      if (!isCustom && appStatus !== 'Approved' && appStatus !== 'Pending Admin') return;
       
       const rawDate = r.Date || r.date;
       const dateStr = toIsoDate(rawDate);
@@ -177,7 +184,7 @@ export default function RosterPage({
       // Filter by the selected month
       if (!dateStr.startsWith(rosterMonth)) return;
       
-      const nameRaw = r.Name || r.name;
+      const nameRaw = mapName(r.Name || r.name || '');
       if (!nameRaw) return;
       const nameKey = normalizeForComparison(nameRaw);
       
@@ -186,12 +193,38 @@ export default function RosterPage({
       }
       
       const requestedShift = String(r.Request || r.request || '').trim().toUpperCase();
-      map.get(nameKey).set(dateStr, {
+      const reqObj = {
+        id: r.id || r.ID || null,
         shift: requestedShift,
-        type: r.RequestType || r.requestType || 'Leave',
+        type: rType,
+        requestType: rType,
         approvalStatus: appStatus,
         comment: String(r.Comment || r.comment || '').trim(),
-      });
+      };
+
+      const existing = map.get(nameKey).get(dateStr);
+      if (existing) {
+        if (isCustom) {
+          existing.customComment = reqObj;
+        } else {
+          const prevCustom = existing.customComment || (existing.type?.toLowerCase() === 'admincomment' ? { ...existing } : null);
+          existing.id = reqObj.id;
+          existing.shift = reqObj.shift;
+          existing.type = reqObj.type;
+          existing.requestType = reqObj.requestType;
+          existing.approvalStatus = reqObj.approvalStatus;
+          existing.comment = reqObj.comment;
+          if (prevCustom) {
+            existing.customComment = prevCustom;
+          }
+        }
+      } else {
+        const newEntry = { ...reqObj };
+        if (isCustom) {
+          newEntry.customComment = reqObj;
+        }
+        map.get(nameKey).set(dateStr, newEntry);
+      }
     });
     return map;
   }, [requests, rosterMonth]);
@@ -211,6 +244,7 @@ export default function RosterPage({
     const token = cleanShift.toLowerCase();
     
     if (token === 'total leave') return 'bg-indigo-50 text-indigo-900 border-indigo-200 font-extrabold';
+    if (token === 'empty') return 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold';
     
     // am : green
     if (token === 'am') {
@@ -259,7 +293,7 @@ export default function RosterPage({
     masterRoster.forEach((row) => {
       const rawDate = row.Date || row.date;
       const dateStr = toIsoDate(rawDate);
-      const nameRaw = row.Name || row.name;
+      const nameRaw = mapName(row.Name || row.name || '');
       const shiftVal = row.Shift || row.shift;
 
       if (!dateStr || !nameRaw || !shiftVal) return;
@@ -342,7 +376,7 @@ export default function RosterPage({
     masterRoster.forEach((row) => {
       const rawDate = row.Date || row.date;
       const dateStr = toIsoDate(rawDate);
-      const nameRaw = row.Name || row.name;
+      const nameRaw = mapName(row.Name || row.name || '');
       const shiftVal = row.Shift || row.shift;
 
       if (!dateStr || !nameRaw || !shiftVal) return;
@@ -367,7 +401,7 @@ export default function RosterPage({
       masterRoster.forEach((row) => {
         const rawDate = row.Date || row.date;
         const dateStr = toIsoDate(rawDate);
-        const nameRaw = row.Name || row.name;
+        const nameRaw = mapName(row.Name || row.name || '');
         if (dateStr && nameRaw) {
           if (!assignedOnDate[dateStr]) assignedOnDate[dateStr] = new Set();
           assignedOnDate[dateStr].add(normalizeForComparison(nameRaw));
@@ -471,7 +505,7 @@ export default function RosterPage({
     masterRoster.forEach((row) => {
       const rawDate = row.Date || row.date;
       const dateStr = toIsoDate(rawDate);
-      const nameRaw = row.Name || row.name;
+      const nameRaw = mapName(row.Name || row.name || '');
       const shiftVal = row.Shift || row.shift;
 
       if (!dateStr || !nameRaw || !shiftVal) return;
@@ -584,6 +618,60 @@ export default function RosterPage({
       setEditedGrid(cloned);
       setIsExtendedEditMode(true);
       setActiveTab('table');
+    }
+  };
+
+  const handleSaveAdminComment = async () => {
+    if (!activeCommentDetail) return;
+    const { doctorName, dateStr, val, customCommentId } = activeCommentDetail;
+    const cleanComment = adminCommentText.trim();
+
+    if (!cleanComment) {
+      if (customCommentId) {
+        await handleDeleteAdminComment();
+      } else {
+        setActiveCommentDetail(null);
+      }
+      return;
+    }
+
+    try {
+      if (customCommentId) {
+        await onSubmitRequest({
+          id: customCommentId,
+          name: doctorName,
+          date: dateStr,
+          request: parseShiftValue(val).cleanShift || 'OFF',
+          comment: cleanComment,
+          requestType: 'AdminComment',
+        });
+      } else {
+        await onSubmitRequest({
+          name: doctorName,
+          date: dateStr,
+          request: parseShiftValue(val).cleanShift || 'OFF',
+          comment: cleanComment,
+          requestType: 'AdminComment',
+          approvalStatus: 'Approved',
+        });
+      }
+      setActiveCommentDetail(null);
+    } catch (err) {
+      console.error('Failed to save admin comment:', err);
+    }
+  };
+
+  const handleDeleteAdminComment = async () => {
+    if (!activeCommentDetail || !activeCommentDetail.customCommentId) return;
+    
+    try {
+      const { customCommentId, doctorName } = activeCommentDetail;
+      if (onDeleteRequest) {
+        await onDeleteRequest({ id: customCommentId, name: doctorName });
+      }
+      setActiveCommentDetail(null);
+    } catch (err) {
+      console.error('Failed to delete admin comment:', err);
     }
   };
 
@@ -886,12 +974,16 @@ export default function RosterPage({
       
       dateMap.set(day.dateStr, dayTally);
 
+      let blankCount = 0;
       names.forEach((name) => {
         let val = '';
+        const nameMapped = mapName(name);
+        const nameKey = normalizeForComparison(nameMapped);
+        const isInactive = inactiveNames.has(nameKey);
+
         if (isEditMode) {
-          val = getEditingShift(day.dateStr, name);
+          val = getEditingShift(day.dateStr, nameMapped);
         } else {
-          const nameKey = normalizeForComparison(name);
           val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
           if (!val && isUpcomingMonth) {
             const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
@@ -909,8 +1001,6 @@ export default function RosterPage({
           }
 
           // If inactive, only count active shifts (AM, PM, NIGHT, PN, OH), ignore leave shifts (AL, OFF, etc.)
-          const nameKey = normalizeForComparison(name);
-          const isInactive = inactiveNames.has(nameKey);
           const isActiveShift = ['AM', 'PM', 'NIGHT', 'PN', 'OH'].includes(shiftType);
           if (isInactive && !isActiveShift) {
             return;
@@ -918,6 +1008,10 @@ export default function RosterPage({
 
           dayTally.set(shiftType, (dayTally.get(shiftType) || 0) + 1);
           activeShiftTypes.add(shiftType);
+        } else {
+          if (!isInactive) {
+            blankCount++;
+          }
         }
       });
 
@@ -929,6 +1023,7 @@ export default function RosterPage({
         }
       });
       dayTally.set('TOTAL LEAVE', totalLeaveCount);
+      dayTally.set('EMPTY', blankCount);
     });
 
     const getShiftIndex = (shiftType) => {
@@ -953,6 +1048,7 @@ export default function RosterPage({
     });
 
     sortedShifts.push('TOTAL LEAVE');
+    sortedShifts.push('EMPTY');
 
     return {
       tallyMap: dateMap,
@@ -971,16 +1067,18 @@ export default function RosterPage({
     const memberMap = new Map();
 
     names.forEach((name) => {
-      const nameKey = normalizeForComparison(name);
-      memberMap.set(nameKey, { name, AM: 0, PM: 0, NIGHT: 0, PN: 0, GHKA: 0, TOTAL_LEAVE: 0 });
+      const nameMapped = mapName(name);
+      const nameKey = normalizeForComparison(nameMapped);
+      memberMap.set(nameKey, { name: nameMapped, AM: 0, PM: 0, NIGHT: 0, PN: 0, GHKA: 0, TOTAL_LEAVE: 0 });
     });
 
     daysInMonthList.forEach((day) => {
       names.forEach((name) => {
-        const nameKey = normalizeForComparison(name);
+        const nameMapped = mapName(name);
+        const nameKey = normalizeForComparison(nameMapped);
         let val = '';
         if (isEditMode) {
-          val = getEditingShift(day.dateStr, name);
+          val = getEditingShift(day.dateStr, nameMapped);
         } else {
           val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
           if (!val && isUpcomingMonth) {
@@ -1596,8 +1694,9 @@ export default function RosterPage({
                   </tr>
                 ) : (
                   names.map((name) => {
-                    const nameKey = normalizeForComparison(name);
-                    const matched = isMatch(name);
+                    const nameMapped = mapName(name);
+                    const nameKey = normalizeForComparison(nameMapped);
+                    const matched = isMatch(nameMapped);
                     return (
                       <tr key={name} className="hover:bg-slate-50/50 transition-colors">
                         <th
@@ -1607,7 +1706,7 @@ export default function RosterPage({
                               : 'bg-white'
                           }`}
                         >
-                          {name.toUpperCase()}
+                          {nameMapped.toUpperCase()}
                         </th>
                         {daysInMonthList.map((day) => {
                           const isWeekendDay = day.dayName === 'SAT' || day.dayName === 'SUN';
@@ -1622,10 +1721,10 @@ export default function RosterPage({
                             : isWeekendDay 
                             ? 'bg-slate-100/80' 
                             : 'bg-white';
- 
+  
                           let val = '';
                           if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
-                            val = getEditingShift(day.dateStr, name);
+                            val = getEditingShift(day.dateStr, nameMapped);
                           } else {
                             val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
                             if (!val && isUpcomingMonth) {
@@ -1635,41 +1734,59 @@ export default function RosterPage({
                               }
                             }
                           }
-  
                           const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
+                          const isCustomCommentOnly = !!(reqData && (reqData.type?.toLowerCase() === 'admincomment' || reqData.requestType?.toLowerCase() === 'admincomment'));
+                          const hasRequestComment = !!(reqData && !isCustomCommentOnly && reqData.comment);
+                          const hasCustomComment = !!(reqData && (isCustomCommentOnly ? reqData.comment : reqData.customComment?.comment));
+                          const customCommentText = reqData ? (isCustomCommentOnly ? reqData.comment : reqData.customComment?.comment || '') : '';
                           const cleanVal = val ? parseShiftValue(val).cleanShift : '';
-                          const isRequested = !!(reqData && cleanVal.toUpperCase() === reqData.shift.toUpperCase());
-                          const hasOverride = reqData && cleanVal.toUpperCase() !== reqData.shift.toUpperCase();
-                          const hasIndicator = (reqData && reqData.comment) || hasOverride;
-                          const isCellInteractive = hasIndicator && !isEditMode && !isStandbyEditMode && !isExtendedEditMode;
-
+                          const isRequested = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() === reqData.shift.toUpperCase());
+                          const hasOverride = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() !== reqData.shift.toUpperCase());
+                          const hasIndicator = hasRequestComment || hasCustomComment || hasOverride;
+                          const isCellInteractive = (hasIndicator || isAdmin) && !isEditMode && !isStandbyEditMode && !isExtendedEditMode;
+  
                           let cellTooltip = '';
+                          const tooltips = [];
                           if (reqData) {
-                            const comment = reqData.comment || '';
-                            if (hasOverride) {
-                              cellTooltip = `Requested: ${reqData.shift}${comment ? `\nComment: "${comment}"` : ''}`;
-                            } else if (comment) {
-                              cellTooltip = `Request Comment: "${comment}"`;
+                            if (isCustomCommentOnly) {
+                              tooltips.push(`Comment: "${reqData.comment}"`);
+                            } else {
+                              if (hasOverride) {
+                                tooltips.push(`Requested: ${reqData.shift}${reqData.comment ? `\nComment: "${reqData.comment}"` : ''}`);
+                              } else if (reqData.comment) {
+                                tooltips.push(`Request Comment: "${reqData.comment}"`);
+                              }
+                              if (reqData.customComment?.comment) {
+                                tooltips.push(`Comment: "${reqData.customComment.comment}"`);
+                              }
                             }
                           }
-
+                          cellTooltip = tooltips.join('\n');
+  
                           const selectClass = `w-full text-center text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} rounded-lg border px-1.5 py-1 outline-none transition-all cursor-pointer ${getShiftBadgeClass(val, isRequested)}`;
- 
+  
                           return (
                             <td
                               key={day.dateStr}
                               onClick={() => {
                                 if (isCellInteractive) {
                                   setActiveCommentDetail({
-                                    doctorName: name,
+                                    doctorName: nameMapped,
                                     dateStr: day.dateStr,
                                     dayName: day.dayName,
                                     dayNum: day.dayNum,
                                     val,
-                                    comment: reqData?.comment || '',
-                                    requestedShift: reqData?.shift || '',
+                                    comment: reqData && !isCustomCommentOnly ? reqData.comment || '' : '',
+                                    requestedShift: reqData && !isCustomCommentOnly ? reqData.shift || '' : '',
                                     hasOverride,
+                                    reqId: reqData && !isCustomCommentOnly ? reqData.id || null : null,
+                                    reqType: reqData && !isCustomCommentOnly ? reqData.type || null : null,
+                                    isCustomComment: isCustomCommentOnly,
+                                    hasCustomComment,
+                                    customCommentText,
+                                    customCommentId: isCustomCommentOnly ? reqData?.id : reqData?.customComment?.id || null,
                                   });
+                                  setAdminCommentText(customCommentText);
                                 }
                               }}
                               className={`border-b p-1.5 h-10 min-w-[3.8rem] align-middle ${
@@ -1762,10 +1879,16 @@ export default function RosterPage({
                                     <span className="text-slate-250 cursor-help" title={cellTooltip}>-</span>
                                   )
                                 )}
-                                {reqData && reqData.comment && (
+                                {hasRequestComment && (
                                   <span className="absolute -top-1 -left-1 flex h-2 w-2 cursor-help" title={cellTooltip}>
                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
                                     <span className="relative inline-flex rounded-full h-2 w-2 bg-purple-500"></span>
+                                  </span>
+                                )}
+                                {hasCustomComment && (
+                                  <span className="absolute -bottom-1 -left-1 flex h-2 w-2 cursor-help" title={cellTooltip}>
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-slate-300 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-400"></span>
                                   </span>
                                 )}
                                 {hasOverride && (
@@ -1836,11 +1959,12 @@ export default function RosterPage({
                 ) : (
                   tallyData.shifts.map((shiftType) => {
                     const isTotalLeave = shiftType === 'TOTAL LEAVE';
+                    const isEmptyRow = shiftType === 'EMPTY';
                     return (
-                      <tr key={shiftType} className={`hover:bg-slate-50/50 transition-colors ${isTotalLeave ? 'bg-slate-50/80 border-t border-slate-200 font-extrabold shadow-sm' : ''}`}>
-                        <th className={`sticky left-0 z-10 px-3 py-1.5 text-left font-bold text-slate-700 shadow-sm ring-1 ring-slate-100 min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate ${isTotalLeave ? 'bg-slate-50/90 font-extrabold' : 'bg-white'}`}>
+                      <tr key={shiftType} className={`hover:bg-slate-50/50 transition-colors ${isTotalLeave || isEmptyRow ? 'bg-slate-50/80 border-t border-slate-200 font-extrabold shadow-sm' : ''}`}>
+                        <th className={`sticky left-0 z-10 px-3 py-1.5 text-left font-bold text-slate-700 shadow-sm ring-1 ring-slate-100 min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate ${isTotalLeave || isEmptyRow ? 'bg-slate-50/90 font-extrabold' : 'bg-white'}`}>
                           <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${getShiftBadgeClass(shiftType)}`}>
-                            {shiftType}
+                            {shiftType === 'EMPTY' ? 'BLANK/EMPTY' : shiftType}
                           </span>
                         </th>
                         {daysInMonthList.map((day) => {
@@ -1857,14 +1981,14 @@ export default function RosterPage({
                             ? 'bg-slate-100/80' 
                             : 'bg-white';
                           
-                          if (isTotalLeave && !isToday) {
+                          if ((isTotalLeave || isEmptyRow) && !isToday) {
                             cellBg = isWeekendDay ? 'bg-indigo-50/10' : 'bg-indigo-50/5';
                           }
                           
                           const count = tallyData.tallyMap.get(day.dateStr)?.get(shiftType) || 0;
                           const amCount = tallyData.tallyMap.get(day.dateStr)?.get('AM') || 0;
                           const pmCount = tallyData.tallyMap.get(day.dateStr)?.get('PM') || 0;
-
+ 
                           let hasAlert = false;
                           let alertMsg = '';
                           if (shiftType === 'AM') {
@@ -1894,27 +2018,32 @@ export default function RosterPage({
                           } else if (shiftType === 'TOTAL LEAVE' && count > tallyThresholds.totalLeaveMax) {
                             hasAlert = true;
                             alertMsg = `Alert: Exceeds Total Leave maximum of ${tallyThresholds.totalLeaveMax}`;
+                          } else if (shiftType === 'EMPTY' && count > 0) {
+                            alertMsg = `${count} member${count > 1 ? 's' : ''} unassigned on this day`;
                           }
-
+ 
                           let cellClass = `border-b p-1.5 h-8 min-w-[3.8rem] align-middle transition-colors font-bold ${
                             day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300 border-b-slate-100' : 'border-r border-slate-100'
                           }`;
                           if (hasAlert) {
                             cellClass += ` bg-rose-50 text-rose-700 ring-1 ring-rose-200`;
+                          } else if (isEmptyRow && count > 0) {
+                            cellClass += ` bg-amber-50/70 text-amber-850 ring-1 ring-amber-200/50 ${cellBg}`;
                           } else {
-                            cellClass += ` ${isTotalLeave ? 'text-indigo-700' : 'text-slate-800'} ${cellBg}`;
+                            cellClass += ` ${isTotalLeave ? 'text-indigo-700' : isEmptyRow ? 'text-amber-800' : 'text-slate-800'} ${cellBg}`;
                           }
-
+ 
                           return (
                             <td
                               key={day.dateStr}
                               className={cellClass}
-                              title={alertMsg || `${shiftType} count: ${count}`}
+                              title={alertMsg || `${shiftType === 'EMPTY' ? 'BLANK/EMPTY' : shiftType} count: ${count}`}
                             >
                               {count > 0 ? (
-                                <span className={`text-xs font-extrabold ${hasAlert ? 'text-rose-700' : isTotalLeave ? 'text-indigo-700' : 'text-slate-900'}`}>
+                                <span className={`text-xs font-extrabold ${hasAlert ? 'text-rose-700' : isEmptyRow ? 'text-amber-850' : isTotalLeave ? 'text-indigo-700' : 'text-slate-900'}`}>
                                   {count}
                                   {hasAlert && <span className="ml-0.5 text-[9px]">⚠️</span>}
+                                  {isEmptyRow && <span className="ml-0.5 text-[9px] select-none">⚠️</span>}
                                 </span>
                               ) : (
                                 <span className={hasAlert ? 'text-rose-400 font-extrabold text-xs' : 'text-slate-350'}>
@@ -2261,15 +2390,87 @@ export default function RosterPage({
                 </div>
               )}
 
-              {/* Request Comments */}
+              {/* Request Comment */}
               {activeCommentDetail.comment && (
                 <div className="rounded-2xl border border-purple-200 bg-purple-50/50 p-4 animate-fadeIn">
-                  <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider flex items-center gap-1.5 mb-1.5">
+                  <h4 className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-1.5 mb-1.5 text-purple-800">
                     <span>💬</span> Request Comment
                   </h4>
-                  <p className="text-xs text-purple-900 italic font-semibold leading-relaxed">
+                  <p className="text-xs italic font-semibold leading-relaxed text-purple-900">
                     "{activeCommentDetail.comment}"
                   </p>
+                </div>
+              )}
+
+              {/* Custom Comment */}
+              {activeCommentDetail.hasCustomComment && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 animate-fadeIn">
+                  <h4 className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-1.5 mb-1.5 text-slate-700">
+                    <span>💬</span> Custom Comment
+                  </h4>
+                  <p className="text-xs italic font-semibold leading-relaxed text-slate-800">
+                    "{activeCommentDetail.customCommentText}"
+                  </p>
+                </div>
+              )}
+
+              {/* Admin Custom Comment Editor */}
+              {isAdmin && (
+                <div className="mt-4 pt-4 border-t border-slate-100 animate-fadeIn">
+                  <label htmlFor="adminCommentInput" className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">
+                    ✍️ Admin Custom Comment
+                  </label>
+                  <textarea
+                    id="adminCommentInput"
+                    rows={3}
+                    className="w-full rounded-xl border border-slate-200 p-3 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none resize-none"
+                    placeholder="Add a custom comment for this cell..."
+                    value={adminCommentText}
+                    onChange={(e) => setAdminCommentText(e.target.value)}
+                  />
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveAdminComment}
+                      className="flex-1 rounded-xl bg-indigo-600 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition"
+                    >
+                      Save Comment
+                    </button>
+                    {activeCommentDetail.hasCustomComment && (
+                      <button
+                        type="button"
+                        onClick={handleDeleteAdminComment}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-100 transition"
+                      >
+                        Delete Custom Comment
+                      </button>
+                    )}
+                    {activeCommentDetail.comment && !activeCommentDetail.hasCustomComment && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (confirm("Clear doctor's request comment?")) {
+                            try {
+                              await onSubmitRequest({
+                                id: activeCommentDetail.reqId,
+                                name: activeCommentDetail.doctorName,
+                                date: activeCommentDetail.dateStr,
+                                request: activeCommentDetail.requestedShift || 'OFF',
+                                comment: '',
+                                requestType: activeCommentDetail.reqType || 'Leave',
+                              });
+                              setActiveCommentDetail(null);
+                            } catch (err) {
+                              console.error('Failed to clear request comment:', err);
+                            }
+                          }
+                        }}
+                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-100 transition"
+                      >
+                        Delete Request Comment
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

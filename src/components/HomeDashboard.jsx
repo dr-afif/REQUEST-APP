@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
+import { mapName } from '../utils/adapters';
 
 export default function HomeDashboard({
   selectedName,
@@ -28,11 +29,11 @@ export default function HomeDashboard({
   // 1. Filter swaps waiting for THIS user's approval as Partner
   const pendingPartnerSwaps = useMemo(() => {
     if (!selectedName) return [];
-    const normUser = normalizeForComparison(selectedName);
+    const normUser = normalizeForComparison(mapName(selectedName));
     return requests.filter((r) => {
       const isSwap = r.RequestType?.toLowerCase() === 'swap';
       const isPendingPartner = r.ApprovalStatus === 'Pending Partner';
-      const isTargetPartner = normalizeForComparison(r.SwapPartner) === normUser;
+      const isTargetPartner = normalizeForComparison(mapName(r.SwapPartner)) === normUser;
       const isActive = r.status?.toLowerCase() === 'active';
       return isSwap && isPendingPartner && isTargetPartner && isActive;
     });
@@ -48,12 +49,12 @@ export default function HomeDashboard({
   // 3. Today's shift highlight for the current user
   const todayHighlight = useMemo(() => {
     if (!selectedName) return null;
-    const normUser = normalizeForComparison(selectedName);
+    const normUser = normalizeForComparison(mapName(selectedName));
 
     // Get baseline shift
     const baseline = masterRoster.find(
       (s) => {
-        const nameRaw = s.Name || s.name;
+        const nameRaw = mapName(s.Name || s.name || '');
         const rawDate = s.Date || s.date;
         return normalizeForComparison(nameRaw) === normUser && toIsoDate(rawDate) === todayStr;
       }
@@ -63,7 +64,7 @@ export default function HomeDashboard({
     // Get active approved request overrides
     const approvedRequest = requests.find(
       (r) => {
-        const nameRaw = r.Name || r.name;
+        const nameRaw = mapName(r.Name || r.name || '');
         const rawDate = r.Date || r.date;
         return normalizeForComparison(nameRaw) === normUser &&
           toIsoDate(rawDate) === todayStr &&
@@ -75,7 +76,7 @@ export default function HomeDashboard({
     // Get pending request overrides
     const pendingRequest = requests.find(
       (r) => {
-        const nameRaw = r.Name || r.name;
+        const nameRaw = mapName(r.Name || r.name || '');
         const rawDate = r.Date || r.date;
         return normalizeForComparison(nameRaw) === normUser &&
           toIsoDate(rawDate) === todayStr &&
@@ -103,12 +104,12 @@ export default function HomeDashboard({
   // 4. User's current month duty list (strictly from finalised master roster)
   const myUpcomingDuties = useMemo(() => {
     if (!selectedName) return [];
-    const normUser = normalizeForComparison(selectedName);
+    const normUser = normalizeForComparison(mapName(selectedName));
     
     // Get master roster baseline shifts for this user
     const baselineShifts = masterRoster.filter(
       (r) => {
-        const nameRaw = r.Name || r.name;
+        const nameRaw = mapName(r.Name || r.name || '');
         return normalizeForComparison(nameRaw) === normUser;
       }
     );
@@ -147,11 +148,11 @@ export default function HomeDashboard({
           date: dateStr,
           isToday: dateStr === todayStr,
           timestamp: r.Timestamp || r.timestamp,
-          name: r.Name || r.name,
+          name: mapName(r.Name || r.name || ''),
           requestType: r.RequestType || r.requestType,
           request: r.Request || r.request,
           approvalStatus: r.ApprovalStatus || r.approvalStatus,
-          swapPartner: r.SwapPartner || r.swapPartner,
+          swapPartner: mapName(r.SwapPartner || r.swapPartner || ''),
           comment: r.Comment || r.comment,
         });
       }
