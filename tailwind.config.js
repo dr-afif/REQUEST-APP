@@ -21,6 +21,8 @@ export default {
     'bg-rose-950', 'text-rose-100', 'ring-rose-900/20', 'text-rose-200',
     'bg-rose-100/60', 'text-rose-800',
     'bg-rose-50/40',
+    // Weekend slate highlight classes
+    'bg-slate-900', 'bg-slate-100/80', 'bg-slate-200/60',
     // Calendar view row-level holiday classes
     'bg-rose-50/60', 'hover:bg-rose-100/50',
     'text-rose-700', 'text-rose-500',

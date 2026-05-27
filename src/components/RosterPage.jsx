@@ -821,6 +821,48 @@ export default function RosterPage({
     };
   }, [activeTab]);
 
+  // 📏 Synchronize column widths between Roster spreadsheet and Shift Distribution Tally
+  useEffect(() => {
+    if (activeTab !== 'table') return;
+
+    const rosterDiv = rosterScrollRef.current;
+    if (!rosterDiv) return;
+
+    const rosterTable = rosterDiv.querySelector('table');
+    if (!rosterTable) return;
+
+    const syncWidths = () => {
+      const tallyDiv = tallyScrollRef.current;
+      if (!tallyDiv) return;
+
+      const rosterHeaders = rosterTable.querySelectorAll('thead th');
+      const tallyHeaders = tallyDiv.querySelectorAll('thead th');
+
+      const minLength = Math.min(rosterHeaders.length, tallyHeaders.length);
+      for (let i = 0; i < minLength; i++) {
+        const rosterWidth = rosterHeaders[i].getBoundingClientRect().width;
+        tallyHeaders[i].style.width = `${rosterWidth}px`;
+        tallyHeaders[i].style.minWidth = `${rosterWidth}px`;
+        tallyHeaders[i].style.maxWidth = `${rosterWidth}px`;
+      }
+    };
+
+    const observer = new ResizeObserver(() => {
+      syncWidths();
+    });
+
+    observer.observe(rosterTable);
+
+    // Initial sync and a small delay sync to catch any rendering lag or font load shifts
+    syncWidths();
+    const timer = setTimeout(syncWidths, 100);
+
+    return () => {
+      observer.disconnect();
+      clearTimeout(timer);
+    };
+  }, [activeTab, masterRoster, editedGrid, isEditMode, isStandbyEditMode, isExtendedEditMode, names, teamMembers]);
+
   const tallyData = useMemo(() => {
     const dateMap = new Map();
     const inactiveNames = new Set(
@@ -924,6 +966,59 @@ export default function RosterPage({
       shifts: sortedShifts,
     };
   }, [daysInMonthList, names, isEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, dropdownShifts, teamMembers]);
+
+  // Per-member shift tally for the current month
+  // Tracks: AM, PM, NIGHT (on/on1/on2), PN, GHKA, and Total Leaves (all except AM/PM/NIGHT/PN/OH)
+  const memberTallyData = useMemo(() => {
+    // Columns we always show in order
+    const TRACKED = ['AM', 'PM', 'NIGHT', 'PN', 'GHKA'];
+    const LEAVE_EXCLUDES = new Set(['AM', 'PM', 'NIGHT', 'PN', 'OH']);
+
+    // Map: nameKey -> { AM, PM, NIGHT, PN, GHKA, TOTAL_LEAVE }
+    const memberMap = new Map();
+
+    names.forEach((name) => {
+      const nameKey = normalizeForComparison(name);
+      memberMap.set(nameKey, { name, AM: 0, PM: 0, NIGHT: 0, PN: 0, GHKA: 0, TOTAL_LEAVE: 0 });
+    });
+
+    daysInMonthList.forEach((day) => {
+      names.forEach((name) => {
+        const nameKey = normalizeForComparison(name);
+        let val = '';
+        if (isEditMode) {
+          val = getEditingShift(day.dateStr, name);
+        } else {
+          val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
+          if (!val && isUpcomingMonth) {
+            const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
+            if (reqData) val = reqData.shift;
+          }
+        }
+
+        if (!val) return;
+        const { cleanShift } = parseShiftValue(val);
+        let shiftType = cleanShift.toUpperCase();
+        // Normalise night variants
+        if (shiftType === 'ON' || shiftType === 'ON1' || shiftType === 'ON2' || shiftType === 'N') {
+          shiftType = 'NIGHT';
+        }
+
+        const entry = memberMap.get(nameKey);
+        if (!entry) return;
+
+        if (TRACKED.includes(shiftType)) {
+          entry[shiftType] += 1;
+        }
+        // Total Leaves: everything except AM/PM/NIGHT/PN/OH
+        if (!LEAVE_EXCLUDES.has(shiftType)) {
+          entry.TOTAL_LEAVE += 1;
+        }
+      });
+    });
+
+    return Array.from(memberMap.values());
+  }, [daysInMonthList, names, isEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth]);
 
   const handleKeyDown = (e, dateStr, shiftCol, dayIndex, shiftIndex) => {
     const key = e.key;
@@ -1495,7 +1590,7 @@ export default function RosterPage({
               <table className="min-w-full border-separate border-spacing-0 text-[10px] sm:text-xs text-center font-sans">
                 <thead>
                   <tr className="bg-slate-800 text-white select-none">
-                    <th className="sticky left-0 z-20 bg-slate-800 px-3 py-3 text-left font-bold uppercase tracking-wider shadow-sm ring-1 ring-slate-200 text-[10px] sm:text-xs min-w-[10rem] max-w-[10rem] w-40 truncate">
+                    <th className="sticky left-0 z-20 bg-slate-800 px-3 py-3 text-left font-bold uppercase tracking-wider shadow-sm ring-1 ring-slate-200 text-[10px] sm:text-xs min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate">
                       Name
                     </th>
                     {daysInMonthList.map((day) => {
@@ -1506,7 +1601,7 @@ export default function RosterPage({
                         <th
                           key={day.dateStr}
                           className={`whitespace-nowrap border-b border-slate-200 px-2.5 py-3 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
-                            isHoliday ? 'bg-rose-950 text-rose-100 ring-1 ring-rose-900/20' : isWeekendDay ? 'bg-slate-750' : 'bg-slate-800'
+                            isHoliday ? 'bg-rose-950 text-rose-100 ring-1 ring-rose-900/20' : isWeekendDay ? 'bg-slate-900' : 'bg-slate-800'
                           }`}
                           title={isHoliday ? holidayName : undefined}
                         >
@@ -1535,13 +1630,13 @@ export default function RosterPage({
                     return (
                       <tr key={name} className="hover:bg-slate-50/50 transition-colors">
                         <th
-                          className={`sticky left-0 z-10 px-3 py-2 text-left font-bold text-slate-900 shadow-sm ring-1 ring-slate-200 transition-colors min-w-[10rem] max-w-[10rem] w-40 truncate ${
+                          className={`sticky left-0 z-10 px-3 py-2 text-left font-bold text-slate-900 shadow-sm ring-1 ring-slate-200 transition-colors min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate ${
                             matched
                               ? 'bg-amber-100 text-amber-900 ring-2 ring-amber-300'
                               : 'bg-white'
                           }`}
                         >
-                          {name}
+                          {name.toUpperCase()}
                         </th>
                         {daysInMonthList.map((day) => {
                           const isWeekendDay = day.dayName === 'SAT' || day.dayName === 'SUN';
@@ -1552,9 +1647,9 @@ export default function RosterPage({
                           let cellBg = isToday 
                             ? 'bg-indigo-50/40' 
                             : isHoliday
-                            ? 'bg-rose-50/40'
+                            ? 'bg-rose-100/60'
                             : isWeekendDay 
-                            ? 'bg-slate-50/80' 
+                            ? 'bg-slate-100/80' 
                             : 'bg-white';
  
                           let val = '';
@@ -1704,7 +1799,7 @@ export default function RosterPage({
             <table className="min-w-full border-separate border-spacing-0 text-[10px] sm:text-xs text-center font-sans">
               <thead>
                 <tr className="bg-slate-50 text-slate-500 border-b border-slate-100 select-none">
-                  <th className="sticky left-0 z-20 bg-slate-50 px-3 py-2 text-left font-bold uppercase tracking-wider shadow-sm ring-1 ring-slate-100 text-[10px] sm:text-xs min-w-[10rem] max-w-[10rem] w-40 truncate">
+                  <th className="sticky left-0 z-20 bg-slate-50 px-3 py-2 text-left font-bold uppercase tracking-wider shadow-sm ring-1 ring-slate-100 text-[10px] sm:text-xs min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate">
                     Shift Type
                   </th>
                   {daysInMonthList.map((day) => {
@@ -1715,7 +1810,7 @@ export default function RosterPage({
                       <th
                         key={day.dateStr}
                         className={`whitespace-nowrap border-b border-slate-100 px-2.5 py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
-                          isHoliday ? 'bg-rose-100/60 text-rose-800' : isWeekendDay ? 'bg-slate-100/50' : 'bg-slate-50'
+                          isHoliday ? 'bg-rose-100/60 text-rose-800' : isWeekendDay ? 'bg-slate-200/60' : 'bg-slate-50'
                         }`}
                         title={isHoliday ? holidayName : undefined}
                       >
@@ -1740,7 +1835,7 @@ export default function RosterPage({
                     const isTotalLeave = shiftType === 'TOTAL LEAVE';
                     return (
                       <tr key={shiftType} className={`hover:bg-slate-50/50 transition-colors ${isTotalLeave ? 'bg-slate-50/80 border-t border-slate-200 font-extrabold shadow-sm' : ''}`}>
-                        <th className={`sticky left-0 z-10 px-3 py-1.5 text-left font-bold text-slate-700 shadow-sm ring-1 ring-slate-100 min-w-[10rem] max-w-[10rem] w-40 truncate ${isTotalLeave ? 'bg-slate-50/90 font-extrabold' : 'bg-white'}`}>
+                        <th className={`sticky left-0 z-10 px-3 py-1.5 text-left font-bold text-slate-700 shadow-sm ring-1 ring-slate-100 min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate ${isTotalLeave ? 'bg-slate-50/90 font-extrabold' : 'bg-white'}`}>
                           <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${getShiftBadgeClass(shiftType)}`}>
                             {shiftType}
                           </span>
@@ -1748,11 +1843,15 @@ export default function RosterPage({
                         {daysInMonthList.map((day) => {
                           const isWeekendDay = day.dayName === 'SAT' || day.dayName === 'SUN';
                           const isToday = day.dateStr === todayStr;
+                          const holidayName = getHolidayName(day.dateStr);
+                          const isHoliday = !!holidayName;
                           
                           let cellBg = isToday 
                             ? 'bg-indigo-50/40' 
+                            : isHoliday
+                            ? 'bg-rose-100/60'
                             : isWeekendDay 
-                            ? 'bg-slate-50/80' 
+                            ? 'bg-slate-100/80' 
                             : 'bg-white';
                           
                           if (isTotalLeave && !isToday) {
@@ -1820,6 +1919,95 @@ export default function RosterPage({
                             </td>
                           );
                         })}
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* 👤 Individual Member Shift Tally Card */}
+        <div className="mt-6 rounded-3xl border border-slate-150/70 bg-white shadow-sm overflow-hidden transition-all duration-300">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <span>👤</span> Individual Member Shift Tally
+            </h3>
+            <span className="text-[10px] font-semibold text-slate-400">{memberTallyData.length} members · {daysInMonthList.length} days</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-separate border-spacing-0 text-[10px] sm:text-xs text-center font-sans">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500 border-b border-slate-100 select-none">
+                  <th className="sticky left-0 z-20 bg-slate-50 px-3 py-2.5 text-left font-bold uppercase tracking-wider shadow-sm ring-1 ring-slate-100 text-[10px] sm:text-xs min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate">
+                    Name
+                  </th>
+                  {['AM', 'PM', 'NIGHT', 'PN', 'GHKA', 'TOTAL LEAVES'].map((col) => (
+                    <th
+                      key={col}
+                      className={`px-3 py-2.5 font-bold uppercase tracking-wider text-[10px] sm:text-xs whitespace-nowrap border-l border-slate-100 ${
+                        col === 'TOTAL LEAVES'
+                          ? 'bg-indigo-50/60 text-indigo-700 min-w-[5.5rem]'
+                          : col === 'AM'
+                          ? 'bg-green-50/60 text-green-700 min-w-[3.2rem]'
+                          : col === 'PM'
+                          ? 'bg-amber-50/60 text-amber-700 min-w-[3.2rem]'
+                          : col === 'NIGHT'
+                          ? 'bg-red-50/60 text-red-700 min-w-[3.6rem]'
+                          : col === 'PN'
+                          ? 'bg-purple-50/60 text-purple-700 min-w-[3.2rem]'
+                          : 'bg-slate-100/60 text-slate-700 min-w-[3.8rem]'
+                      }`}
+                    >
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {memberTallyData.length === 0 ? (
+                  <tr>
+                    <td className="px-3 py-3 text-xs text-slate-500 text-left" colSpan={7}>
+                      No team members available.
+                    </td>
+                  </tr>
+                ) : (
+                  memberTallyData.map((entry) => {
+                    const nameKey = normalizeForComparison(entry.name);
+                    const matched = isMatch(entry.name);
+                    const cols = [
+                      { key: 'AM',          val: entry.AM,          color: 'text-green-700',  bg: 'bg-green-50/30' },
+                      { key: 'PM',          val: entry.PM,          color: 'text-amber-700',  bg: 'bg-amber-50/30' },
+                      { key: 'NIGHT',       val: entry.NIGHT,       color: 'text-red-700',    bg: 'bg-red-50/30'   },
+                      { key: 'PN',          val: entry.PN,          color: 'text-purple-700', bg: 'bg-purple-50/30'},
+                      { key: 'GHKA',        val: entry.GHKA,        color: 'text-slate-700',  bg: ''               },
+                      { key: 'TOTAL_LEAVE', val: entry.TOTAL_LEAVE, color: 'text-indigo-700', bg: 'bg-indigo-50/30'},
+                    ];
+                    return (
+                      <tr
+                        key={nameKey}
+                        className={`hover:bg-slate-50/60 transition-colors border-b border-slate-100/80 ${
+                          matched ? 'bg-amber-50/40 ring-1 ring-inset ring-amber-200' : ''
+                        }`}
+                      >
+                        <th
+                          className={`sticky left-0 z-10 px-3 py-1.5 text-left font-semibold text-slate-800 shadow-sm ring-1 ring-slate-100 min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate text-[10px] sm:text-xs ${
+                            matched ? 'bg-amber-50 text-amber-900' : 'bg-white'
+                          }`}
+                        >
+                          {entry.name.toUpperCase()}
+                        </th>
+                        {cols.map(({ key, val, color, bg }) => (
+                          <td
+                            key={key}
+                            className={`px-3 py-1.5 border-l border-slate-100 font-bold align-middle ${
+                              val > 0 ? color : 'text-slate-300'
+                            } ${bg}`}
+                          >
+                            {val > 0 ? val : <span className="text-slate-300">-</span>}
+                          </td>
+                        ))}
                       </tr>
                     );
                   })
