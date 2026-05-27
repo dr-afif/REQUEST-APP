@@ -90,6 +90,8 @@ export default function RosterPage({
   emergencyPhysicians = [],
   onSubmitRequest,
   onDeleteRequest,
+  settings = {},
+  onUpdateSetting,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCommentDetail, setActiveCommentDetail] = useState(null);
@@ -106,8 +108,10 @@ export default function RosterPage({
     monthYear: '',
     version: 'v1.0',
     notes: '',
+    preparedBy: '',
+    checkedBy: '',
+    approvedBy: '',
   });
-
   // Thresholds for shift tally alerts (persisted in localStorage)
   const [tallyThresholds, setTallyThresholds] = useState(() => {
     try {
@@ -149,6 +153,25 @@ export default function RosterPage({
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     return `${yyyy}-${mm}`;
   });
+
+  // Roster Memo Planner Modal States
+  const [isMemoModalOpen, setIsMemoModalOpen] = useState(false);
+  const [memoMonth, setMemoMonth] = useState(rosterMonth);
+  const [memoText, setMemoText] = useState('');
+
+  // Sync memo text when month or settings changes
+  useEffect(() => {
+    if (isMemoModalOpen) {
+      setMemoText(settings[`memo_${memoMonth}`] || '');
+    }
+  }, [memoMonth, settings, isMemoModalOpen]);
+
+  // Sync memoMonth to the viewed rosterMonth when opened
+  useEffect(() => {
+    if (isMemoModalOpen) {
+      setMemoMonth(rosterMonth);
+    }
+  }, [isMemoModalOpen, rosterMonth]);
 
   const todayStr = useMemo(() => toIsoDate(new Date()), []);
 
@@ -1234,6 +1257,9 @@ export default function RosterPage({
     setExportSettings((prev) => ({
       ...prev,
       monthYear: monthLabel,
+      preparedBy: prev.preparedBy || localStorage.getItem('roster_pdf_prepared_by') || '',
+      checkedBy: prev.checkedBy || localStorage.getItem('roster_pdf_checked_by') || '',
+      approvedBy: prev.approvedBy || localStorage.getItem('roster_pdf_approved_by') || '',
     }));
     setIsExportModalOpen(true);
   };
@@ -1249,12 +1275,64 @@ export default function RosterPage({
     const logoUrl = new URL(logoPath, window.location.origin).href;
 
     try {
-      openRosterPdfExport({
-        ...exportSettings,
-        logoUrl,
-        rows: exportRows,
-        contacts: exportContacts,
-      });
+      if (exportSettings.rosterType === 'MO ROSTER') {
+        const spreadsheetDoctors = names.map((name) => {
+          const nameMapped = mapName(name);
+          const nameKey = normalizeForComparison(nameMapped);
+
+          // Find full name from teamMembers list
+          const memberObj = teamMembers.find(m => normalizeForComparison(m.name) === nameKey || normalizeForComparison(m.fullName) === nameKey);
+          const displayName = memberObj?.fullName?.trim() || nameMapped;
+
+          const shifts = {};
+          daysInMonthList.forEach((day) => {
+            let val = '';
+            if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
+              val = getEditingShift(day.dateStr, nameMapped);
+            } else {
+              val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
+              if (!val && isUpcomingMonth) {
+                const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
+                if (reqData) {
+                  val = reqData.shift;
+                }
+              }
+            }
+            const { cleanShift, isStandby, isExtended } = parseShiftValue(val);
+            shifts[day.dateStr] = {
+              value: cleanShift,
+              isStandby,
+              isExtended,
+            };
+          });
+          return {
+            name: displayName,
+            shifts,
+          };
+        });
+
+        // Save signees to localStorage
+        localStorage.setItem('roster_pdf_prepared_by', exportSettings.preparedBy || '');
+        localStorage.setItem('roster_pdf_checked_by', exportSettings.checkedBy || '');
+        localStorage.setItem('roster_pdf_approved_by', exportSettings.approvedBy || '');
+
+        openRosterPdfExport({
+          ...exportSettings,
+          logoUrl,
+          spreadsheetDays: daysInMonthList.map(day => ({
+            ...day,
+            holidayName: getHolidayName(day.dateStr),
+          })),
+          spreadsheetDoctors,
+        });
+      } else {
+        openRosterPdfExport({
+          ...exportSettings,
+          logoUrl,
+          rows: exportRows,
+          contacts: exportContacts,
+        });
+      }
       setIsExportModalOpen(false);
     } catch (error) {
       alert(error.message || 'Unable to open PDF export.');
@@ -1332,13 +1410,24 @@ export default function RosterPage({
         {isAdmin && (
           <div className="flex items-center gap-2 pb-1.5 pr-2">
             {!isEditMode && !isStandbyEditMode && !isExtendedEditMode && (
-              <button
-                type="button"
-                onClick={openExportModal}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
-              >
-                PDF Export
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={openExportModal}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
+                >
+                  PDF Export
+                </button>
+                {activeTab === 'table' && (
+                  <button
+                    type="button"
+                    onClick={() => setIsMemoModalOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100/80"
+                  >
+                    📝 Roster Memo
+                  </button>
+                )}
+              </>
             )}
             {!isStandbyEditMode && !isExtendedEditMode && (
               <button
@@ -2252,6 +2341,7 @@ export default function RosterPage({
                   >
                     <option value="MO & EP ROSTER">MO &amp; EP ROSTER</option>
                     <option value="EP ROSTER">EP ROSTER</option>
+                    <option value="MO ROSTER">MO ROSTER</option>
                   </select>
                 </div>
                 <div>
@@ -2266,6 +2356,52 @@ export default function RosterPage({
                   />
                 </div>
               </div>
+
+              {exportSettings.rosterType === 'MO ROSTER' && (
+                <div className="border border-slate-100 rounded-xl p-3 bg-slate-50/50 space-y-3">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-1">
+                    Signature Config
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Prepared By
+                      </label>
+                      <input
+                        type="text"
+                        value={exportSettings.preparedBy || ''}
+                        onChange={(e) => handleExportSettingChange('preparedBy', e.target.value)}
+                        placeholder="Name"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold outline-none focus:border-indigo-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Checked By
+                      </label>
+                      <input
+                        type="text"
+                        value={exportSettings.checkedBy || ''}
+                        onChange={(e) => handleExportSettingChange('checkedBy', e.target.value)}
+                        placeholder="Name"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold outline-none focus:border-indigo-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Approved By
+                      </label>
+                      <input
+                        type="text"
+                        value={exportSettings.approvedBy || ''}
+                        onChange={(e) => handleExportSettingChange('approvedBy', e.target.value)}
+                        placeholder="Name"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold outline-none focus:border-indigo-400"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-slate-500">
@@ -2464,6 +2600,99 @@ export default function RosterPage({
             >
               Close
             </button>
+          </div>
+        </div>
+      ), document.body)}
+
+      {isMemoModalOpen && createPortal((
+        <div 
+          className="fixed inset-0 z-50 flex items-end justify-center sm:items-center bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn" 
+          onClick={() => setIsMemoModalOpen(false)}
+        >
+          <div 
+            className="w-full max-w-md rounded-t-3xl sm:rounded-2xl border border-slate-100 bg-white p-6 shadow-2xl animate-slideUp text-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Handle bar for mobile bottom sheet cue */}
+            <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-4 sm:hidden"></div>
+
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
+              <div>
+                <span className="text-[9px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+                  Planning Tool
+                </span>
+                <h3 className="text-base font-extrabold text-slate-800 mt-1 uppercase tracking-wide">
+                  📝 Roster Memos
+                </h3>
+                <p className="text-xs font-semibold text-slate-500 mt-0.5">
+                  Store reference notes and comments for planning.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMemoModalOpen(false)}
+                className="rounded-full bg-slate-100 p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition"
+              >
+                <span className="block w-5 h-5 text-center leading-none text-lg font-bold">×</span>
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Month Picker Selection Row */}
+              <div className="flex flex-col gap-1 text-xs">
+                <label htmlFor="memoMonthPicker" className="font-bold text-slate-500 uppercase tracking-wide">
+                  Target Month
+                </label>
+                <input
+                  id="memoMonthPicker"
+                  type="month"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                  value={memoMonth}
+                  onChange={(e) => setMemoMonth(e.target.value)}
+                />
+              </div>
+
+              {/* Memo Content Editor Area */}
+              <div className="flex flex-col gap-1 text-xs">
+                <label htmlFor="memoTextEditor" className="font-bold text-slate-500 uppercase tracking-wide">
+                  Planning Notes
+                </label>
+                <textarea
+                  id="memoTextEditor"
+                  rows={6}
+                  className="w-full rounded-xl border border-slate-200 p-3 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none resize-none"
+                  placeholder={`Write reference notes for ${memoMonth} (e.g., specific leaves, course attendees, roster constraints)...`}
+                  value={memoText}
+                  onChange={(e) => setMemoText(e.target.value)}
+                />
+              </div>
+
+              <div className="mt-6 flex gap-2 border-t border-slate-100 pt-4">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      if (onUpdateSetting) {
+                        await onUpdateSetting(`memo_${memoMonth}`, memoText);
+                      }
+                      setIsMemoModalOpen(false);
+                    } catch (err) {
+                      console.error('Failed to save roster memo:', err);
+                    }
+                  }}
+                  className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-xs font-bold text-white shadow-md hover:bg-indigo-700 transition"
+                >
+                  Save Memo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsMemoModalOpen(false)}
+                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       ), document.body)}

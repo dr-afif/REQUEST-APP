@@ -993,6 +993,8 @@ export default function App() {
               emergencyPhysicians={emergencyPhysicians}
               onSubmitRequest={handleSubmitRequest}
               onDeleteRequest={handleDeleteRequest}
+              settings={settings}
+              onUpdateSetting={handleUpdateSetting}
             />
           </div>
         )}
