@@ -104,8 +104,11 @@ export default function UserSection({
       {/* 🧭 Toggle Bar & Layout Selector */}
       <div className="mb-2 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between animate-fadeIn">
         <div>
-          <h2 className="text-xl font-bold bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">
-            📝 Request Panel
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <span>📝</span>
+            <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">
+              Request Panel
+            </span>
           </h2>
           <p className="text-xs text-slate-500 mt-1">
             Displaying active requests made by team members.
