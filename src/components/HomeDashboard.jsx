@@ -105,7 +105,7 @@ export default function HomeDashboard({
   const myUpcomingDuties = useMemo(() => {
     if (!selectedName) return [];
     const normUser = normalizeForComparison(mapName(selectedName));
-    
+
     // Get master roster baseline shifts for this user
     const baselineShifts = masterRoster.filter(
       (r) => {
@@ -201,14 +201,14 @@ export default function HomeDashboard({
     const [year, month] = todayStr.split('-').map(Number);
     const firstDay = new Date(year, month - 1, 1);
     const startingDayOfWeek = (firstDay.getDay() + 6) % 7; // 0 = Mon, ..., 6 = Sun
-    
+
     const days = [];
-    
+
     // Pad for starting day of week
     for (let i = 0; i < startingDayOfWeek; i++) {
       days.push({ blank: true });
     }
-    
+
     // Days in this month
     const totalDays = new Date(year, month, 0).getDate();
     for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
@@ -217,7 +217,7 @@ export default function HomeDashboard({
       const dateStr = `${year}-${mm}-${dd}`;
       days.push({ blank: false, dayNum, dateStr });
     }
-    
+
     return days;
   }, [todayStr]);
 
@@ -230,27 +230,27 @@ export default function HomeDashboard({
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 md:px-8">
-      
+
       {/* 🚀 Welcome Hero Card */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-tr from-teal-500 via-emerald-600 to-indigo-700 p-6 shadow-xl shadow-indigo-100 text-white sm:p-8">
         <div className="absolute right-0 top-0 h-40 w-40 translate-x-12 -translate-y-12 rounded-full bg-white/10 blur-xl" />
         <div className="relative z-10 flex flex-col justify-between gap-6 sm:flex-row sm:items-center">
           <div>
             <span className="rounded-full bg-white/20 px-3.5 py-1 text-xs font-semibold uppercase tracking-wider backdrop-blur-md">
-              🏥 Medical Staff Hub
+              🏥 ED Staff Hub
             </span>
             <h1 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
               {selectedName ? `Welcome back, ${selectedName}!` : 'Welcome to ED Roster'}
             </h1>
             <p className="mt-2 max-w-md text-emerald-50 text-sm sm:text-base">
-              {selectedName 
-                ? (isGuest 
-                    ? 'Check roster schedules and active requests. Log out and select your profile to submit new shift requests.'
-                    : 'Check your personalized shifts today, approve pending swaps, or submit new shift requests for next month.')
+              {selectedName
+                ? (isGuest
+                  ? 'Check roster schedules and active requests. Log out and select your profile to submit new shift requests.'
+                  : 'Check your personalized shifts today or submit new shift requests for next month.')
                 : 'Please select your name to access your personal dashboard and alerts.'}
             </p>
           </div>
-          
+
           <button
             type="button"
             onClick={() => onNavigate(selectedName && !isGuest ? 'requests' : 'roster')}
@@ -320,145 +320,144 @@ export default function HomeDashboard({
 
       {/* 🏛️ Layout Grid: Clean Centered Single Column Layout */}
       <div className="mt-8 max-w-3xl mx-auto space-y-6">
-          
-          {/* User's "Today's Roster Duty" shift card */}
-          <div className="relative overflow-hidden rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-            {selectedName ? (
-              <>
-                <div className="flex justify-between items-center text-xs text-slate-400 font-bold uppercase tracking-wider">
-                  <span>🗓️ Today's Roster Duty</span>
-                  <span>{formatHeaderDate(todayStr)}</span>
+
+        {/* User's "Today's Roster Duty" shift card */}
+        <div className="relative overflow-hidden rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+          {selectedName ? (
+            <>
+              <div className="flex justify-between items-center text-xs text-slate-400 font-bold uppercase tracking-wider">
+                <span>🗓️ Today's Roster Duty</span>
+                <span>{formatHeaderDate(todayStr)}</span>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between">
+                <div>
+                  <h3 className="text-3xl font-extrabold text-slate-800">
+                    {todayHighlight?.shift}
+                  </h3>
+                  {todayHighlight?.isOverride && (
+                    <span className="mt-2 inline-block rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-600 border border-emerald-100">
+                      REQUESTED SHIFT
+                    </span>
+                  )}
                 </div>
-                
-                <div className="mt-5 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-3xl font-extrabold text-slate-800">
-                      {todayHighlight?.shift}
-                    </h3>
-                    {todayHighlight?.isOverride && (
-                      <span className="mt-2 inline-block rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-600 border border-emerald-100">
-                        REQUESTED SHIFT
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-4xl">
-                    {todayHighlight?.shift.toLowerCase().includes('night') || todayHighlight?.shift.toLowerCase() === 'n'
-                      ? '🌙' 
-                      : todayHighlight?.shift.toLowerCase().includes('off') || todayHighlight?.shift.toLowerCase() === 'off'
+                <div className="text-4xl">
+                  {todayHighlight?.shift.toLowerCase().includes('night') || todayHighlight?.shift.toLowerCase() === 'n'
+                    ? '🌙'
+                    : todayHighlight?.shift.toLowerCase().includes('off') || todayHighlight?.shift.toLowerCase() === 'off'
                       ? '💤'
                       : '☀️'}
-                  </div>
+                </div>
+              </div>
+
+              {todayHighlight?.pending && (
+                <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-1.5 text-xs font-semibold text-indigo-600">
+                  <span className="animate-pulse">⏳</span>
+                  <span>
+                    {todayHighlight.pending.type} shift request is{' '}
+                    <span className="font-bold text-indigo-700 underline">{todayHighlight.pending.status}</span>
+                  </span>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="relative overflow-hidden rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
+              <div className="text-3xl mb-2">👋</div>
+              <h3 className="text-sm font-bold text-slate-700">No Profile Selected</h3>
+              <p className="mt-1 text-xs text-slate-500 max-w-xs mx-auto">
+                Select your name in the dropdown above to view your personalized daily duties and shifts automatically.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* 📅 Personalized Upcoming Duty Preview List (Mini Calendar View) */}
+        {selectedName && (
+          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-bold text-slate-800">🗓️ Your Scheduled Duties</h2>
+              <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full uppercase">
+                {monthName}
+              </span>
+            </div>
+
+            {myUpcomingDuties.length > 0 ? (
+              <div>
+                {/* Calendar weekday headers */}
+                <div className="grid grid-cols-7 gap-1 text-center font-bold text-[10px] text-slate-400 uppercase mb-3">
+                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
+                    <div key={d}>{d}</div>
+                  ))}
                 </div>
 
-                {todayHighlight?.pending && (
-                  <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-1.5 text-xs font-semibold text-indigo-600">
-                    <span className="animate-pulse">⏳</span>
-                    <span>
-                      {todayHighlight.pending.type} shift request is{' '}
-                      <span className="font-bold text-indigo-700 underline">{todayHighlight.pending.status}</span>
-                    </span>
-                  </div>
-                )}
-              </>
+                {/* Calendar cells */}
+                <div className="grid grid-cols-7 gap-2">
+                  {calendarDays.map((day, idx) => {
+                    if (day.blank) {
+                      return <div key={`blank-${idx}`} className="aspect-square" />;
+                    }
+
+                    const duty = myUpcomingDuties.find(d => d.date === day.dateStr);
+                    const shift = duty ? duty.shift : '';
+                    const isToday = day.dateStr === todayStr;
+
+                    let cellStyle = 'bg-slate-50/50 text-slate-300 hover:bg-slate-100/50';
+                    let labelColor = 'text-slate-400';
+                    let shiftBadge = '';
+
+                    if (shift) {
+                      const sLower = shift.toLowerCase();
+                      if (sLower.includes('off') || sLower === 'off') {
+                        cellStyle = 'bg-emerald-50/55 text-emerald-600 hover:bg-emerald-50 border border-emerald-100/45';
+                        labelColor = 'text-emerald-500';
+                        shiftBadge = '💤';
+                      } else if (sLower.includes('night') || sLower === 'n') {
+                        cellStyle = 'bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-800';
+                        labelColor = 'text-slate-400';
+                        shiftBadge = '🌙';
+                      } else if (sLower.includes('am')) {
+                        cellStyle = 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-100';
+                        labelColor = 'text-amber-600';
+                        shiftBadge = 'AM';
+                      } else if (sLower.includes('pm')) {
+                        cellStyle = 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-100';
+                        labelColor = 'text-indigo-600';
+                        shiftBadge = 'PM';
+                      } else {
+                        cellStyle = 'bg-slate-100 text-slate-800 hover:bg-slate-200 border border-slate-200';
+                        labelColor = 'text-slate-500';
+                        shiftBadge = shift.substring(0, 3).toUpperCase();
+                      }
+                    }
+
+                    return (
+                      <div
+                        key={day.dateStr}
+                        title={`${day.dateStr}${shift ? `: ${shift}` : ': No duty'}`}
+                        className={`relative flex flex-col items-center justify-between p-1.5 aspect-square rounded-2xl text-xs font-bold transition-all select-none cursor-pointer ${cellStyle} ${isToday ? 'ring-2 ring-indigo-600 ring-offset-2 scale-105 z-10 shadow-sm' : ''
+                          }`}
+                      >
+                        <span className={`text-[10px] self-start leading-none ${isToday ? 'text-indigo-600 font-extrabold' : labelColor}`}>
+                          {day.dayNum}
+                        </span>
+                        <span className="text-[9px] font-extrabold uppercase mt-auto tracking-tighter truncate max-w-full leading-none mb-0.5">
+                          {shiftBadge}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             ) : (
-              <div className="relative overflow-hidden rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
-                <div className="text-3xl mb-2">👋</div>
-                <h3 className="text-sm font-bold text-slate-700">No Profile Selected</h3>
-                <p className="mt-1 text-xs text-slate-500 max-w-xs mx-auto">
-                  Select your name in the dropdown above to view your personalized daily duties and shifts automatically.
-                </p>
+              <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+                <span className="text-2xl">💤</span>
+                <p className="mt-2 text-sm font-semibold">No scheduled duties found for this month.</p>
               </div>
             )}
           </div>
+        )}
 
-          {/* 📅 Personalized Upcoming Duty Preview List (Mini Calendar View) */}
-          {selectedName && (
-            <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-lg font-bold text-slate-800">🗓️ Your Scheduled Duties</h2>
-                <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full uppercase">
-                  {monthName}
-                </span>
-              </div>
-
-              {myUpcomingDuties.length > 0 ? (
-                <div>
-                  {/* Calendar weekday headers */}
-                  <div className="grid grid-cols-7 gap-1 text-center font-bold text-[10px] text-slate-400 uppercase mb-3">
-                    {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
-                      <div key={d}>{d}</div>
-                    ))}
-                  </div>
-                  
-                  {/* Calendar cells */}
-                  <div className="grid grid-cols-7 gap-2">
-                    {calendarDays.map((day, idx) => {
-                      if (day.blank) {
-                        return <div key={`blank-${idx}`} className="aspect-square" />;
-                      }
-
-                      const duty = myUpcomingDuties.find(d => d.date === day.dateStr);
-                      const shift = duty ? duty.shift : '';
-                      const isToday = day.dateStr === todayStr;
-
-                      let cellStyle = 'bg-slate-50/50 text-slate-300 hover:bg-slate-100/50';
-                      let labelColor = 'text-slate-400';
-                      let shiftBadge = '';
-
-                      if (shift) {
-                        const sLower = shift.toLowerCase();
-                        if (sLower.includes('off') || sLower === 'off') {
-                          cellStyle = 'bg-emerald-50/55 text-emerald-600 hover:bg-emerald-50 border border-emerald-100/45';
-                          labelColor = 'text-emerald-500';
-                          shiftBadge = '💤';
-                        } else if (sLower.includes('night') || sLower === 'n') {
-                          cellStyle = 'bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-800';
-                          labelColor = 'text-slate-400';
-                          shiftBadge = '🌙';
-                        } else if (sLower.includes('am')) {
-                          cellStyle = 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-100';
-                          labelColor = 'text-amber-600';
-                          shiftBadge = 'AM';
-                        } else if (sLower.includes('pm')) {
-                          cellStyle = 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-100';
-                          labelColor = 'text-indigo-600';
-                          shiftBadge = 'PM';
-                        } else {
-                          cellStyle = 'bg-slate-100 text-slate-800 hover:bg-slate-200 border border-slate-200';
-                          labelColor = 'text-slate-500';
-                          shiftBadge = shift.substring(0, 3).toUpperCase();
-                        }
-                      }
-
-                      return (
-                        <div
-                          key={day.dateStr}
-                          title={`${day.dateStr}${shift ? `: ${shift}` : ': No duty'}`}
-                          className={`relative flex flex-col items-center justify-between p-1.5 aspect-square rounded-2xl text-xs font-bold transition-all select-none cursor-pointer ${cellStyle} ${
-                            isToday ? 'ring-2 ring-indigo-600 ring-offset-2 scale-105 z-10 shadow-sm' : ''
-                          }`}
-                        >
-                          <span className={`text-[10px] self-start leading-none ${isToday ? 'text-indigo-600 font-extrabold' : labelColor}`}>
-                            {day.dayNum}
-                          </span>
-                          <span className="text-[9px] font-extrabold uppercase mt-auto tracking-tighter truncate max-w-full leading-none mb-0.5">
-                            {shiftBadge}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-                  <span className="text-2xl">💤</span>
-                  <p className="mt-2 text-sm font-semibold">No scheduled duties found for this month.</p>
-                </div>
-              )}
-            </div>
-          )}
-
-      {/* 
+        {/* 
         NOTE: Hidden "Queue Health" & "Today & Tomorrow Updates" cards "for now"
         The dashboard layout has been centered into a clean single column (max-w-3xl)
         instead of a 3-column desktop grid.

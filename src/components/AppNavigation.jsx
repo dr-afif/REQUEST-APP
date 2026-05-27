@@ -27,7 +27,7 @@ export default function AppNavigation({
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
-    { id: 'roster', label: 'Current Roster', icon: '📅' },
+    { id: 'roster', label: 'Full Roster', icon: '📅' },
     { id: 'requests', label: 'Request Panel', icon: '📝' },
     { id: 'updates', label: 'Updates', icon: '🔔' },
     ...(isAdmin ? [{ id: 'admin', label: 'Admin Panel', icon: '🔑' }] : []),

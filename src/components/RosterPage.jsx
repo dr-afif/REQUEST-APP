@@ -1349,7 +1349,7 @@ export default function RosterPage({
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-extrabold flex items-center gap-2">
               <span>📅</span>
-              <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Current Roster</span>
+              <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Full Roster</span>
             </h1>
           </div>
           <p className="text-sm text-slate-500 mt-2">
