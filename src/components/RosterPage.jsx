@@ -89,6 +89,7 @@ export default function RosterPage({
   emergencyPhysicians = [],
 }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeCommentDetail, setActiveCommentDetail] = useState(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isStandbyEditMode, setIsStandbyEditMode] = useState(false);
   const [isExtendedEditMode, setIsExtendedEditMode] = useState(false);
@@ -1591,7 +1592,7 @@ export default function RosterPage({
                         <th
                           key={day.dateStr}
                           className={`whitespace-nowrap border-b border-slate-200 px-2.5 py-3 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
-                            day.dayName === 'SUN' ? 'border-r-2 border-r-slate-500' : 'border-r border-slate-700/40'
+                            day.dayName === 'SUN' ? 'border-r-2 border-r-slate-500 border-b-slate-700/40' : 'border-r border-slate-700/40'
                           } ${
                             isHoliday ? 'bg-rose-950 text-rose-100 ring-1 ring-rose-900/20' : isWeekendDay ? 'bg-slate-900' : 'bg-slate-800'
                           }`}
@@ -1661,6 +1662,8 @@ export default function RosterPage({
                           const cleanVal = val ? parseShiftValue(val).cleanShift : '';
                           const isRequested = !!(reqData && cleanVal.toUpperCase() === reqData.shift.toUpperCase());
                           const hasOverride = reqData && cleanVal.toUpperCase() !== reqData.shift.toUpperCase();
+                          const hasIndicator = (reqData && reqData.comment) || hasOverride;
+                          const isCellInteractive = hasIndicator && !isEditMode && !isStandbyEditMode && !isExtendedEditMode;
 
                           let cellTooltip = '';
                           if (reqData) {
@@ -1677,9 +1680,23 @@ export default function RosterPage({
                           return (
                             <td
                               key={day.dateStr}
+                              onClick={() => {
+                                if (isCellInteractive) {
+                                  setActiveCommentDetail({
+                                    doctorName: name,
+                                    dateStr: day.dateStr,
+                                    dayName: day.dayName,
+                                    dayNum: day.dayNum,
+                                    val,
+                                    comment: reqData?.comment || '',
+                                    requestedShift: reqData?.shift || '',
+                                    hasOverride,
+                                  });
+                                }
+                              }}
                               className={`border-b p-1.5 h-10 min-w-[3.8rem] align-middle ${
-                                day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300' : 'border-r border-slate-100'
-                              } ${cellBg}`}
+                                day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300 border-b-slate-100' : 'border-r border-slate-100'
+                              } ${cellBg} ${isCellInteractive ? 'cursor-pointer hover:bg-indigo-50/30' : ''}`}
                             >
                               <div className="relative w-full h-full flex items-center justify-center">
                                 {isStandbyEditMode ? (
@@ -1816,7 +1833,7 @@ export default function RosterPage({
                       <th
                         key={day.dateStr}
                         className={`whitespace-nowrap border-b px-2.5 py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
-                          day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300' : 'border-r border-slate-100'
+                          day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300 border-b-slate-100' : 'border-r border-slate-100'
                         } ${
                           isHoliday ? 'bg-rose-100/60 text-rose-800' : isWeekendDay ? 'bg-slate-200/60' : 'bg-slate-50'
                         }`}
@@ -1902,7 +1919,7 @@ export default function RosterPage({
                           }
 
                           let cellClass = `border-b p-1.5 h-8 min-w-[3.8rem] align-middle transition-colors font-bold ${
-                            day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300' : 'border-r border-slate-100'
+                            day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300 border-b-slate-100' : 'border-r border-slate-100'
                           }`;
                           if (hasAlert) {
                             cellClass += ` bg-rose-50 text-rose-700 ring-1 ring-rose-200`;
@@ -2201,6 +2218,91 @@ export default function RosterPage({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ), document.body)}
+
+      {activeCommentDetail && createPortal((
+        <div 
+          className="fixed inset-0 z-50 flex items-end justify-center sm:items-center bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn" 
+          onClick={() => setActiveCommentDetail(null)}
+        >
+          <div 
+            className="w-full max-w-md rounded-t-3xl sm:rounded-2xl border border-slate-100 bg-white p-6 shadow-2xl animate-slideUp text-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Handle bar for mobile bottom sheet cue */}
+            <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-4 sm:hidden"></div>
+
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
+              <div>
+                <span className="text-[9px] font-extrabold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+                  Roster Details
+                </span>
+                <h3 className="text-base font-extrabold text-slate-800 mt-1 uppercase tracking-wide">
+                  {activeCommentDetail.doctorName}
+                </h3>
+                <p className="text-xs font-semibold text-slate-500 mt-0.5">
+                  {activeCommentDetail.dayNum} {activeCommentDetail.dayName} · {activeCommentDetail.dateStr}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveCommentDetail(null)}
+                className="rounded-full bg-slate-100 p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition"
+              >
+                <span className="block w-5 h-5 text-center leading-none text-lg font-bold">×</span>
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Assigned Shift Status */}
+              <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-3">
+                <span className="font-bold text-slate-500 uppercase tracking-wide">Assigned Shift</span>
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold ${getShiftBadgeClass(activeCommentDetail.val)}`}>
+                  {parseShiftValue(activeCommentDetail.val).cleanShift || 'OFF'}
+                  {parseShiftValue(activeCommentDetail.val).isStandby && (
+                    <span className="inline-flex items-center justify-center px-1 rounded-full text-[9px] font-extrabold bg-amber-500 text-white min-w-[12px] h-[12px] shadow-sm select-none" title="Standby">S</span>
+                  )}
+                  {parseShiftValue(activeCommentDetail.val).isExtended && (
+                    <span className="inline-flex items-center justify-center px-1 rounded-full text-[9px] font-extrabold bg-blue-500 text-white min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">EX</span>
+                  )}
+                </span>
+              </div>
+
+              {/* Assignment Override Details */}
+              {activeCommentDetail.hasOverride && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4 animate-fadeIn">
+                  <h4 className="text-xs font-extrabold text-amber-800 uppercase tracking-wider flex items-center gap-1.5 mb-1.5">
+                    <span>⚠️</span> Assignment Override
+                  </h4>
+                  <div className="text-xs text-amber-900 space-y-1">
+                    <p>This assignment differs from the request submitted by the doctor.</p>
+                    <p className="font-semibold">Requested: <span className="bg-amber-100 px-1.5 py-0.5 rounded font-extrabold">{activeCommentDetail.requestedShift}</span></p>
+                  </div>
+                </div>
+              )}
+
+              {/* Request Comments */}
+              {activeCommentDetail.comment && (
+                <div className="rounded-2xl border border-purple-200 bg-purple-50/50 p-4 animate-fadeIn">
+                  <h4 className="text-xs font-extrabold text-purple-800 uppercase tracking-wider flex items-center gap-1.5 mb-1.5">
+                    <span>💬</span> Request Comment
+                  </h4>
+                  <p className="text-xs text-purple-900 italic font-semibold leading-relaxed">
+                    "{activeCommentDetail.comment}"
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setActiveCommentDetail(null)}
+              className="mt-6 w-full rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white shadow-md hover:bg-slate-800 transition"
+            >
+              Close
+            </button>
           </div>
         </div>
       ), document.body)}
