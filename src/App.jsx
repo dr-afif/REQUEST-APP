@@ -500,25 +500,42 @@ export default function App() {
 
   // Handle Excel Baseline Uploads
   const handleUploadBaseline = async (rows) => {
+    const previousMasterRoster = [...masterRoster];
+    
+    // Optimistically update masterRoster state immediately
+    const validatedRows = rows.map((r) => ({
+      Name: r.name,
+      name: r.name,
+      Date: r.date,
+      date: r.date,
+      Shift: r.shift,
+      shift: r.shift,
+    }));
+    setMasterRoster(validatedRows);
+
     const toastId = addToast('🔄 Uploading roster baseline to Google Sheets...', 'info', Infinity);
-    try {
-      await uploadMasterRoster(rows);
-      updateToast(toastId, {
-        message: '✅ Roster baseline uploaded successfully!',
-        type: 'success',
-        duration: 3000,
-      });
-      // Give Google Sheets ~1.5 s to commit the write before reading back
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      await loadAllData();
-    } catch (err) {
-      console.error('Failed to upload baseline:', err);
-      updateToast(toastId, {
-        message: `❌ Upload failed: ${err.message || 'Network error'}`,
-        type: 'error',
-        duration: 5000,
-      });
-    }
+    
+    (async () => {
+      try {
+        await uploadMasterRoster(rows);
+        updateToast(toastId, {
+          message: '✅ Roster baseline uploaded successfully!',
+          type: 'success',
+          duration: 3000,
+        });
+        // Give Google Sheets ~1.5 s to commit the write before reading back
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await loadAllData();
+      } catch (err) {
+        console.error('Failed to upload baseline:', err);
+        setMasterRoster(previousMasterRoster);
+        updateToast(toastId, {
+          message: `❌ Upload failed: ${err.message || 'Network error'}. Reverted.`,
+          type: 'error',
+          duration: 5000,
+        });
+      }
+    })();
   };
 
   // Handle Block Consolidation Additions

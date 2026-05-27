@@ -98,8 +98,6 @@ export default function RosterPage({
   const [isStandbyEditMode, setIsStandbyEditMode] = useState(false);
   const [isExtendedEditMode, setIsExtendedEditMode] = useState(false);
   const [editedGrid, setEditedGrid] = useState({});
-  const [isSaving, setIsSaving] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState('calendar'); // 'calendar' or 'table'
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportSettings, setExportSettings] = useState({
@@ -1204,42 +1202,30 @@ export default function RosterPage({
   };
 
   const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      const flatRows = [];
-      Object.keys(editedGrid).forEach((dateStr) => {
-        Object.keys(editedGrid[dateStr]).forEach((shift) => {
-          const namesStr = editedGrid[dateStr][shift];
-          if (namesStr) {
-            namesStr.split(/[\n,]+/).forEach(n => {
-              const name = n.trim();
-              if (name) {
-                flatRows.push({ name, date: dateStr, shift });
-              }
-            });
-          }
-        });
+    const flatRows = [];
+    Object.keys(editedGrid).forEach((dateStr) => {
+      Object.keys(editedGrid[dateStr]).forEach((shift) => {
+        const namesStr = editedGrid[dateStr][shift];
+        if (namesStr) {
+          namesStr.split(/[\n,]+/).forEach(n => {
+            const name = n.trim();
+            if (name) {
+              flatRows.push({ name, date: dateStr, shift });
+            }
+          });
+        }
       });
-      
-      if (!flatRows.length && !confirm("You are about to save an EMPTY roster. This will delete all shifts for the month. Continue?")) {
-         setIsSaving(false);
-         return;
-      }
-      
-      await onUploadMasterRoster(flatRows);
-      setIsEditMode(false);
-      setIsStandbyEditMode(false);
-      setIsSaving(false);
-      // Show refreshing state while App.jsx reloads from Sheets
-      setIsRefreshing(true);
-      // App.jsx already has a 1.5s delay built in; wait a bit extra to be safe
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      setIsRefreshing(false);
-    } catch (err) {
-      alert(`Save failed: ${err.message}`);
-      setIsSaving(false);
-      setIsRefreshing(false);
+    });
+    
+    if (!flatRows.length && !confirm("You are about to save an EMPTY roster. This will delete all shifts for the month. Continue?")) {
+       return;
     }
+    
+    onUploadMasterRoster(flatRows);
+    setIsEditMode(false);
+    setIsStandbyEditMode(false);
+    setIsExtendedEditMode(false);
+    setEditedGrid({});
   };
 
   const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
@@ -1357,7 +1343,6 @@ export default function RosterPage({
             {!isStandbyEditMode && !isExtendedEditMode && (
               <button
                 onClick={toggleEditMode}
-                disabled={isSaving}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
                   isEditMode 
                     ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
@@ -1370,7 +1355,6 @@ export default function RosterPage({
             {!isEditMode && !isExtendedEditMode && (
               <button
                 onClick={toggleStandbyEditMode}
-                disabled={isSaving}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
                   isStandbyEditMode 
                     ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
@@ -1383,7 +1367,6 @@ export default function RosterPage({
             {!isEditMode && !isStandbyEditMode && (
               <button
                 onClick={toggleExtendedEditMode}
-                disabled={isSaving}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
                   isExtendedEditMode 
                     ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
@@ -1396,10 +1379,9 @@ export default function RosterPage({
             {(isEditMode || isStandbyEditMode || isExtendedEditMode) && (
               <button
                 onClick={handleSave}
-                disabled={isSaving || isRefreshing}
                 className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-70"
               >
-                {isSaving ? '💾 Saving...' : isRefreshing ? '🔄 Refreshing...' : '💾 Save Changes'}
+                💾 Save Changes
               </button>
             )}
           </div>
