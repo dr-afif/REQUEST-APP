@@ -1591,6 +1591,8 @@ export default function RosterPage({
                         <th
                           key={day.dateStr}
                           className={`whitespace-nowrap border-b border-slate-200 px-2.5 py-3 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
+                            day.dayName === 'SUN' ? 'border-r-2 border-r-slate-500' : 'border-r border-slate-700/40'
+                          } ${
                             isHoliday ? 'bg-rose-950 text-rose-100 ring-1 ring-rose-900/20' : isWeekendDay ? 'bg-slate-900' : 'bg-slate-800'
                           }`}
                           title={isHoliday ? holidayName : undefined}
@@ -1675,7 +1677,9 @@ export default function RosterPage({
                           return (
                             <td
                               key={day.dateStr}
-                              className={`border-b border-r border-slate-100 p-1.5 h-10 min-w-[3.8rem] align-middle ${cellBg}`}
+                              className={`border-b p-1.5 h-10 min-w-[3.8rem] align-middle ${
+                                day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300' : 'border-r border-slate-100'
+                              } ${cellBg}`}
                             >
                               <div className="relative w-full h-full flex items-center justify-center">
                                 {isStandbyEditMode ? (
@@ -1811,7 +1815,9 @@ export default function RosterPage({
                     return (
                       <th
                         key={day.dateStr}
-                        className={`whitespace-nowrap border-b border-slate-100 px-2.5 py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
+                        className={`whitespace-nowrap border-b px-2.5 py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs min-w-[3.8rem] ${
+                          day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300' : 'border-r border-slate-100'
+                        } ${
                           isHoliday ? 'bg-rose-100/60 text-rose-800' : isWeekendDay ? 'bg-slate-200/60' : 'bg-slate-50'
                         }`}
                         title={isHoliday ? holidayName : undefined}
@@ -1895,7 +1901,9 @@ export default function RosterPage({
                             alertMsg = `Alert: Exceeds Total Leave maximum of ${tallyThresholds.totalLeaveMax}`;
                           }
 
-                          let cellClass = `border-b border-r border-slate-100 p-1.5 h-8 min-w-[3.8rem] align-middle transition-colors font-bold`;
+                          let cellClass = `border-b p-1.5 h-8 min-w-[3.8rem] align-middle transition-colors font-bold ${
+                            day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300' : 'border-r border-slate-100'
+                          }`;
                           if (hasAlert) {
                             cellClass += ` bg-rose-50 text-rose-700 ring-1 ring-rose-200`;
                           } else {
