@@ -823,6 +823,11 @@ export default function RosterPage({
 
   const tallyData = useMemo(() => {
     const dateMap = new Map();
+    const inactiveNames = new Set(
+      teamMembers
+        .filter(m => typeof m === 'object' && m.active === false)
+        .map(m => normalizeForComparison(m.name))
+    );
     
     // Get all standard/configured shift types, normalized (avoiding duplicates like ON/ON1/ON2/N which are grouped under NIGHT)
     const baseShifts = new Set(['AM', 'PM', 'NIGHT']);
@@ -867,15 +872,24 @@ export default function RosterPage({
           if (shiftType === 'ON' || shiftType === 'ON1' || shiftType === 'ON2' || shiftType === 'N') {
             shiftType = 'NIGHT';
           }
+
+          // If inactive, only count active shifts (AM, PM, NIGHT, PN, OH), ignore leave shifts (AL, OFF, etc.)
+          const nameKey = normalizeForComparison(name);
+          const isInactive = inactiveNames.has(nameKey);
+          const isActiveShift = ['AM', 'PM', 'NIGHT', 'PN', 'OH'].includes(shiftType);
+          if (isInactive && !isActiveShift) {
+            return;
+          }
+
           dayTally.set(shiftType, (dayTally.get(shiftType) || 0) + 1);
           activeShiftTypes.add(shiftType);
         }
       });
 
-      // Calculate "TOTAL LEAVE" for this day: sum of all non-AM/PM/NIGHT shift types
+      // Calculate "TOTAL LEAVE" for this day: sum of all non-AM/PM/NIGHT/PN/OH shift types
       let totalLeaveCount = 0;
       dayTally.forEach((count, sType) => {
-        if (sType !== 'AM' && sType !== 'PM' && sType !== 'NIGHT') {
+        if (sType !== 'AM' && sType !== 'PM' && sType !== 'NIGHT' && sType !== 'PN' && sType !== 'OH') {
           totalLeaveCount += count;
         }
       });
@@ -896,7 +910,7 @@ export default function RosterPage({
       tallyMap: dateMap,
       shifts: sortedShifts,
     };
-  }, [daysInMonthList, names, isEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, dropdownShifts]);
+  }, [daysInMonthList, names, isEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, dropdownShifts, teamMembers]);
 
   const handleKeyDown = (e, dateStr, shiftCol, dayIndex, shiftIndex) => {
     const key = e.key;

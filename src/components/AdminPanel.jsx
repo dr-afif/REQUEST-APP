@@ -1517,7 +1517,7 @@ export default function AdminPanel({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {Object.keys(userMonthlyUsage.data).sort().map(userName => {
+              {names.map(userName => {
                 const stats = userMonthlyUsage.data[userName]?.[userMonthlyUsage.monthKey] || { count: 0, weekendCount: 0 };
                 const count = stats.count;
                 const weekendCount = stats.weekendCount;
