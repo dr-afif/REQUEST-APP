@@ -896,11 +896,24 @@ export default function RosterPage({
       dayTally.set('TOTAL LEAVE', totalLeaveCount);
     });
 
-    const priority = { AM: 1, PM: 2, NIGHT: 3 };
+    const getShiftIndex = (shiftType) => {
+      let lookupType = shiftType;
+      if (lookupType === 'NIGHT') {
+        const nightIndex = dropdownShifts.findIndex(s => {
+          const up = s.trim().toUpperCase();
+          return up === 'NIGHT' || up === 'N' || up === 'ON' || up === 'ON1' || up === 'ON2';
+        });
+        if (nightIndex !== -1) return nightIndex;
+      }
+      return dropdownShifts.findIndex(s => s.trim().toUpperCase() === lookupType);
+    };
+
     const sortedShifts = Array.from(activeShiftTypes).sort((a, b) => {
-      const pA = priority[a] || 99;
-      const pB = priority[b] || 99;
-      if (pA !== pB) return pA - pB;
+      const idxA = getShiftIndex(a);
+      const idxB = getShiftIndex(b);
+      const valA = idxA !== -1 ? idxA : 999;
+      const valB = idxB !== -1 ? idxB : 999;
+      if (valA !== valB) return valA - valB;
       return a.localeCompare(b);
     });
 
