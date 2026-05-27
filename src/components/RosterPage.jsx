@@ -432,13 +432,22 @@ export default function RosterPage({
   }, [daysInMonthList, rosterGrid, isEditMode, editedGrid, masterRoster]);
 
   const exportContacts = useMemo(() => {
+    const resilientNormalize = (nameStr) => {
+      if (typeof nameStr !== 'string') return '';
+      let s = nameStr.trim().toLowerCase();
+      // Strip common "dr." / "dr " prefix
+      s = s.replace(/^dr\.?\s+/, '').replace(/^dr\b/, '');
+      // Strip all non-alphanumeric characters (spaces, periods, dashes)
+      return s.replace(/[^a-z0-9]/g, '');
+    };
+
     const buildDirectoryLookup = (members) => {
       const contactLookup = new Map();
       const memberOrder = new Map();
       members.forEach((member, index) => {
         const name = typeof member === 'string' ? member : member?.name;
         if (!name) return;
-        const key = normalizeForComparison(name);
+        const key = resilientNormalize(name);
         memberOrder.set(key, index);
         contactLookup.set(key, {
           name,
@@ -460,15 +469,15 @@ export default function RosterPage({
       return values
         .flatMap(splitRosterNames)
         .filter((name) => {
-          const key = normalizeForComparison(name);
+          const key = resilientNormalize(name);
           if (!key || seen.has(key)) return false;
           seen.add(key);
           return true;
         })
-        .map((name) => contactLookup.get(normalizeForComparison(name)) || { name, fullName: '', phone: '' })
+        .map((name) => contactLookup.get(resilientNormalize(name)) || { name, fullName: '', phone: '' })
         .sort((a, b) => {
-          const aOrder = memberOrder.get(normalizeForComparison(a.name)) ?? Number.MAX_SAFE_INTEGER;
-          const bOrder = memberOrder.get(normalizeForComparison(b.name)) ?? Number.MAX_SAFE_INTEGER;
+          const aOrder = memberOrder.get(resilientNormalize(a.name)) ?? Number.MAX_SAFE_INTEGER;
+          const bOrder = memberOrder.get(resilientNormalize(b.name)) ?? Number.MAX_SAFE_INTEGER;
           return aOrder - bOrder || a.name.localeCompare(b.name);
         });
     };
