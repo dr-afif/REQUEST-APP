@@ -432,61 +432,30 @@ export default function RosterPage({
   }, [daysInMonthList, rosterGrid, isEditMode, editedGrid, masterRoster]);
 
   const exportContacts = useMemo(() => {
-    const resilientNormalize = (nameStr) => {
-      if (typeof nameStr !== 'string') return '';
-      let s = nameStr.trim().toLowerCase();
-      // Strip common "dr." / "dr " prefix
-      s = s.replace(/^dr\.?\s+/, '').replace(/^dr\b/, '');
-      // Strip all non-alphanumeric characters (spaces, periods, dashes)
-      return s.replace(/[^a-z0-9]/g, '');
-    };
-
-    const buildDirectoryLookup = (members) => {
-      const contactLookup = new Map();
-      const memberOrder = new Map();
-      members.forEach((member, index) => {
-        const name = typeof member === 'string' ? member : member?.name;
-        if (!name) return;
-        const key = resilientNormalize(name);
-        memberOrder.set(key, index);
-        contactLookup.set(key, {
-          name,
-          fullName: typeof member === 'string' ? '' : member?.fullName || '',
-          phone: typeof member === 'string' ? '' : member?.phone || '',
-        });
-      });
-      return { contactLookup, memberOrder };
-    };
-
-    const teamDirectory = buildDirectoryLookup(teamMembers);
-    const epDirectory = emergencyPhysicians.length
-      ? buildDirectoryLookup(emergencyPhysicians)
-      : teamDirectory;
-
-    const buildContacts = (values, directory) => {
-      const { contactLookup, memberOrder } = directory;
-      const seen = new Set();
-      return values
-        .flatMap(splitRosterNames)
-        .filter((name) => {
-          const key = resilientNormalize(name);
-          if (!key || seen.has(key)) return false;
-          seen.add(key);
-          return true;
+    const mapDirectoryList = (members) => {
+      return members
+        .map((member) => {
+          const name = typeof member === 'string' ? member : member?.name;
+          if (!name) return null;
+          return {
+            name,
+            fullName: typeof member === 'string' ? '' : member?.fullName || '',
+            phone: typeof member === 'string' ? '' : member?.phone || '',
+          };
         })
-        .map((name) => contactLookup.get(resilientNormalize(name)) || { name, fullName: '', phone: '' })
-        .sort((a, b) => {
-          const aOrder = memberOrder.get(resilientNormalize(a.name)) ?? Number.MAX_SAFE_INTEGER;
-          const bOrder = memberOrder.get(resilientNormalize(b.name)) ?? Number.MAX_SAFE_INTEGER;
-          return aOrder - bOrder || a.name.localeCompare(b.name);
-        });
+        .filter(Boolean);
     };
+
+    const moList = mapDirectoryList(teamMembers);
+    const epList = emergencyPhysicians.length
+      ? mapDirectoryList(emergencyPhysicians)
+      : moList;
 
     return {
-      mo: buildContacts(exportRows.flatMap((row) => [row.moAm, row.moPm, row.moNight]), teamDirectory),
-      ep: buildContacts(exportRows.flatMap((row) => [row.epAm, row.epOncall]), epDirectory),
+      mo: moList,
+      ep: epList,
     };
-  }, [exportRows, teamMembers, emergencyPhysicians]);
+  }, [teamMembers, emergencyPhysicians]);
 
   const isMatch = (name) => {
     if (!searchQuery) return false;
