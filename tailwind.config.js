@@ -23,6 +23,8 @@ export default {
     'bg-rose-50/40',
     // Weekend slate highlight classes
     'bg-slate-900', 'bg-slate-100/80', 'bg-slate-200/60',
+    // Request comment indicator classes
+    'bg-purple-400', 'bg-purple-500',
     // Calendar view row-level holiday classes
     'bg-rose-50/60', 'hover:bg-rose-100/50',
     'text-rose-700', 'text-rose-500',
