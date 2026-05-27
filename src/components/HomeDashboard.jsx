@@ -46,34 +46,71 @@ export default function HomeDashboard({
     ).length;
   }, [requests]);
 
+  // Helper to determine shift for the selected user on a specific date (aligns with table view logic)
+  const getResolvedShiftForDate = (dateStr) => {
+    if (!selectedName) return null;
+    const normUser = normalizeForComparison(mapName(selectedName));
+
+    // 1. Get baseline shift from masterRoster
+    const baseline = masterRoster.find(
+      (s) => {
+        const nameRaw = mapName(s.Name || s.name || '');
+        const rawDate = s.Date || s.date;
+        return normalizeForComparison(nameRaw) === normUser && toIsoDate(rawDate) === dateStr;
+      }
+    );
+    const baselineShift = baseline ? (baseline.Shift || baseline.shift) : null;
+
+    // 2. Find active requests
+    const activeReqs = requests.filter((r) => {
+      const nameRaw = mapName(r.Name || r.name || '');
+      const rawDate = r.Date || r.date;
+      const status = String(r.status || r.Status || '').toLowerCase();
+      const rType = r.RequestType || r.requestType || 'Leave';
+      const isCustom = String(rType).toLowerCase() === 'admincomment';
+      return (
+        normalizeForComparison(nameRaw) === normUser &&
+        toIsoDate(rawDate) === dateStr &&
+        status === 'active' &&
+        !isCustom
+      );
+    });
+
+    const approvedReq = activeReqs.find((r) => r.ApprovalStatus === 'Approved');
+    const pendingAdminReq = activeReqs.find((r) => r.ApprovalStatus === 'Pending Admin');
+
+    if (approvedReq) {
+      return {
+        shift: approvedReq.Request || approvedReq.request,
+        isOverride: !!baselineShift,
+      };
+    }
+
+    if (baselineShift) {
+      return {
+        shift: baselineShift,
+        isOverride: false,
+      };
+    }
+
+    if (pendingAdminReq) {
+      return {
+        shift: pendingAdminReq.Request || pendingAdminReq.request,
+        isOverride: false,
+      };
+    }
+
+    return null;
+  };
+
   // 3. Today's shift highlight for the current user
   const todayHighlight = useMemo(() => {
     if (!selectedName) return null;
     const normUser = normalizeForComparison(mapName(selectedName));
 
-    // Get baseline shift
-    const baseline = masterRoster.find(
-      (s) => {
-        const nameRaw = mapName(s.Name || s.name || '');
-        const rawDate = s.Date || s.date;
-        return normalizeForComparison(nameRaw) === normUser && toIsoDate(rawDate) === todayStr;
-      }
-    );
-    const baselineShift = baseline ? (baseline.Shift || baseline.shift) : null;
+    const resolved = getResolvedShiftForDate(todayStr);
 
-    // Get active approved request overrides
-    const approvedRequest = requests.find(
-      (r) => {
-        const nameRaw = mapName(r.Name || r.name || '');
-        const rawDate = r.Date || r.date;
-        return normalizeForComparison(nameRaw) === normUser &&
-          toIsoDate(rawDate) === todayStr &&
-          r.status?.toLowerCase() === 'active' &&
-          r.ApprovalStatus === 'Approved';
-      }
-    );
-
-    // Get pending request overrides
+    // Get pending request overrides (for status banner)
     const pendingRequest = requests.find(
       (r) => {
         const nameRaw = mapName(r.Name || r.name || '');
@@ -87,12 +124,10 @@ export default function HomeDashboard({
       }
     );
 
-    const shift = approvedRequest ? (approvedRequest.Request || approvedRequest.request) : baselineShift;
-
     return {
       date: todayStr,
-      shift: shift || 'No Duty 💤',
-      isOverride: !!approvedRequest,
+      shift: resolved ? resolved.shift : 'No Duty 💤',
+      isOverride: resolved ? resolved.isOverride : false,
       pending: pendingRequest ? {
         status: pendingRequest.ApprovalStatus || pendingRequest.approvalStatus,
         partner: pendingRequest.SwapPartner || pendingRequest.swapPartner,
@@ -101,36 +136,34 @@ export default function HomeDashboard({
     };
   }, [selectedName, masterRoster, requests, todayStr]);
 
-  // 4. User's current month duty list (strictly from finalised master roster)
+  // 4. User's current month duty list (populating all shift types)
   const myUpcomingDuties = useMemo(() => {
     if (!selectedName) return [];
-    const normUser = normalizeForComparison(mapName(selectedName));
-
-    // Get master roster baseline shifts for this user
-    const baselineShifts = masterRoster.filter(
-      (r) => {
-        const nameRaw = mapName(r.Name || r.name || '');
-        return normalizeForComparison(nameRaw) === normUser;
-      }
-    );
-
-    // Combine baseline shifts
-    const datesMap = {};
-    baselineShifts.forEach((s) => {
-      const rawDate = s.Date || s.date;
-      const dateStr = toIsoDate(rawDate);
-      if (dateStr) {
-        datesMap[dateStr] = { date: dateStr, shift: s.Shift || s.shift, isOverride: false };
-      }
-    });
 
     // Extract current year and month from todayStr (format: YYYY-MM-DD)
     const currentYearMonth = todayStr.substring(0, 7);
+    const [year, month] = todayStr.split('-').map(Number);
 
-    // Filter by current month and sort by date ascending
-    return Object.values(datesMap)
-      .filter((duty) => duty.date.startsWith(currentYearMonth))
-      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    // Generate all dates for the current month
+    const totalDays = new Date(year, month, 0).getDate();
+    const list = [];
+
+    for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
+      const dd = String(dayNum).padStart(2, '0');
+      const mm = String(month).padStart(2, '0');
+      const dateStr = `${year}-${mm}-${dd}`;
+
+      const resolved = getResolvedShiftForDate(dateStr);
+      if (resolved) {
+        list.push({
+          date: dateStr,
+          shift: resolved.shift,
+          isOverride: resolved.isOverride,
+        });
+      }
+    }
+
+    return list;
   }, [selectedName, masterRoster, requests, todayStr]);
 
   // 5. Compute "updates/activity related to today and tomorrow"
@@ -342,9 +375,18 @@ export default function HomeDashboard({
                   )}
                 </div>
                 <div className="text-4xl">
-                  {todayHighlight?.shift.toLowerCase().includes('night') || todayHighlight?.shift.toLowerCase() === 'n'
+                  {todayHighlight?.shift.toLowerCase().includes('night') ||
+                  todayHighlight?.shift.toLowerCase() === 'n' ||
+                  todayHighlight?.shift.toLowerCase() === 'on' ||
+                  todayHighlight?.shift.toLowerCase() === 'on1' ||
+                  todayHighlight?.shift.toLowerCase() === 'on2'
                     ? '🌙'
-                    : todayHighlight?.shift.toLowerCase().includes('off') || todayHighlight?.shift.toLowerCase() === 'off'
+                    : todayHighlight?.shift.toLowerCase().includes('off') ||
+                      todayHighlight?.shift.toLowerCase() === 'off' ||
+                      todayHighlight?.shift.toLowerCase() === 'al' ||
+                      todayHighlight?.shift.toLowerCase() === 'mc' ||
+                      todayHighlight?.shift.toLowerCase() === 'course' ||
+                      todayHighlight?.shift.toLowerCase().includes('leave')
                       ? '💤'
                       : '☀️'}
                 </div>
@@ -411,10 +453,10 @@ export default function HomeDashboard({
                         cellStyle = 'bg-emerald-50/55 text-emerald-600 hover:bg-emerald-50 border border-emerald-100/45';
                         labelColor = 'text-emerald-500';
                         shiftBadge = '💤';
-                      } else if (sLower.includes('night') || sLower === 'n') {
+                      } else if (sLower.includes('night') || sLower === 'n' || sLower === 'on' || sLower === 'on1' || sLower === 'on2') {
                         cellStyle = 'bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-800';
                         labelColor = 'text-slate-400';
-                        shiftBadge = '🌙';
+                        shiftBadge = (sLower.includes('night') || sLower === 'n') ? '🌙' : shift.toUpperCase();
                       } else if (sLower.includes('am')) {
                         cellStyle = 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-100';
                         labelColor = 'text-amber-600';
