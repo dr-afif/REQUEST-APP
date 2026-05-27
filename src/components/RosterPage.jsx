@@ -1789,7 +1789,8 @@ export default function RosterPage({
         </div>
 
         {/* 📊 Shift Distribution Tally Card */}
-        <div className="mt-6 rounded-3xl border border-slate-150/70 bg-white p-1 shadow-sm overflow-hidden transition-all duration-300">
+        {isAdmin && (
+          <div className="mt-6 rounded-3xl border border-slate-150/70 bg-white p-1 shadow-sm overflow-hidden transition-all duration-300">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
               <span>📊</span> Shift Distribution Tally
@@ -1928,9 +1929,11 @@ export default function RosterPage({
             </table>
           </div>
         </div>
+        )}
 
         {/* 👤 Individual Member Shift Tally Card */}
-        <div className="mt-6 rounded-3xl border border-slate-150/70 bg-white shadow-sm overflow-hidden transition-all duration-300">
+        {isAdmin && (
+          <div className="mt-6 rounded-3xl border border-slate-150/70 bg-white shadow-sm overflow-hidden transition-all duration-300">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
               <span>👤</span> Individual Member Shift Tally
@@ -2017,6 +2020,7 @@ export default function RosterPage({
             </table>
           </div>
         </div>
+        )}
 
         {/* ⚙️ Tally Alert Threshold Settings Card */}
         {isAdmin && (
