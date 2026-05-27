@@ -113,13 +113,26 @@ export default function RosterPage({
     } catch (e) {
       console.error(e);
     }
-    return {
+    const defaultThresholds = {
       amMin: 1,
       pmMin: 1,
       nightMin: 1,
       nightMax: 2,
-      totalLeaveMax: 3,
+      totalLeaveMax: 4,
     };
+    try {
+      const saved = localStorage.getItem('rosterTallyThresholds');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.totalLeaveMax === 3) {
+          parsed.totalLeaveMax = 4;
+        }
+        return { ...defaultThresholds, ...parsed };
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return defaultThresholds;
   });
 
   useEffect(() => {
@@ -176,6 +189,7 @@ export default function RosterPage({
         shift: requestedShift,
         type: r.RequestType || r.requestType || 'Leave',
         approvalStatus: appStatus,
+        comment: String(r.Comment || r.comment || '').trim(),
       });
     });
     return map;
@@ -1224,30 +1238,6 @@ export default function RosterPage({
             </button>
           </div>
         </div>
-
-        {/* 🔍 Premium Interactive Name Highlighter */}
-        {!isEditMode && (
-          <div className="relative max-w-xs w-full">
-            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
-              🔍
-            </span>
-            <input
-              type="text"
-              className="w-full pl-10 pr-4 py-2 text-xs font-semibold rounded-2xl border border-slate-200 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-150 focus:border-indigo-400 shadow-sm transition-all"
-              placeholder="Highlight doctor's name..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 font-bold"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {/* 🧭 Tab Control */}
@@ -1671,8 +1661,13 @@ export default function RosterPage({
                           const hasOverride = reqData && cleanVal.toUpperCase() !== reqData.shift.toUpperCase();
 
                           let cellTooltip = '';
-                          if (hasOverride) {
-                            cellTooltip = `Requested: ${reqData.shift}`;
+                          if (reqData) {
+                            const comment = reqData.comment || '';
+                            if (hasOverride) {
+                              cellTooltip = `Requested: ${reqData.shift}${comment ? `\nComment: "${comment}"` : ''}`;
+                            } else if (comment) {
+                              cellTooltip = `Request Comment: "${comment}"`;
+                            }
                           }
 
                           const selectClass = `w-full text-center text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} rounded-lg border px-1.5 py-1 outline-none transition-all cursor-pointer ${getShiftBadgeClass(val, isRequested)}`;
