@@ -482,6 +482,8 @@ export default function RosterPage({
         moNight: isEditMode ? getNightShiftNamesFromGrid(editedGrid[dateStr]) : (dayAssignments.NIGHT || []).join(', '),
         epAm: getEpAssignmentText(dateStr, 'EP_OFFICE_HOUR'),
         epOncall: getEpAssignmentText(dateStr, 'EP_ONCALL'),
+        holidayName: getHolidayName(dateStr),
+        isHoliday: !!getHolidayName(dateStr),
       };
     });
   }, [daysInMonthList, rosterGrid, isEditMode, editedGrid, masterRoster]);

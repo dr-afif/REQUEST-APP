@@ -71,10 +71,16 @@ function renderTable({ rosterType, rows }) {
     `;
 
   const body = rows.map((row) => {
-    const weekendClass = row.day === 'SAT' || row.day === 'SUN' ? ' class="weekend"' : '';
+    let rowClassAttr = '';
+    if (row.isHoliday) {
+      rowClassAttr = ' class="holiday"';
+    } else if (row.day === 'SAT' || row.day === 'SUN') {
+      rowClassAttr = ' class="weekend"';
+    }
+
     if (isEpOnly) {
       return `
-        <tr${weekendClass}>
+        <tr${rowClassAttr}>
           <td>${escapeHtml(row.date)}</td>
           <td>${escapeHtml(row.day)}</td>
           <td>${formatCell(row.epAm)}</td>
@@ -84,7 +90,7 @@ function renderTable({ rosterType, rows }) {
     }
 
     return `
-      <tr${weekendClass}>
+      <tr${rowClassAttr}>
         <td>${escapeHtml(row.date)}</td>
         <td>${escapeHtml(row.day)}</td>
         <td>${formatCell(row.moAm)}</td>
@@ -451,6 +457,10 @@ function buildPrintDocument({
           .roster-table.ep-only td:nth-child(n+3) { width: calc((100% - 19mm) / 2); }
           .roster-table tr.weekend td {
             background: #e5e7eb;
+            color: #111827;
+          }
+          .roster-table tr.holiday td {
+            background: #fee2e2 !important;
             color: #111827;
           }
           
