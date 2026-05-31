@@ -355,7 +355,7 @@ export default function App() {
   // Ensure current verified selector choice is valid after names sync
   useEffect(() => {
     if (isLoading || isLoadingTeamMembers) return;
-    if (!selectedName || selectedName?.trim().toLowerCase() === 'admin') return;
+    if (!selectedName || selectedName?.trim().toLowerCase() === 'admin' || selectedName?.trim().toLowerCase() === 'guest') return;
 
     const hasSelected = rosterNames.some(
       (name) => normalizeForComparison(name) === normalizeForComparison(selectedName)
