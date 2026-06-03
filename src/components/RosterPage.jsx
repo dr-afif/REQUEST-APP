@@ -1223,6 +1223,76 @@ export default function RosterPage({
           // Excel escapes internal quotes as ""
           cleanVal = cleanVal.replace(/""/g, '"');
 
+          let shiftCol;
+          if (targetShiftIndex === 0) shiftCol = 'AM';
+          else if (targetShiftIndex === 1) shiftCol = 'PM';
+          else if (targetShiftIndex === 2) shiftCol = 'NIGHT';
+          else if (targetShiftIndex === 3) shiftCol = 'EP_OFFICE_HOUR';
+          else shiftCol = 'EP_ONCALL';
+
+          if (shiftCol === 'EP_OFFICE_HOUR' || shiftCol === 'EP_ONCALL') {
+            // EP columns: simple overwrite, no name-overlap cleaning
+            if (!nextGrid[dateStr]) nextGrid[dateStr] = { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
+            nextGrid[dateStr][shiftCol] = cleanVal.trim();
+          } else {
+            nextGrid[dateStr] = cleanDayDataForNameOverlap(
+              nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' },
+              shiftCol,
+              cleanVal.trim()
+            );
+          }
+        });
+      });
+      
+      return nextGrid;
+    });
+  };
+
+  const handleTablePaste = (e, startDayIndex, startNameIndex) => {
+    e.preventDefault();
+    const pasteText = e.clipboardData.getData('text');
+    if (!pasteText) return;
+
+    let inQuotes = false;
+    let normalizedText = '';
+    for (let i = 0; i < pasteText.length; i++) {
+      const char = pasteText[i];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+        normalizedText += char;
+      } else if (inQuotes && char === '\r') {
+        // Skip
+      } else if (inQuotes && char === '\n') {
+        normalizedText += '___NEWLINE___';
+      } else {
+        normalizedText += char;
+      }
+    }
+
+    const rows = normalizedText.split(/\r?\n/).filter(r => r.trim() !== '');
+
+    setEditedGrid(prev => {
+      const nextGrid = { ...prev };
+
+      rows.forEach((rowStr, rIdx) => {
+        const targetNameIndex = startNameIndex + rIdx;
+        if (targetNameIndex >= names.length) return;
+
+        const docName = names[targetNameIndex];
+        const normalizedName = normalizeForComparison(mapName(docName));
+        const cells = rowStr.split('\t');
+
+        cells.forEach((cellVal, cIdx) => {
+          const targetDayIndex = startDayIndex + cIdx;
+          if (targetDayIndex >= daysInMonthList.length) return;
+
+          const dateStr = daysInMonthList[targetDayIndex].dateStr;
+
+          let cleanVal = cellVal.replace(/___NEWLINE___/g, '\n');
+          if (cleanVal.startsWith('"') && cleanVal.endsWith('"')) {
+            cleanVal = cleanVal.slice(1, -1);
+          }
+          cleanVal = cleanVal.replace(/""/g, '"');
           cleanVal = cleanVal.trim().toUpperCase();
 
           const dayData = nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
@@ -1245,10 +1315,12 @@ export default function RosterPage({
             return list.join(', ');
           };
 
+          // Remove this doctor from all shift keys on this day
           Object.keys(dayData).forEach((shiftKey) => {
             nextDayData[shiftKey] = removeNameFromList(dayData[shiftKey]);
           });
 
+          // Add to new shift if it's a non-empty value
           if (cleanVal) {
             nextDayData[cleanVal] = addNameToList(nextDayData[cleanVal] || '');
           }
@@ -1256,9 +1328,42 @@ export default function RosterPage({
           nextGrid[dateStr] = nextDayData;
         });
       });
-      
+
       return nextGrid;
     });
+  };
+
+  const handleTableKeyDown = (e, dayIndex, nameIndex) => {
+    const key = e.key;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab'].includes(key)) {
+      let nextDayIndex = dayIndex;
+      let nextNameIndex = nameIndex;
+
+      if (key === 'ArrowUp') nextNameIndex -= 1;
+      if (key === 'ArrowDown' || key === 'Enter') nextNameIndex += 1;
+      if (key === 'ArrowLeft') nextDayIndex -= 1;
+      if (key === 'ArrowRight') nextDayIndex += 1;
+
+      if (key === 'Tab') {
+        if (e.shiftKey) {
+          nextDayIndex -= 1;
+        } else {
+          nextDayIndex += 1;
+        }
+      }
+
+      // Check boundary
+      if (
+        nextDayIndex >= 0 &&
+        nextDayIndex < daysInMonthList.length &&
+        nextNameIndex >= 0 &&
+        nextNameIndex < names.length
+      ) {
+        e.preventDefault();
+        const nextId = `table-cell-${nextDayIndex}-${nextNameIndex}`;
+        document.getElementById(nextId)?.focus();
+      }
+    }
   };
 
   const handleSave = async () => {
