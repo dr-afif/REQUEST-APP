@@ -8,9 +8,15 @@ import { getHolidayName } from '../utils/holidays';
 // Helper to parse standby status and extended shift status from a shift name string
 const parseShiftValue = (rawVal) => {
   if (!rawVal) return { cleanShift: '', isStandby: false, isExtended: false };
-  const str = String(rawVal).trim().toUpperCase();
+  let str = String(rawVal).trim().toUpperCase();
   const isStandby = str.endsWith('(S)') || str.endsWith('-S') || str.includes('(S)');
-  const isExtended = str.endsWith('(X)') || str.endsWith('-X') || str.includes('(X)');
+  let isExtended = str.endsWith('(X)') || str.endsWith('-X') || str.includes('(X)');
+  
+  if (!isExtended && str.length > 1 && str.endsWith('X')) {
+    isExtended = true;
+    str = str.slice(0, -1);
+  }
+
   const cleanShift = str
     .replace(/\(S\)/g, '')
     .replace(/-S/g, '')
@@ -18,6 +24,24 @@ const parseShiftValue = (rawVal) => {
     .replace(/-X/g, '')
     .trim();
   return { cleanShift, isStandby, isExtended };
+};
+
+const getCanonicalShiftKey = (rawVal) => {
+  const { cleanShift, isStandby, isExtended } = parseShiftValue(rawVal);
+  if (!cleanShift) return '';
+  let canonical = cleanShift;
+  if (isStandby) canonical += ' (S)';
+  if (isExtended) canonical += ' (X)';
+  return canonical;
+};
+
+const getDisplayShiftValue = (val) => {
+  const { cleanShift, isStandby, isExtended } = parseShiftValue(val);
+  if (!cleanShift) return '';
+  let display = cleanShift;
+  if (isStandby) display += 'S';
+  if (isExtended) display += 'X';
+  return display;
 };
 
 // Helper to identify night shift variants (NIGHT, N, ON, ON1, ON2)
@@ -897,8 +921,9 @@ export default function RosterPage({
       });
 
       // 2. Add to new shift if newShift is not empty
-      if (newShift) {
-        nextDayData[newShift] = addNameToList(nextDayData[newShift] || '');
+      const canonicalVal = getCanonicalShiftKey(newShift);
+      if (canonicalVal) {
+        nextDayData[canonicalVal] = addNameToList(nextDayData[canonicalVal] || '');
       }
 
       return {
@@ -1321,8 +1346,9 @@ export default function RosterPage({
           });
 
           // Add to new shift if it's a non-empty value
-          if (cleanVal) {
-            nextDayData[cleanVal] = addNameToList(nextDayData[cleanVal] || '');
+          const canonicalVal = getCanonicalShiftKey(cleanVal);
+          if (canonicalVal) {
+            nextDayData[canonicalVal] = addNameToList(nextDayData[canonicalVal] || '');
           }
 
           nextGrid[dateStr] = nextDayData;
@@ -2106,7 +2132,7 @@ export default function RosterPage({
                                   <input
                                     type="text"
                                     id={`table-cell-${dayIndex}-${nameIndex}`}
-                                    value={parseShiftValue(val).cleanShift}
+                                    value={getDisplayShiftValue(val)}
                                     onChange={(e) => handleTableEditCellChange(day.dateStr, name, e.target.value)}
                                     onKeyDown={(e) => handleTableKeyDown(e, dayIndex, nameIndex)}
                                     onPaste={(e) => handleTablePaste(e, dayIndex, nameIndex)}
