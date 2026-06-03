@@ -99,6 +99,7 @@ export default function RosterPage({
   const [isEditMode, setIsEditMode] = useState(false);
   const [isStandbyEditMode, setIsStandbyEditMode] = useState(false);
   const [isExtendedEditMode, setIsExtendedEditMode] = useState(false);
+  const [isExcelTableEditMode, setIsExcelTableEditMode] = useState(false);
   const [editedGrid, setEditedGrid] = useState({});
   const [activeTab, setActiveTab] = useState('calendar'); // 'calendar' or 'table'
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -598,11 +599,12 @@ export default function RosterPage({
   };
 
   const toggleEditMode = () => {
-    if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
+    if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
         setIsStandbyEditMode(false);
         setIsExtendedEditMode(false);
+        setIsExcelTableEditMode(false);
         setEditedGrid({});
       }
     } else {
@@ -613,11 +615,12 @@ export default function RosterPage({
   };
 
   const toggleStandbyEditMode = () => {
-    if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
+    if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
         setIsStandbyEditMode(false);
         setIsExtendedEditMode(false);
+        setIsExcelTableEditMode(false);
         setEditedGrid({});
       }
     } else {
@@ -629,17 +632,35 @@ export default function RosterPage({
   };
 
   const toggleExtendedEditMode = () => {
-    if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
+    if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
         setIsStandbyEditMode(false);
         setIsExtendedEditMode(false);
+        setIsExcelTableEditMode(false);
         setEditedGrid({});
       }
     } else {
       const cloned = initializeEditedGrid();
       setEditedGrid(cloned);
       setIsExtendedEditMode(true);
+      setActiveTab('table');
+    }
+  };
+
+  const toggleExcelTableEditMode = () => {
+    if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
+      if (confirm('Discard unsaved changes?')) {
+        setIsEditMode(false);
+        setIsStandbyEditMode(false);
+        setIsExtendedEditMode(false);
+        setIsExcelTableEditMode(false);
+        setEditedGrid({});
+      }
+    } else {
+      const cloned = initializeEditedGrid();
+      setEditedGrid(cloned);
+      setIsExcelTableEditMode(true);
       setActiveTab('table');
     }
   };
@@ -965,7 +986,7 @@ export default function RosterPage({
       observer.disconnect();
       clearTimeout(timer);
     };
-  }, [activeTab, masterRoster, editedGrid, isEditMode, isStandbyEditMode, isExtendedEditMode, names, teamMembers]);
+  }, [activeTab, masterRoster, editedGrid, isEditMode, isStandbyEditMode, isExtendedEditMode, isExcelTableEditMode, names, teamMembers]);
 
   const tallyData = useMemo(() => {
     const dateMap = new Map();
@@ -1004,7 +1025,7 @@ export default function RosterPage({
         const nameKey = normalizeForComparison(nameMapped);
         const isInactive = inactiveNames.has(nameKey);
 
-        if (isEditMode) {
+        if (isEditMode || isExcelTableEditMode) {
           val = getEditingShift(day.dateStr, nameMapped);
         } else {
           val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
@@ -1077,7 +1098,7 @@ export default function RosterPage({
       tallyMap: dateMap,
       shifts: sortedShifts,
     };
-  }, [daysInMonthList, names, isEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, dropdownShifts, teamMembers]);
+  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, dropdownShifts, teamMembers]);
 
   // Per-member shift tally for the current month
   // Tracks: AM, PM, NIGHT (on/on1/on2), PN, GHKA, and Total Leaves (all except AM/PM/NIGHT/PN/OH)
@@ -1100,7 +1121,7 @@ export default function RosterPage({
         const nameMapped = mapName(name);
         const nameKey = normalizeForComparison(nameMapped);
         let val = '';
-        if (isEditMode) {
+        if (isEditMode || isExcelTableEditMode) {
           val = getEditingShift(day.dateStr, nameMapped);
         } else {
           val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
@@ -1132,7 +1153,7 @@ export default function RosterPage({
     });
 
     return Array.from(memberMap.values());
-  }, [daysInMonthList, names, isEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth]);
+  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth]);
 
   const handleKeyDown = (e, dateStr, shiftCol, dayIndex, shiftIndex) => {
     const key = e.key;
@@ -1202,26 +1223,40 @@ export default function RosterPage({
           // Excel escapes internal quotes as ""
           cleanVal = cleanVal.replace(/""/g, '"');
 
-          let shiftCol;
-          if (targetShiftIndex === 0) shiftCol = 'AM';
-          else if (targetShiftIndex === 1) shiftCol = 'PM';
-          else if (targetShiftIndex === 2) shiftCol = 'NIGHT';
-          else if (targetShiftIndex === 3) shiftCol = 'EP_OFFICE_HOUR';
-          else shiftCol = 'EP_ONCALL';
+          cleanVal = cleanVal.trim().toUpperCase();
 
-          if (shiftCol === 'EP_OFFICE_HOUR' || shiftCol === 'EP_ONCALL') {
-            // EP columns: simple overwrite, no name-overlap cleaning
-            if (!nextGrid[dateStr]) nextGrid[dateStr] = { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
-            nextGrid[dateStr][shiftCol] = cleanVal.trim();
-          } else {
-            nextGrid[dateStr] = cleanDayDataForNameOverlap(
-              nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' },
-              shiftCol,
-              cleanVal.trim()
-            );
+          const dayData = nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
+          const nextDayData = { ...dayData };
+
+          const removeNameFromList = (namesStr) => {
+            if (!namesStr) return '';
+            return namesStr
+              .split(/[\n,]+/)
+              .map(n => n.trim())
+              .filter(n => normalizeForComparison(n) !== normalizedName && n !== '')
+              .join(', ');
+          };
+
+          const addNameToList = (namesStr) => {
+            const list = namesStr ? namesStr.split(/[\n,]+/).map(n => n.trim()).filter(Boolean) : [];
+            if (!list.some(n => normalizeForComparison(n) === normalizedName)) {
+              list.push(docName.trim());
+            }
+            return list.join(', ');
+          };
+
+          Object.keys(dayData).forEach((shiftKey) => {
+            nextDayData[shiftKey] = removeNameFromList(dayData[shiftKey]);
+          });
+
+          if (cleanVal) {
+            nextDayData[cleanVal] = addNameToList(nextDayData[cleanVal] || '');
           }
+
+          nextGrid[dateStr] = nextDayData;
         });
       });
+      
       return nextGrid;
     });
   };
@@ -1250,6 +1285,7 @@ export default function RosterPage({
     setIsEditMode(false);
     setIsStandbyEditMode(false);
     setIsExtendedEditMode(false);
+    setIsExcelTableEditMode(false);
     setEditedGrid({});
   };
 
@@ -1289,7 +1325,7 @@ export default function RosterPage({
           const shifts = {};
           daysInMonthList.forEach((day) => {
             let val = '';
-            if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
+            if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
               val = getEditingShift(day.dateStr, nameMapped);
             } else {
               val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
@@ -1360,21 +1396,21 @@ export default function RosterPage({
           <div className="mt-4 flex gap-2">
             <button
               onClick={handlePrevMonth}
-              disabled={isEditMode}
+              disabled={isEditMode || isExcelTableEditMode}
               className="rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:ring-2 focus:ring-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               ‹ Prev
             </button>
             <button
               onClick={handleCurrentMonth}
-              disabled={isEditMode}
+              disabled={isEditMode || isExcelTableEditMode}
               className="rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:ring-2 focus:ring-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Current Month
             </button>
             <button
               onClick={handleNextMonth}
-              disabled={isEditMode}
+              disabled={isEditMode || isExcelTableEditMode}
               className="rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:ring-2 focus:ring-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Next ›
@@ -1411,7 +1447,7 @@ export default function RosterPage({
         {/* Action Buttons on the Right */}
         {isAdmin && (
           <div className="flex items-center gap-2 pb-1.5 pr-2">
-            {!isEditMode && !isStandbyEditMode && !isExtendedEditMode && (
+            {!isEditMode && !isStandbyEditMode && !isExtendedEditMode && !isExcelTableEditMode && (
               <>
                 <button
                   type="button"
@@ -1432,18 +1468,38 @@ export default function RosterPage({
               </>
             )}
             {!isStandbyEditMode && !isExtendedEditMode && (
-              <button
-                onClick={toggleEditMode}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                  isEditMode 
-                    ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
-                    : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
-                }`}
-              >
-                {isEditMode ? '✕ Cancel Edit' : '✏️ Edit Roster'}
-              </button>
+              <>
+                {!isExcelTableEditMode && (
+                  <button
+                    onClick={toggleEditMode}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                      isEditMode 
+                        ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
+                        : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
+                    }`}
+                  >
+                    {isEditMode 
+                      ? '✕ Cancel Edit' 
+                      : activeTab === 'table' 
+                        ? '✏️ Edit (Dropdown)' 
+                        : '✏️ Edit Roster'}
+                  </button>
+                )}
+                {activeTab === 'table' && !isEditMode && (
+                  <button
+                    onClick={toggleExcelTableEditMode}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                      isExcelTableEditMode 
+                        ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
+                        : 'bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100'
+                    }`}
+                  >
+                    {isExcelTableEditMode ? '✕ Cancel Copy/Paste' : '📋 Edit (Copy/Paste)'}
+                  </button>
+                )}
+              </>
             )}
-            {!isEditMode && !isExtendedEditMode && (
+            {!isEditMode && !isExtendedEditMode && !isExcelTableEditMode && (
               <button
                 onClick={toggleStandbyEditMode}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
@@ -1455,7 +1511,7 @@ export default function RosterPage({
                 {isStandbyEditMode ? '✕ Cancel Standby' : '⭐ Edit Standby'}
               </button>
             )}
-            {!isEditMode && !isStandbyEditMode && (
+            {!isEditMode && !isStandbyEditMode && !isExcelTableEditMode && (
               <button
                 onClick={toggleExtendedEditMode}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
@@ -1467,7 +1523,7 @@ export default function RosterPage({
                 {isExtendedEditMode ? '✕ Cancel Extended' : '✨ Edit Extended'}
               </button>
             )}
-            {(isEditMode || isStandbyEditMode || isExtendedEditMode) && (
+            {(isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) && (
               <button
                 onClick={handleSave}
                 className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-70"
@@ -1487,9 +1543,17 @@ export default function RosterPage({
              </span>
            ) : (
              <span>
-               <strong className="font-bold">Table Editing Mode Active (Spreadsheet):</strong> You can select shifts (AM, PM, NIGHT) or remove them using the dropdowns for each doctor. Your modifications are kept in sync with the Calendar View and will be saved together!
+               <strong className="font-bold">Dropdown Editing Mode Active (Table):</strong> You can select the shift type for each team member from the dropdown menu on each day.
              </span>
            )}
+         </div>
+      )}
+
+      {isExcelTableEditMode && (
+         <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-4 text-xs text-teal-800 shadow-sm animate-fadeIn">
+           <span>
+             <strong className="font-bold">Excel Copy/Paste Mode Active (Table):</strong> You can type shift codes directly into cells (e.g., AM, PM, NIGHT, OFF, AL). You can also copy a range from an Excel or Google Sheets spreadsheet and paste it directly starting at any cell to populate the grid. Use <strong>Arrow Keys</strong>, <strong>Enter</strong>, or <strong>Tab</strong> to navigate cells.
+           </span>
          </div>
       )}
 
@@ -1766,7 +1830,7 @@ export default function RosterPage({
                     </td>
                   </tr>
                 ) : (
-                  names.map((name) => {
+                  names.map((name, nameIndex) => {
                     const nameMapped = mapName(name);
                     const nameKey = normalizeForComparison(nameMapped);
                     const matched = isMatch(nameMapped);
@@ -1781,7 +1845,7 @@ export default function RosterPage({
                         >
                           {nameMapped.toUpperCase()}
                         </th>
-                        {daysInMonthList.map((day) => {
+                        {daysInMonthList.map((day, dayIndex) => {
                           const isWeekendDay = day.dayName === 'SAT' || day.dayName === 'SUN';
                           const isToday = day.dateStr === todayStr;
                           const holidayName = getHolidayName(day.dateStr);
@@ -1796,7 +1860,7 @@ export default function RosterPage({
                             : 'bg-white';
   
                           let val = '';
-                          if (isEditMode || isStandbyEditMode || isExtendedEditMode) {
+                          if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
                             val = getEditingShift(day.dateStr, nameMapped);
                           } else {
                             val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
@@ -1816,7 +1880,7 @@ export default function RosterPage({
                           const isRequested = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() === reqData.shift.toUpperCase());
                           const hasOverride = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() !== reqData.shift.toUpperCase());
                           const hasIndicator = hasRequestComment || hasCustomComment || hasOverride;
-                          const isCellInteractive = (hasIndicator || isAdmin) && !isEditMode && !isStandbyEditMode && !isExtendedEditMode;
+                          const isCellInteractive = (hasIndicator || isAdmin) && !isEditMode && !isStandbyEditMode && !isExtendedEditMode && !isExcelTableEditMode;
   
                           let cellTooltip = '';
                           const tooltips = [];
@@ -1897,7 +1961,7 @@ export default function RosterPage({
                                   val ? (
                                     <button
                                       onClick={() => handleToggleExtended(day.dateStr, name)}
-                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} transition-all shadow-sm active:scale-95 ${
+                                      className={`flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} transition-all shadow-sm active:scale-95 ${
                                         parseShiftValue(val).isExtended
                                           ? 'bg-blue-500 hover:bg-blue-600 text-white border-blue-600'
                                           : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
@@ -1933,6 +1997,17 @@ export default function RosterPage({
                                       </option>
                                     ))}
                                   </select>
+                                ) : isExcelTableEditMode ? (
+                                  <input
+                                    type="text"
+                                    id={`table-cell-${dayIndex}-${nameIndex}`}
+                                    value={parseShiftValue(val).cleanShift}
+                                    onChange={(e) => handleTableEditCellChange(day.dateStr, name, e.target.value)}
+                                    onKeyDown={(e) => handleTableKeyDown(e, dayIndex, nameIndex)}
+                                    onPaste={(e) => handleTablePaste(e, dayIndex, nameIndex)}
+                                    className={`w-full text-center text-[10px] sm:text-xs font-bold rounded-lg border px-1.5 py-1 outline-none transition-all cursor-text bg-white border-slate-200 text-slate-700 focus:ring-2 focus:ring-teal-500 focus:bg-white`}
+                                    title={cellTooltip}
+                                  />
                                 ) : (
                                   val ? (
                                     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} ${getShiftBadgeClass(val, isRequested)}`} title={cellTooltip}>
