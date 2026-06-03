@@ -65,26 +65,34 @@ export default function NewRequestForm({
   const [onBehalfOfName, setOnBehalfOfName] = useState(() => {
     return initialValues?.name || '';
   });
+  const [lastEntityKey, setLastEntityKey] = useState(null);
 
   const isReady = useMemo(() => Boolean(selectedName), [selectedName]);
 
   useEffect(() => {
-    if (initialValues) {
-      setFormState({
-        date: initialValues.date ? toIsoDate(initialValues.date) : '',
-        request: initialValues.request ?? availableShiftTypes[0],
-        comment: initialValues.comment ?? '',
-      });
-      setOnBehalfOfName(initialValues.name || '');
-    } else {
-      setFormState((prev) => ({
-        date: getNextMonthDefaultDate() ?? '',
-        request: availableShiftTypes.includes(prev.request) ? prev.request : availableShiftTypes[0],
-        comment: '',
-      }));
-      setOnBehalfOfName('');
+    const currentEntityKey = initialValues
+      ? `${initialValues.id ?? 'new'}_${initialValues.date ? toIsoDate(initialValues.date) : ''}`
+      : 'empty';
+
+    if (currentEntityKey !== lastEntityKey) {
+      setLastEntityKey(currentEntityKey);
+      if (initialValues) {
+        setFormState({
+          date: initialValues.date ? toIsoDate(initialValues.date) : '',
+          request: initialValues.request ?? availableShiftTypes[0],
+          comment: initialValues.comment ?? '',
+        });
+        setOnBehalfOfName(initialValues.name || '');
+      } else {
+        setFormState((prev) => ({
+          date: getNextMonthDefaultDate() ?? '',
+          request: availableShiftTypes.includes(prev.request) ? prev.request : availableShiftTypes[0],
+          comment: '',
+        }));
+        setOnBehalfOfName('');
+      }
     }
-  }, [initialValues, availableShiftTypes]);
+  }, [initialValues, lastEntityKey, availableShiftTypes]);
 
   useEffect(() => {
     if (!selectedName) {
