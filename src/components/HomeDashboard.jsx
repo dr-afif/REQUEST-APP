@@ -115,14 +115,48 @@ export default function HomeDashboard({
       (r) => {
         const nameRaw = mapName(r.Name || r.name || '');
         const rawDate = r.Date || r.date;
+        const rType = r.RequestType || r.requestType || 'Leave';
+        const isCustom = String(rType).toLowerCase() === 'admincomment';
         return normalizeForComparison(nameRaw) === normUser &&
           toIsoDate(rawDate) === todayStr &&
           r.status?.toLowerCase() === 'active' &&
+          !isCustom &&
           r.ApprovalStatus &&
           r.ApprovalStatus !== 'Approved' &&
           r.ApprovalStatus !== 'Rejected';
       }
     );
+
+    // Gather comments for today's shift (separated by custom admin comments vs normal request comments)
+    const todayRequests = requests.filter(
+      (r) => {
+        const nameRaw = mapName(r.Name || r.name || '');
+        const rawDate = r.Date || r.date;
+        return normalizeForComparison(nameRaw) === normUser &&
+          toIsoDate(rawDate) === todayStr &&
+          r.status?.toLowerCase() === 'active';
+      }
+    );
+
+    const requestComments = [];
+    const manualComments = [];
+
+    todayRequests.forEach((r) => {
+      const rType = r.RequestType || r.requestType || 'Leave';
+      const isCustom = String(rType).toLowerCase() === 'admincomment';
+      const commentText = (r.Comment || r.comment || '').trim();
+      if (!commentText) return;
+
+      if (isCustom) {
+        manualComments.push(commentText);
+      } else {
+        requestComments.push({
+          type: rType,
+          text: commentText,
+          status: r.ApprovalStatus || r.approvalStatus
+        });
+      }
+    });
 
     return {
       date: todayStr,
@@ -132,7 +166,9 @@ export default function HomeDashboard({
         status: pendingRequest.ApprovalStatus || pendingRequest.approvalStatus,
         partner: pendingRequest.SwapPartner || pendingRequest.swapPartner,
         type: pendingRequest.RequestType || pendingRequest.requestType
-      } : null
+      } : null,
+      requestComments,
+      manualComments
     };
   }, [selectedName, masterRoster, requests, todayStr]);
 
@@ -392,6 +428,7 @@ export default function HomeDashboard({
                 </div>
               </div>
 
+              {/* Pending Request Status */}
               {todayHighlight?.pending && (
                 <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-1.5 text-xs font-semibold text-indigo-600">
                   <span className="animate-pulse">⏳</span>
@@ -399,6 +436,37 @@ export default function HomeDashboard({
                     {todayHighlight.pending.type} shift request is{' '}
                     <span className="font-bold text-indigo-700 underline">{todayHighlight.pending.status}</span>
                   </span>
+                </div>
+              )}
+
+              {/* Roster Comments / Notes */}
+              {((todayHighlight?.requestComments && todayHighlight.requestComments.length > 0) ||
+                (todayHighlight?.manualComments && todayHighlight.manualComments.length > 0)) && (
+                <div className="mt-4 border-t border-slate-100 pt-3 space-y-2 text-xs">
+                  {/* Manual/Admin Comments */}
+                  {todayHighlight.manualComments.map((comment, idx) => (
+                    <div key={`manual-${idx}`} className="flex items-start gap-1.5 text-slate-600 bg-slate-50 rounded-xl p-2.5 border border-slate-100">
+                      <span className="text-slate-400">📝</span>
+                      <div>
+                        <span className="font-bold text-slate-700 block mb-0.5">Notes</span>
+                        <p className="leading-relaxed">{comment}</p>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Request Comments */}
+                  {todayHighlight.requestComments.map((req, idx) => (
+                    <div key={`req-${idx}`} className="flex items-start gap-1.5 text-indigo-700 bg-indigo-50/50 rounded-xl p-2.5 border border-indigo-50">
+                      <span className="text-indigo-400">✉️</span>
+                      <div>
+                        <span className="font-bold text-indigo-900 block mb-0.5">
+                          Request Comment ({req.type})
+                          {req.status && <span className="ml-1.5 font-normal text-[10px] bg-white border border-indigo-200 px-1.5 py-0.5 rounded-full">{req.status}</span>}
+                        </span>
+                        <p className="leading-relaxed">{req.text}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </>
