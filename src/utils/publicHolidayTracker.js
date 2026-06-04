@@ -274,6 +274,7 @@ export const buildDoctorSummary = (matchedRecords, unmatchedUsages, names, openi
       usedFromOpeningBalance: 0,
       usedFromCurrentYearCredit: 0,
       outstanding: 0,
+      oldOutstanding: 0,
       excessGhkaUsed: 0
     };
   });
@@ -294,6 +295,17 @@ export const buildDoctorSummary = (matchedRecords, unmatchedUsages, names, openi
           s.usedFromOpeningBalance++;
         } else {
           s.usedFromCurrentYearCredit++;
+        }
+      } else if (record.status === 'PENDING') {
+        if (record.source === 'opening_balance') {
+          s.oldOutstanding++;
+        } else if (record.holidayDate) {
+          const d = new Date(record.holidayDate);
+          const now = new Date();
+          const monthDiff = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+          if (monthDiff > 3) {
+            s.oldOutstanding++;
+          }
         }
       }
     }
@@ -324,13 +336,13 @@ export const buildWarnings = (summaries) => {
   const warnings = [];
 
   summaries.forEach(s => {
-    if (s.outstanding > 0) {
+    if (s.oldOutstanding > 0) {
       warnings.push({
         doctorName: s.name,
-        type: 'OUTSTANDING_GHKA',
-        message: `${s.name} has ${s.outstanding} outstanding GHKA replacement(s) to claim.`,
-        severity: s.outstanding >= 3 ? 'high' : 'medium',
-        count: s.outstanding
+        type: 'OLD_OUTSTANDING_GHKA',
+        message: `${s.name} has ${s.oldOutstanding} outstanding GHKA replacement(s) older than 3 months.`,
+        severity: 'medium',
+        count: s.oldOutstanding
       });
     }
 
