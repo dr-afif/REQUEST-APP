@@ -44,6 +44,55 @@ const getDisplayShiftValue = (val) => {
   return display;
 };
 
+const normalizeShiftType = (shiftType) => {
+  const up = String(shiftType || '').trim().toUpperCase();
+  if (up === 'ON' || up === 'ON1' || up === 'ON2' || up === 'N' || up === 'NIGHT') {
+    return 'NIGHT';
+  }
+  return up;
+};
+
+const getColumnStyle = (col) => {
+  switch (col) {
+    case 'AM':
+      return {
+        headerClass: 'bg-green-50/60 text-green-700 min-w-[3.2rem]',
+        cellColor: 'text-green-700',
+        cellBg: 'bg-green-50/30'
+      };
+    case 'PM':
+      return {
+        headerClass: 'bg-amber-50/60 text-amber-700 min-w-[3.2rem]',
+        cellColor: 'text-amber-700',
+        cellBg: 'bg-amber-50/30'
+      };
+    case 'NIGHT':
+      return {
+        headerClass: 'bg-red-50/60 text-red-700 min-w-[3.6rem]',
+        cellColor: 'text-red-700',
+        cellBg: 'bg-red-50/30'
+      };
+    case 'PN':
+      return {
+        headerClass: 'bg-purple-50/60 text-purple-700 min-w-[3.2rem]',
+        cellColor: 'text-purple-700',
+        cellBg: 'bg-purple-50/30'
+      };
+    case 'TOTAL LEAVES':
+      return {
+        headerClass: 'bg-indigo-50/60 text-indigo-700 min-w-[5.5rem]',
+        cellColor: 'text-indigo-700',
+        cellBg: 'bg-indigo-50/30'
+      };
+    default:
+      return {
+        headerClass: 'bg-slate-100/60 text-slate-700 min-w-[3.8rem]',
+        cellColor: 'text-slate-700',
+        cellBg: ''
+      };
+  }
+};
+
 // Helper to identify night shift variants (NIGHT, N, ON, ON1, ON2)
 const isNightShift = (shiftName) => {
   const up = String(shiftName || '').trim().toUpperCase();
@@ -282,6 +331,20 @@ export default function RosterPage({
     }
     return ['AM', 'PM', 'NIGHT', 'OFF', 'AL', 'MC', 'HKA', 'GHKA', 'COURSE', 'EL'];
   }, [shiftTypes]);
+
+  // Dynamic shift columns for Individual Member Shift Tally
+  const memberTallyColumns = useMemo(() => {
+    const core = ['AM', 'PM', 'NIGHT'];
+    const others = [];
+    dropdownShifts.forEach((s) => {
+      if (!s) return;
+      const norm = normalizeShiftType(s);
+      if (!core.includes(norm) && !others.includes(norm)) {
+        others.push(norm);
+      }
+    });
+    return [...core, ...others, 'TOTAL LEAVES'];
+  }, [dropdownShifts]);
 
   // 1.0.1 Helper to return CSS class names based on shift type value
   const getShiftBadgeClass = (val, isRequested = false) => {
@@ -1126,19 +1189,25 @@ export default function RosterPage({
   }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, dropdownShifts, teamMembers]);
 
   // Per-member shift tally for the current month
-  // Tracks: AM, PM, NIGHT (on/on1/on2), PN, GHKA, and Total Leaves (all except AM/PM/NIGHT/PN/OH)
+  // Tracks: AM, PM, NIGHT, and other configured shifts dynamically (with ON/ON1/ON2/N consolidated to NIGHT), plus TOTAL LEAVES
   const memberTallyData = useMemo(() => {
-    // Columns we always show in order
-    const TRACKED = ['AM', 'PM', 'NIGHT', 'PN', 'GHKA'];
     const LEAVE_EXCLUDES = new Set(['AM', 'PM', 'NIGHT', 'PN', 'OH']);
 
-    // Map: nameKey -> { AM, PM, NIGHT, PN, GHKA, TOTAL_LEAVE }
     const memberMap = new Map();
 
     names.forEach((name) => {
       const nameMapped = mapName(name);
       const nameKey = normalizeForComparison(nameMapped);
-      memberMap.set(nameKey, { name: nameMapped, AM: 0, PM: 0, NIGHT: 0, PN: 0, GHKA: 0, TOTAL_LEAVE: 0 });
+      
+      const counts = {};
+      memberTallyColumns.forEach((col) => {
+        if (col !== 'TOTAL LEAVES') {
+          counts[col] = 0;
+        }
+      });
+      counts.TOTAL_LEAVE = 0;
+
+      memberMap.set(nameKey, { name: nameMapped, counts });
     });
 
     daysInMonthList.forEach((day) => {
@@ -1158,27 +1227,24 @@ export default function RosterPage({
 
         if (!val) return;
         const { cleanShift } = parseShiftValue(val);
-        let shiftType = cleanShift.toUpperCase();
-        // Normalise night variants
-        if (shiftType === 'ON' || shiftType === 'ON1' || shiftType === 'ON2' || shiftType === 'N') {
-          shiftType = 'NIGHT';
-        }
+        const shiftType = normalizeShiftType(cleanShift);
 
         const entry = memberMap.get(nameKey);
         if (!entry) return;
 
-        if (TRACKED.includes(shiftType)) {
-          entry[shiftType] += 1;
+        if (entry.counts[shiftType] !== undefined) {
+          entry.counts[shiftType] += 1;
         }
+        
         // Total Leaves: everything except AM/PM/NIGHT/PN/OH
         if (!LEAVE_EXCLUDES.has(shiftType)) {
-          entry.TOTAL_LEAVE += 1;
+          entry.counts.TOTAL_LEAVE += 1;
         }
       });
     });
 
     return Array.from(memberMap.values());
-  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth]);
+  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, memberTallyColumns]);
 
   const handleKeyDown = (e, dateStr, shiftCol, dayIndex, shiftIndex) => {
     const key = e.key;
@@ -2358,32 +2424,23 @@ export default function RosterPage({
                   <th className="sticky left-0 z-20 bg-slate-50 px-3 py-2.5 text-left font-bold uppercase tracking-wider shadow-sm ring-1 ring-slate-100 text-[10px] sm:text-xs min-w-[7.5rem] max-w-[7.5rem] w-[7.5rem] truncate">
                     Name
                   </th>
-                  {['AM', 'PM', 'NIGHT', 'PN', 'GHKA', 'TOTAL LEAVES'].map((col) => (
-                    <th
-                      key={col}
-                      className={`px-3 py-2.5 font-bold uppercase tracking-wider text-[10px] sm:text-xs whitespace-nowrap border-l border-slate-100 ${
-                        col === 'TOTAL LEAVES'
-                          ? 'bg-indigo-50/60 text-indigo-700 min-w-[5.5rem]'
-                          : col === 'AM'
-                          ? 'bg-green-50/60 text-green-700 min-w-[3.2rem]'
-                          : col === 'PM'
-                          ? 'bg-amber-50/60 text-amber-700 min-w-[3.2rem]'
-                          : col === 'NIGHT'
-                          ? 'bg-red-50/60 text-red-700 min-w-[3.6rem]'
-                          : col === 'PN'
-                          ? 'bg-purple-50/60 text-purple-700 min-w-[3.2rem]'
-                          : 'bg-slate-100/60 text-slate-700 min-w-[3.8rem]'
-                      }`}
-                    >
-                      {col}
-                    </th>
-                  ))}
+                  {memberTallyColumns.map((col) => {
+                    const style = getColumnStyle(col);
+                    return (
+                      <th
+                        key={col}
+                        className={`px-3 py-2.5 font-bold uppercase tracking-wider text-[10px] sm:text-xs whitespace-nowrap border-l border-slate-100 ${style.headerClass}`}
+                      >
+                        {col}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {memberTallyData.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-3 text-xs text-slate-500 text-left" colSpan={7}>
+                    <td className="px-3 py-3 text-xs text-slate-500 text-left" colSpan={memberTallyColumns.length + 1}>
                       No team members available.
                     </td>
                   </tr>
@@ -2391,14 +2448,6 @@ export default function RosterPage({
                   memberTallyData.map((entry) => {
                     const nameKey = normalizeForComparison(entry.name);
                     const matched = isMatch(entry.name);
-                    const cols = [
-                      { key: 'AM',          val: entry.AM,          color: 'text-green-700',  bg: 'bg-green-50/30' },
-                      { key: 'PM',          val: entry.PM,          color: 'text-amber-700',  bg: 'bg-amber-50/30' },
-                      { key: 'NIGHT',       val: entry.NIGHT,       color: 'text-red-700',    bg: 'bg-red-50/30'   },
-                      { key: 'PN',          val: entry.PN,          color: 'text-purple-700', bg: 'bg-purple-50/30'},
-                      { key: 'GHKA',        val: entry.GHKA,        color: 'text-slate-700',  bg: ''               },
-                      { key: 'TOTAL_LEAVE', val: entry.TOTAL_LEAVE, color: 'text-indigo-700', bg: 'bg-indigo-50/30'},
-                    ];
                     return (
                       <tr
                         key={nameKey}
@@ -2413,16 +2462,20 @@ export default function RosterPage({
                         >
                           {entry.name.toUpperCase()}
                         </th>
-                        {cols.map(({ key, val, color, bg }) => (
-                          <td
-                            key={key}
-                            className={`px-3 py-1.5 border-l border-slate-100 font-bold align-middle ${
-                              val > 0 ? color : 'text-slate-300'
-                            } ${bg}`}
-                          >
-                            {val > 0 ? val : <span className="text-slate-300">-</span>}
-                          </td>
-                        ))}
+                        {memberTallyColumns.map((col) => {
+                          const style = getColumnStyle(col);
+                          const val = col === 'TOTAL LEAVES' ? entry.counts.TOTAL_LEAVE : entry.counts[col];
+                          return (
+                            <td
+                              key={col}
+                              className={`px-3 py-1.5 border-l border-slate-100 font-bold align-middle ${
+                                val > 0 ? style.cellColor : 'text-slate-300'
+                              } ${val > 0 ? style.cellBg : ''}`}
+                            >
+                              {val > 0 ? val : <span className="text-slate-300">-</span>}
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
                   })
