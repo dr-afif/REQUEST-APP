@@ -6,6 +6,7 @@ import HomeDashboard from './components/HomeDashboard';
 import RosterPage from './components/RosterPage';
 import UpdatesPage from './components/UpdatesPage';
 import AdminPanel from './components/AdminPanel';
+import AnalyticsPage from './components/AnalyticsPage';
 import AdminPinModal from './components/AdminPinModal';
 import OnboardingOverlay from './components/OnboardingOverlay';
 import ToastNotification from './components/ToastNotification';
@@ -162,7 +163,7 @@ export default function App() {
 
   // Automatic navigation guard for admin page access control
   useEffect(() => {
-    if (currentPage === 'admin' && selectedName?.trim().toLowerCase() !== 'admin') {
+    if ((currentPage === 'admin' || currentPage === 'summary') && selectedName?.trim().toLowerCase() !== 'admin') {
       setCurrentPage('dashboard');
     }
   }, [currentPage, selectedName]);
@@ -1028,6 +1029,20 @@ export default function App() {
               activities={activities}
               selectedName={selectedName}
               onDeleteActivity={handleDeleteActivity}
+            />
+          </div>
+        )}
+
+        {currentPage === 'summary' && selectedName?.trim().toLowerCase() === 'admin' && (
+          <div className="animate-fadeIn">
+            <AnalyticsPage
+              selectedName={selectedName}
+              names={allRosterNames}
+              requests={requests}
+              masterRoster={masterRoster}
+              shiftTypes={shiftTypes}
+              teamMembers={teamMembers}
+              rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
             />
           </div>
         )}

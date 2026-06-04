@@ -30,7 +30,10 @@ export default function AppNavigation({
     { id: 'roster', label: 'Full Roster', icon: '📅' },
     { id: 'requests', label: 'Request Panel', icon: '📝' },
     { id: 'updates', label: 'Updates', icon: '🔔' },
-    ...(isAdmin ? [{ id: 'admin', label: 'Admin Panel', icon: '🔑' }] : []),
+    ...(isAdmin ? [
+      { id: 'summary', label: 'Summary', icon: '📊' },
+      { id: 'admin', label: 'Admin Panel', icon: '🔑' }
+    ] : []),
   ];
 
   return (
