@@ -325,78 +325,87 @@ export default function PublicHolidayTrackerPage({
         </div>
       )}
 
-      {/* Two Column Layout: Summary Table and Tracker Matrix */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Vertical Layout: Summary Table and Tracker Matrix */}
+      <div className="flex flex-col gap-8">
         
-        {/* Left Col: Doctor Summary Table */}
-        <div className="lg:col-span-1 rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col h-[600px]">
+        {/* Top: Doctor Summary Table */}
+        <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
           <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
               <span>👥</span> Doctor Summary
             </h3>
           </div>
-          <div className="overflow-y-auto flex-1 p-0 no-scrollbar">
-            <table className="min-w-full text-left text-[10px]">
-              <thead className="sticky top-0 bg-white shadow-sm z-10">
+          <div className="overflow-x-auto p-0 no-scrollbar border-b border-slate-100">
+            <table className="w-full text-left text-[10px] table-fixed">
+              <thead className="bg-white shadow-sm">
                 <tr className="text-slate-400 uppercase tracking-wider">
-                  <th className="py-3 px-3 font-bold cursor-pointer hover:text-indigo-600" onClick={() => handleSort('name')}>
-                    Doctor {sortConfig.key === 'name' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
-                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="Opening Balance" onClick={() => handleSort('openingBalance')}>
-                    Open {sortConfig.key === 'openingBalance' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
-                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="PH Worked This Year" onClick={() => handleSort('phWorked')}>
-                    Worked {sortConfig.key === 'phWorked' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
-                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="Total GHKA Used" onClick={() => handleSort('ghkaUsed')}>
-                    Used {sortConfig.key === 'ghkaUsed' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
-                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="From Opening" onClick={() => handleSort('usedFromOpeningBalance')}>
-                    (Open) {sortConfig.key === 'usedFromOpeningBalance' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
-                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="From PH Worked" onClick={() => handleSort('usedFromCurrentYearCredit')}>
-                    (PH) {sortConfig.key === 'usedFromCurrentYearCredit' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
-                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" onClick={() => handleSort('outstanding')}>
-                    Outst. {sortConfig.key === 'outstanding' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
-                  <th className="py-3 px-3 font-bold text-center cursor-pointer hover:text-indigo-600 text-rose-500" onClick={() => handleSort('excessGhkaUsed')}>
-                    Excess {sortConfig.key === 'excessGhkaUsed' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
-                  </th>
+                  <th className="py-2 px-3 font-bold w-24 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] z-10 border-b border-slate-100">Metric</th>
+                  {validDoctors.map(doc => (
+                    <th key={doc} className="py-2 px-1 font-bold text-center border-b border-slate-100 truncate" title={doc}>
+                      {doc.split(' ')[0]}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {sortedSummaries.map(s => (
-                  <tr key={s.name} className="hover:bg-slate-50 transition">
-                    <td className="py-2.5 px-3 font-bold text-slate-700 truncate max-w-[100px]">{s.name}</td>
-                    <td className="py-2.5 px-2 text-center font-semibold text-slate-500">{s.openingBalance}</td>
-                    <td className="py-2.5 px-2 text-center font-semibold text-indigo-600">{s.phWorked}</td>
-                    <td className="py-2.5 px-2 text-center font-semibold text-emerald-600">{s.ghkaUsed}</td>
-                    <td className="py-2.5 px-2 text-center font-medium text-slate-400">{s.usedFromOpeningBalance}</td>
-                    <td className="py-2.5 px-2 text-center font-medium text-slate-400">{s.usedFromCurrentYearCredit}</td>
-                    <td className="py-2.5 px-2 text-center">
-                      <span className={`inline-block px-1.5 py-0.5 rounded-md font-bold ${s.outstanding > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
-                        {s.outstanding}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      {s.excessGhkaUsed > 0 ? (
-                        <span className="inline-block px-1.5 py-0.5 rounded-md font-bold bg-rose-100 text-rose-700">
-                          {s.excessGhkaUsed}
-                        </span>
-                      ) : (
-                        <span className="text-slate-300 font-medium">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                <tr className="hover:bg-slate-50 transition">
+                  <td className="py-1.5 px-3 font-bold text-slate-500 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">Opening</td>
+                  {validDoctors.map(doc => {
+                     const s = sortedSummaries.find(x => x.name === doc) || { openingBalance: 0 };
+                     return <td key={doc} className="py-1.5 px-1 text-center font-semibold text-slate-500">{s.openingBalance}</td>;
+                  })}
+                </tr>
+                <tr className="hover:bg-slate-50 transition">
+                  <td className="py-1.5 px-3 font-bold text-slate-500 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">PH Worked</td>
+                  {validDoctors.map(doc => {
+                     const s = sortedSummaries.find(x => x.name === doc) || { phWorked: 0 };
+                     return <td key={doc} className="py-1.5 px-1 text-center font-semibold text-indigo-600">{s.phWorked}</td>;
+                  })}
+                </tr>
+                <tr className="hover:bg-slate-50 transition">
+                  <td className="py-1.5 px-3 font-bold text-slate-500 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">GHKA Used</td>
+                  {validDoctors.map(doc => {
+                     const s = sortedSummaries.find(x => x.name === doc) || { ghkaUsed: 0 };
+                     return <td key={doc} className="py-1.5 px-1 text-center font-semibold text-emerald-600">{s.ghkaUsed}</td>;
+                  })}
+                </tr>
+                <tr className="hover:bg-slate-50 transition">
+                  <td className="py-1.5 px-3 font-bold text-slate-500 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">Outstanding</td>
+                  {validDoctors.map(doc => {
+                     const s = sortedSummaries.find(x => x.name === doc) || { outstanding: 0 };
+                     return (
+                       <td key={doc} className="py-1.5 px-1 text-center">
+                         <span className={`inline-block px-1.5 py-0.5 rounded-md font-bold ${s.outstanding > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'}`}>
+                           {s.outstanding}
+                         </span>
+                       </td>
+                     );
+                  })}
+                </tr>
+                <tr className="hover:bg-slate-50 transition">
+                  <td className="py-1.5 px-3 font-bold text-slate-500 sticky left-0 bg-white shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">Excess</td>
+                  {validDoctors.map(doc => {
+                     const s = sortedSummaries.find(x => x.name === doc) || { excessGhkaUsed: 0 };
+                     return (
+                       <td key={doc} className="py-1.5 px-1 text-center">
+                         {s.excessGhkaUsed > 0 ? (
+                           <span className="inline-block px-1.5 py-0.5 rounded-md font-bold bg-rose-100 text-rose-700">
+                             {s.excessGhkaUsed}
+                           </span>
+                         ) : (
+                           <span className="text-slate-300 font-medium">—</span>
+                         )}
+                       </td>
+                     );
+                  })}
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
 
-        {/* Right Col: Tracker Matrix */}
-        <div className="lg:col-span-2 rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col h-[600px]">
+        {/* Bottom: Tracker Matrix */}
+        <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
           <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex items-center justify-between">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
               <span>📅</span> Monthly Replacement Matrix
@@ -406,22 +415,22 @@ export default function PublicHolidayTrackerPage({
             </span>
           </div>
           
-          <div className="overflow-auto flex-1 p-0 no-scrollbar">
+          <div className="overflow-x-auto p-0 no-scrollbar">
             {matrixRows.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-slate-400 p-8 text-center gap-3">
+              <div className="flex flex-col items-center justify-center text-slate-400 p-8 text-center gap-3">
                 <span className="text-4xl">🏝️</span>
                 <p className="text-sm font-bold">No public holiday shifts worked in {monthName}.</p>
                 <p className="text-xs">Try selecting a different month using the navigator above.</p>
               </div>
             ) : (
-              <table className="min-w-full text-left border-separate border-spacing-0">
+              <table className="w-full text-left border-separate border-spacing-0 table-fixed">
                 <thead>
                   <tr className="bg-slate-50/80">
-                    <th className="sticky left-0 z-20 bg-slate-50/90 backdrop-blur-md py-3 px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 border-r w-[200px] min-w-[200px]">
-                      Holiday / Date
+                    <th className="sticky left-0 z-20 bg-slate-50/90 backdrop-blur-md py-2 px-2 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 border-r w-24 md:w-32 truncate">
+                      Holiday
                     </th>
                     {validDoctors.map(doc => (
-                      <th key={doc} className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 min-w-[140px] text-center">
+                      <th key={doc} className="py-2 px-1 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 text-center truncate" title={doc}>
                         {doc.split(' ')[0]}
                       </th>
                     ))}
@@ -434,9 +443,9 @@ export default function PublicHolidayTrackerPage({
 
                     return (
                       <tr key={row.date} className="hover:bg-slate-50/50 transition">
-                        <td className="sticky left-0 z-10 bg-white py-3 px-4 border-r border-slate-100 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                          <p className="text-xs font-bold text-slate-800">{row.name}</p>
-                          <p className="text-[10px] text-slate-500 font-semibold mt-0.5">{formattedDate}</p>
+                        <td className="sticky left-0 z-10 bg-white py-1.5 px-2 border-r border-slate-100 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] truncate" title={row.name}>
+                          <p className="text-[10px] font-bold text-slate-800 truncate">{row.name}</p>
+                          <p className="text-[9px] text-slate-500 font-semibold">{formattedDate}</p>
                         </td>
                         {validDoctors.map(doc => {
                           const docKey = normalizeForComparison(mapName(doc));
@@ -445,7 +454,7 @@ export default function PublicHolidayTrackerPage({
                           if (!recordEntry) {
                             // Did not work / empty row in master roster
                             return (
-                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                              <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-300 font-medium">—</span>
                               </td>
                             );
@@ -455,7 +464,7 @@ export default function PublicHolidayTrackerPage({
 
                           if (classification.category === 'empty') {
                              return (
-                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                              <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-300 font-medium">—</span>
                               </td>
                             );
@@ -463,16 +472,16 @@ export default function PublicHolidayTrackerPage({
 
                           if (classification.category === 'official_ph_off') {
                              return (
-                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
-                                <span className="text-[10px] text-slate-400 font-bold bg-slate-100 px-2 py-1 rounded-md border border-slate-200">HKA</span>
+                              <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
+                                <span className="text-[9px] text-slate-400 font-bold bg-slate-100 px-1 py-0.5 rounded border border-slate-200">HKA</span>
                               </td>
                             );
                           }
 
                           if (classification.category === 'other_non_working') {
                              return (
-                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
-                                <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-1 rounded-md border border-slate-200">{originalShift}</span>
+                              <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
+                                <span className="text-[9px] text-slate-400 font-medium bg-slate-100 px-1 py-0.5 rounded border border-slate-200">{originalShift}</span>
                               </td>
                             );
                           }
@@ -481,15 +490,15 @@ export default function PublicHolidayTrackerPage({
                           const isUsed = matchedRecord?.status === 'USED';
                           const badgeBg = isUsed ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200';
                           const statusIcon = isUsed ? '✓' : '⏳';
-                          const statusText = isUsed ? `GHKA ${new Date(matchedRecord.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'Pending';
+                          const statusText = isUsed ? `${new Date(matchedRecord.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'Pend';
 
                           return (
-                            <td key={docKey} className="py-2 px-3 text-center align-top border-b border-slate-100">
-                              <div className={`flex flex-col items-center justify-center p-1.5 rounded-xl border ${badgeBg}`}>
-                                <span className="text-xs font-black">{classification.normalizedShift}</span>
-                                <div className="flex items-center gap-1 mt-0.5 opacity-80">
-                                  <span className="text-[9px] font-bold">{statusIcon}</span>
-                                  <span className="text-[9px] font-bold whitespace-nowrap">{statusText}</span>
+                            <td key={docKey} className="py-1 px-1 text-center align-top border-b border-slate-100">
+                              <div className={`flex flex-col items-center justify-center py-1 px-0.5 rounded-lg border ${badgeBg} mx-0.5`}>
+                                <span className="text-[10px] font-black leading-tight">{classification.normalizedShift}</span>
+                                <div className="flex items-center gap-0.5 opacity-80 leading-tight">
+                                  <span className="text-[8px] font-bold">{statusIcon}</span>
+                                  <span className="text-[8px] font-bold whitespace-nowrap">{statusText}</span>
                                 </div>
                               </div>
                             </td>
