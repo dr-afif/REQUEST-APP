@@ -289,61 +289,65 @@ export default function AnalyticsPage({
   return (
     <div className="mx-auto px-4 py-8 md:px-8 max-w-6xl animate-fadeIn">
       {/* Page Header */}
-      <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-extrabold flex items-center gap-2">
-            <span>📊</span>
-            <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Roster Summary &amp; Analytics</span>
-          </h1>
-          <p className="text-sm text-slate-500 mt-2">
-            Analytics dashboard and shift tallies for the month of <span className="font-bold text-slate-700">{monthName}</span>.
-          </p>
-        </div>
+      <div className="mb-4">
+        <h1 className="text-3xl font-extrabold flex items-center gap-2">
+          <span>📊</span>
+          <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Roster Summary &amp; Analytics</span>
+        </h1>
+        <p className="text-sm text-slate-500 mt-2">
+          Analytics dashboard and shift tallies for the month of <span className="font-bold text-slate-700">{monthName}</span>.
+        </p>
+      </div>
 
-        {/* Month Picker / Navigator */}
-        <div className="flex items-center gap-1.5 bg-white border border-slate-200/80 rounded-2xl p-1 shadow-sm self-start sm:self-center">
-          <button
-            type="button"
-            onClick={() => {
-              if (activeMonth) {
-                const [y, m] = activeMonth.split('-').map(Number);
-                const prev = new Date(y, m - 2, 1);
-                const prevMonthStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
-                setActiveMonth(prevMonthStr);
-              }
-            }}
-            className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
-            title="Previous Month"
-          >
-            ◀
-          </button>
-          
-          <input
-            type="month"
-            value={activeMonth || ''}
-            onChange={(e) => {
-              if (e.target.value) {
-                setActiveMonth(e.target.value);
-              }
-            }}
-            className="border-none bg-transparent text-xs font-bold text-slate-750 focus:ring-0 cursor-pointer outline-none px-1 text-center w-36"
-          />
+      {/* Sticky Month Navigator */}
+      <div className="sticky top-0 z-40 mb-6 -mx-4 md:-mx-8 px-4 md:px-8 py-2 bg-white/80 backdrop-blur-md border-b border-slate-200/60 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest hidden sm:block">Viewing month</span>
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200/80 rounded-2xl p-1 shadow-sm">
+            <button
+              type="button"
+              onClick={() => {
+                if (activeMonth) {
+                  const [y, m] = activeMonth.split('-').map(Number);
+                  const prev = new Date(y, m - 2, 1);
+                  const prevMonthStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+                  setActiveMonth(prevMonthStr);
+                }
+              }}
+              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
+              title="Previous Month"
+            >
+              ◀
+            </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              if (activeMonth) {
-                const [y, m] = activeMonth.split('-').map(Number);
-                const next = new Date(y, m, 1);
-                const nextMonthStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
-                setActiveMonth(nextMonthStr);
-              }
-            }}
-            className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
-            title="Next Month"
-          >
-            ▶
-          </button>
+            <input
+              type="month"
+              value={activeMonth || ''}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setActiveMonth(e.target.value);
+                }
+              }}
+              className="border-none bg-transparent text-xs font-bold text-slate-750 focus:ring-0 cursor-pointer outline-none px-1 text-center w-36"
+            />
+
+            <button
+              type="button"
+              onClick={() => {
+                if (activeMonth) {
+                  const [y, m] = activeMonth.split('-').map(Number);
+                  const next = new Date(y, m, 1);
+                  const nextMonthStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+                  setActiveMonth(nextMonthStr);
+                }
+              }}
+              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
+              title="Next Month"
+            >
+              ▶
+            </button>
+          </div>
+          <span className="text-xs font-bold text-slate-700 hidden sm:block">{monthName}</span>
         </div>
       </div>
 
