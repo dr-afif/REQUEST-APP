@@ -14,7 +14,9 @@ export default function PublicHolidayTrackerPage({
   selectedName,
   names = [],
   masterRoster = [],
-  rosterMonth = ''
+  rosterMonth = '',
+  settings = {},
+  onUpdateSetting = () => {}
 }) {
   const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
 
@@ -24,12 +26,30 @@ export default function PublicHolidayTrackerPage({
 
   const [openingBalances, setOpeningBalances] = useState(() => {
     try {
+      if (settings.phTrackerOpeningBalances) {
+        return typeof settings.phTrackerOpeningBalances === 'string'
+          ? JSON.parse(settings.phTrackerOpeningBalances)
+          : settings.phTrackerOpeningBalances;
+      }
       const saved = localStorage.getItem('phTrackerOpeningBalances');
       return saved ? JSON.parse(saved) : {};
     } catch (e) {
       return {};
     }
   });
+
+  useEffect(() => {
+    if (settings.phTrackerOpeningBalances) {
+      try {
+        const parsed = typeof settings.phTrackerOpeningBalances === 'string'
+          ? JSON.parse(settings.phTrackerOpeningBalances)
+          : settings.phTrackerOpeningBalances;
+        setOpeningBalances(parsed);
+      } catch (e) {
+        console.error('Failed to parse opening balances from settings');
+      }
+    }
+  }, [settings.phTrackerOpeningBalances]);
 
   const updateOpeningBalance = (docName, newBalance, note = '') => {
     const docKey = normalizeForComparison(mapName(docName));
@@ -47,6 +67,9 @@ export default function PublicHolidayTrackerPage({
     }
     setOpeningBalances(newBalances);
     localStorage.setItem('phTrackerOpeningBalances', JSON.stringify(newBalances));
+    
+    // Persist online
+    onUpdateSetting('phTrackerOpeningBalances', JSON.stringify(newBalances));
   };
 
   useEffect(() => {

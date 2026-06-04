@@ -1055,6 +1055,8 @@ export default function App() {
               names={allRosterNames}
               masterRoster={masterRoster}
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
+              settings={settings}
+              onUpdateSetting={handleUpdateSetting}
             />
           </div>
         )}
