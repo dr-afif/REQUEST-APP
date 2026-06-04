@@ -138,7 +138,7 @@ export default function PublicHolidayTrackerPage({
     );
   }
 
-  const monthName = activeMonth ? new Date(activeMonth + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : '';
+  const year = activeMonth ? activeMonth.split('-')[0] : new Date().getFullYear();
 
   return (
     <div className="mx-auto px-4 py-8 md:px-8 max-w-6xl animate-fadeIn">
@@ -149,60 +149,8 @@ export default function PublicHolidayTrackerPage({
           <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Public Holiday Tracker</span>
         </h1>
         <p className="text-sm text-slate-500 mt-2">
-          Read-only tracker for Public Holiday duties and GHKA replacements. Month selection filters the Matrix View.
+          Read-only tracker for Public Holiday duties and GHKA replacements.
         </p>
-      </div>
-
-      {/* Sticky Month Navigator */}
-      <div className="sticky top-[84px] lg:top-7 z-40 mb-6 -mx-4 md:-mx-8 px-4 md:px-8 py-2 bg-white/80 backdrop-blur-md border-b border-slate-200/60 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest hidden sm:block">Viewing Matrix Month</span>
-          <div className="flex items-center gap-1.5 bg-white border border-slate-200/80 rounded-2xl p-1 shadow-sm">
-            <button
-              type="button"
-              onClick={() => {
-                if (activeMonth) {
-                  const [y, m] = activeMonth.split('-').map(Number);
-                  const prev = new Date(y, m - 2, 1);
-                  const prevMonthStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
-                  setActiveMonth(prevMonthStr);
-                }
-              }}
-              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
-              title="Previous Month"
-            >
-              ◀
-            </button>
-
-            <input
-              type="month"
-              value={activeMonth || ''}
-              onChange={(e) => {
-                if (e.target.value) {
-                  setActiveMonth(e.target.value);
-                }
-              }}
-              className="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer text-center px-2 py-1 hover:bg-slate-50 rounded-lg transition"
-            />
-
-            <button
-              type="button"
-              onClick={() => {
-                if (activeMonth) {
-                  const [y, m] = activeMonth.split('-').map(Number);
-                  const next = new Date(y, m, 1);
-                  const nextMonthStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
-                  setActiveMonth(nextMonthStr);
-                }
-              }}
-              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
-              title="Next Month"
-            >
-              ▶
-            </button>
-          </div>
-          <span className="text-xs font-bold text-slate-800 hidden sm:block">{monthName}</span>
-        </div>
       </div>
 
       {/* Temporary Debug Panel */}
@@ -408,10 +356,10 @@ export default function PublicHolidayTrackerPage({
         <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
           <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex items-center justify-between">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <span>📅</span> Monthly Replacement Matrix
+              <span>📅</span> Annual Replacement Matrix
             </h3>
             <span className="text-[10px] font-bold text-slate-400 bg-slate-200/50 px-2 py-1 rounded-lg">
-              {monthName}
+              Year {year}
             </span>
           </div>
           
@@ -419,8 +367,7 @@ export default function PublicHolidayTrackerPage({
             {matrixRows.length === 0 ? (
               <div className="flex flex-col items-center justify-center text-slate-400 p-8 text-center gap-3">
                 <span className="text-4xl">🏝️</span>
-                <p className="text-sm font-bold">No public holiday shifts worked in {monthName}.</p>
-                <p className="text-xs">Try selecting a different month using the navigator above.</p>
+                <p className="text-sm font-bold">No public holidays found.</p>
               </div>
             ) : (
               <table className="w-full text-left border-separate border-spacing-0 table-fixed">

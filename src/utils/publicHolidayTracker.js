@@ -364,13 +364,10 @@ export const buildWarnings = (summaries) => {
 export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRoster = []) => {
   const holidaysMap = {}; // Key: YYYY-MM-DD
   
-  // 1. Initialize all holidays for the active month
+  // 1. Initialize all holidays
   const activeKeys = Array.isArray(HOLIDAYS) 
-    ? HOLIDAYS.filter(h => {
-        const d = h.date || h.Date || h.holidayDate;
-        return d && d.startsWith(activeMonth);
-      }).map(h => ({ date: h.date || h.Date || h.holidayDate, name: h.name || h.Name || h.holidayName }))
-    : Object.keys(HOLIDAYS).filter(d => d.startsWith(activeMonth)).map(d => ({ date: d, name: HOLIDAYS[d] }));
+    ? HOLIDAYS.map(h => ({ date: h.date || h.Date || h.holidayDate, name: h.name || h.Name || h.holidayName }))
+    : Object.keys(HOLIDAYS).map(d => ({ date: d, name: HOLIDAYS[d] }));
 
   activeKeys.forEach(({ date, name }) => {
     holidaysMap[date] = {
@@ -399,7 +396,7 @@ export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRos
   
   // 3. Inject matched records
   matchedRecords.forEach(record => {
-    if (record.holidayDate && record.holidayDate.startsWith(activeMonth) && holidaysMap[record.holidayDate]) {
+    if (record.holidayDate && holidaysMap[record.holidayDate]) {
       const docEntry = holidaysMap[record.holidayDate].doctors[record.doctorKey];
       if (docEntry) {
         docEntry.matchedRecord = record;
