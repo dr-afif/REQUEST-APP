@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { calculateRosterAnalytics } from '../utils/rosterAnalytics';
 
 export default function AnalyticsPage({
@@ -20,6 +20,13 @@ export default function AnalyticsPage({
   const [selectedDoctor, setSelectedDoctor] = useState(null);
   const [fairnessSortConfig, setFairnessSortConfig] = useState({ key: 'fairnessScore', direction: 'desc' });
   const [ytdSortConfig, setYtdSortConfig] = useState({ key: 'activeShifts', direction: 'desc' });
+  const [activeMonth, setActiveMonth] = useState(rosterMonth);
+
+  useEffect(() => {
+    if (rosterMonth) {
+      setActiveMonth(rosterMonth);
+    }
+  }, [rosterMonth]);
 
   // Read saved thresholds for coverage calculations
   const tallyThresholds = useMemo(() => {
@@ -56,11 +63,11 @@ export default function AnalyticsPage({
       requests,
       teamMembers,
       shiftTypes,
-      rosterMonth,
+      rosterMonth: activeMonth,
       includeInactive,
       tallyThresholds,
     });
-  }, [names, masterRoster, requests, teamMembers, shiftTypes, rosterMonth, includeInactive, tallyThresholds]);
+  }, [names, masterRoster, requests, teamMembers, shiftTypes, activeMonth, includeInactive, tallyThresholds]);
 
   const { overview, doctorSummaries, rankings, dynamicShiftColumns, coverageIssues, ytdStats, averages } = analytics;
 
@@ -134,11 +141,11 @@ export default function AnalyticsPage({
 
   // 2. Format Month Label (e.g. JUNE 2026)
   const monthName = useMemo(() => {
-    if (!rosterMonth) return '';
-    const [year, month] = rosterMonth.split('-').map(Number);
+    if (!activeMonth) return '';
+    const [year, month] = activeMonth.split('-').map(Number);
     const date = new Date(year, month - 1, 1);
     return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }).toUpperCase();
-  }, [rosterMonth]);
+  }, [activeMonth]);
 
   // 3. Filter summaries by search name query
   const filteredSummaries = useMemo(() => {
@@ -247,14 +254,62 @@ export default function AnalyticsPage({
   return (
     <div className="mx-auto px-4 py-8 md:px-8 max-w-6xl animate-fadeIn">
       {/* Page Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-extrabold flex items-center gap-2">
-          <span>📊</span>
-          <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Roster Summary &amp; Analytics</span>
-        </h1>
-        <p className="text-sm text-slate-500 mt-2">
-          Analytics dashboard and shift tallies for the month of <span className="font-bold text-slate-700">{monthName}</span>.
-        </p>
+      <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-extrabold flex items-center gap-2">
+            <span>📊</span>
+            <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Roster Summary &amp; Analytics</span>
+          </h1>
+          <p className="text-sm text-slate-500 mt-2">
+            Analytics dashboard and shift tallies for the month of <span className="font-bold text-slate-700">{monthName}</span>.
+          </p>
+        </div>
+
+        {/* Month Picker / Navigator */}
+        <div className="flex items-center gap-1.5 bg-white border border-slate-200/80 rounded-2xl p-1 shadow-sm self-start sm:self-center">
+          <button
+            type="button"
+            onClick={() => {
+              if (activeMonth) {
+                const [y, m] = activeMonth.split('-').map(Number);
+                const prev = new Date(y, m - 2, 1);
+                const prevMonthStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+                setActiveMonth(prevMonthStr);
+              }
+            }}
+            className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
+            title="Previous Month"
+          >
+            ◀
+          </button>
+          
+          <input
+            type="month"
+            value={activeMonth || ''}
+            onChange={(e) => {
+              if (e.target.value) {
+                setActiveMonth(e.target.value);
+              }
+            }}
+            className="border-none bg-transparent text-xs font-bold text-slate-750 focus:ring-0 cursor-pointer outline-none px-1 text-center w-36"
+          />
+
+          <button
+            type="button"
+            onClick={() => {
+              if (activeMonth) {
+                const [y, m] = activeMonth.split('-').map(Number);
+                const next = new Date(y, m, 1);
+                const nextMonthStr = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+                setActiveMonth(nextMonthStr);
+              }
+            }}
+            className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
+            title="Next Month"
+          >
+            ▶
+          </button>
+        </div>
       </div>
 
       {/* 🚀 Overview Cards */}
