@@ -18,6 +18,35 @@ export default function AnalyticsPage({
   const [chartMetric, setChartMetric] = useState('NIGHT'); // 'NIGHT', 'activeShiftsCount', 'counts.TOTAL_LEAVE', 'AM', 'PM'
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
   const [selectedDoctor, setSelectedDoctor] = useState(null);
+  const [fairnessSortConfig, setFairnessSortConfig] = useState({ key: 'fairnessScore', direction: 'desc' });
+  const [ytdSortConfig, setYtdSortConfig] = useState({ key: 'activeShifts', direction: 'desc' });
+
+  // Read saved thresholds for coverage calculations
+  const tallyThresholds = useMemo(() => {
+    try {
+      const saved = localStorage.getItem('rosterTallyThresholds');
+      const defaultThresholds = {
+        amMin: 1,
+        pmMin: 1,
+        nightMin: 1,
+        nightMax: 2,
+        totalLeaveMax: 4,
+      };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { ...defaultThresholds, ...parsed };
+      }
+      return defaultThresholds;
+    } catch (e) {
+      return {
+        amMin: 1,
+        pmMin: 1,
+        nightMin: 1,
+        nightMax: 2,
+        totalLeaveMax: 4,
+      };
+    }
+  }, []);
 
   // 1. Calculate the analytics dataset
   const analytics = useMemo(() => {
@@ -29,10 +58,79 @@ export default function AnalyticsPage({
       shiftTypes,
       rosterMonth,
       includeInactive,
+      tallyThresholds,
     });
-  }, [names, masterRoster, requests, teamMembers, shiftTypes, rosterMonth, includeInactive]);
+  }, [names, masterRoster, requests, teamMembers, shiftTypes, rosterMonth, includeInactive, tallyThresholds]);
 
-  const { overview, doctorSummaries, rankings, dynamicShiftColumns } = analytics;
+  const { overview, doctorSummaries, rankings, dynamicShiftColumns, coverageIssues, ytdStats, averages } = analytics;
+
+  const sortedFairnessSummaries = useMemo(() => {
+    const list = [...doctorSummaries];
+    if (!fairnessSortConfig.key) return list;
+
+    list.sort((a, b) => {
+      let valA, valB;
+      if (fairnessSortConfig.key === 'name') {
+        valA = a.name.toLowerCase();
+        valB = b.name.toLowerCase();
+      } else if (fairnessSortConfig.key === 'fairnessStatus') {
+        valA = a.fairnessStatus;
+        valB = b.fairnessStatus;
+      } else {
+        valA = a[fairnessSortConfig.key] !== undefined ? a[fairnessSortConfig.key] : 0;
+        valB = b[fairnessSortConfig.key] !== undefined ? b[fairnessSortConfig.key] : 0;
+      }
+
+      if (valA < valB) return fairnessSortConfig.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return fairnessSortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return list;
+  }, [doctorSummaries, fairnessSortConfig]);
+
+  const fairnessStandings = useMemo(() => {
+    const activeDocs = doctorSummaries.filter(d => !d.isInactive);
+    if (activeDocs.length === 0) return null;
+
+    const mostBalanced = [...activeDocs].sort((a, b) => b.fairnessScore - a.fairnessScore)[0];
+    const needsReview = [...activeDocs].sort((a, b) => a.fairnessScore - b.fairnessScore)[0];
+    const highestNight = [...activeDocs].sort((a, b) => b.nightShifts - a.nightShifts)[0];
+    const highestWeekend = [...activeDocs].sort((a, b) => b.weekendShifts - a.weekendShifts)[0];
+    const highestHoliday = [...activeDocs].sort((a, b) => b.publicHolidayShifts - a.publicHolidayShifts)[0];
+    const lowestActive = [...activeDocs].sort((a, b) => a.activeShifts - b.activeShifts)[0];
+
+    return {
+      mostBalanced,
+      needsReview,
+      highestNight,
+      highestWeekend,
+      highestHoliday,
+      lowestActive,
+    };
+  }, [doctorSummaries]);
+
+  const sortedYtdMemberStats = useMemo(() => {
+    const list = [...(ytdStats?.perMemberYtdStats || [])];
+    if (!ytdSortConfig.key) return list;
+
+    list.sort((a, b) => {
+      let valA, valB;
+      if (ytdSortConfig.key === 'name') {
+        valA = a.name.toLowerCase();
+        valB = b.name.toLowerCase();
+      } else {
+        valA = a[ytdSortConfig.key] || 0;
+        valB = b[ytdSortConfig.key] || 0;
+      }
+
+      if (valA < valB) return ytdSortConfig.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return ytdSortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return list;
+  }, [ytdStats?.perMemberYtdStats, ytdSortConfig]);
 
   // 2. Format Month Label (e.g. JUNE 2026)
   const monthName = useMemo(() => {
@@ -447,6 +545,418 @@ export default function AnalyticsPage({
         </div>
       </div>
 
+      {/* ⚖️ Fairness Scoring Panel & Standing Cards */}
+      <div className="grid gap-6 lg:grid-cols-3 mb-8">
+        {/* Fairness Table */}
+        <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm lg:col-span-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 mb-4 gap-2">
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <span>⚖️</span> Fairness Scoring
+            </h3>
+            {averages && (
+              <div className="flex flex-wrap gap-2 text-[9px] font-bold text-slate-500 bg-slate-50 border border-slate-150/50 rounded-lg px-2 py-1">
+                <span>Team Averages:</span>
+                <span>Active: {averages.activeShifts}</span>
+                <span>Night: {averages.nightShifts}</span>
+                <span>Weekend: {averages.weekendShifts}</span>
+                <span>Holiday: {averages.publicHolidayShifts}</span>
+                <span>Leave: {averages.totalLeave}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-separate border-spacing-0 text-[10px] sm:text-xs font-sans text-center">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500 border-b border-slate-100 select-none">
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'name' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'name', direction: dir });
+                    }}
+                    className="sticky left-0 z-20 bg-slate-50 px-3 py-2 text-left font-extrabold uppercase tracking-wider shadow-sm ring-1 ring-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Name {fairnessSortConfig.key === 'name' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'fairnessScore' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'fairnessScore', direction: dir });
+                    }}
+                    className="px-2 py-2 font-extrabold uppercase tracking-wider border-l border-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Score {fairnessSortConfig.key === 'fairnessScore' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'fairnessStatus' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'fairnessStatus', direction: dir });
+                    }}
+                    className="px-2 py-2 font-extrabold uppercase tracking-wider border-l border-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Status {fairnessSortConfig.key === 'fairnessStatus' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'activeShifts' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'activeShifts', direction: dir });
+                    }}
+                    className="px-2 py-2 font-extrabold uppercase tracking-wider border-l border-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Active {fairnessSortConfig.key === 'activeShifts' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'nightShifts' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'nightShifts', direction: dir });
+                    }}
+                    className="px-2 py-2 font-extrabold uppercase tracking-wider border-l border-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Night {fairnessSortConfig.key === 'nightShifts' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'weekendShifts' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'weekendShifts', direction: dir });
+                    }}
+                    className="px-2 py-2 font-extrabold uppercase tracking-wider border-l border-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Weekend {fairnessSortConfig.key === 'weekendShifts' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'publicHolidayShifts' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'publicHolidayShifts', direction: dir });
+                    }}
+                    className="px-2 py-2 font-extrabold uppercase tracking-wider border-l border-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Holiday {fairnessSortConfig.key === 'publicHolidayShifts' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                  <th
+                    onClick={() => {
+                      const dir = fairnessSortConfig.key === 'totalLeave' && fairnessSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                      setFairnessSortConfig({ key: 'totalLeave', direction: dir });
+                    }}
+                    className="px-2 py-2 font-extrabold uppercase tracking-wider border-l border-slate-100 cursor-pointer hover:bg-slate-100 text-[9px] sm:text-[10px]"
+                  >
+                    Leave {fairnessSortConfig.key === 'totalLeave' ? (fairnessSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedFairnessSummaries.map((entry) => {
+                  let statusBg = 'bg-slate-100 text-slate-800 border-slate-200';
+                  if (entry.fairnessStatus === 'Balanced') {
+                    statusBg = 'bg-emerald-50 text-emerald-700 border-emerald-100';
+                  } else if (entry.fairnessStatus === 'Watch') {
+                    statusBg = 'bg-amber-50 text-amber-705 border-amber-100';
+                  } else if (entry.fairnessStatus === 'Imbalanced') {
+                    statusBg = 'bg-rose-50 text-rose-700 border-rose-100';
+                  }
+                  
+                  return (
+                    <tr
+                      key={entry.nameKey}
+                      onClick={() => setSelectedDoctor(entry)}
+                      className={`hover:bg-slate-50/70 border-b border-slate-100 transition cursor-pointer ${
+                        entry.isInactive ? 'opacity-60 bg-slate-50/30' : ''
+                      }`}
+                    >
+                      <th className="sticky left-0 z-10 px-3 py-2 text-left font-semibold text-slate-800 shadow-sm ring-1 ring-slate-100 bg-white">
+                        {entry.name.toUpperCase()}
+                      </th>
+                      <td className="px-2 py-2 border-l border-slate-100 font-extrabold text-slate-900">
+                        {entry.fairnessScore}
+                      </td>
+                      <td className="px-2 py-2 border-l border-slate-100">
+                        <span className={`inline-block border px-1.5 py-0.5 rounded-full text-[9px] font-bold ${statusBg}`}>
+                          {entry.fairnessStatus}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 border-l border-slate-100 text-slate-650 font-semibold">
+                        {entry.activeShifts}
+                      </td>
+                      <td className="px-2 py-2 border-l border-slate-100 text-slate-650 font-semibold">
+                        {entry.nightShifts}
+                      </td>
+                      <td className="px-2 py-2 border-l border-slate-100 text-slate-650 font-semibold">
+                        {entry.weekendShifts}
+                      </td>
+                      <td className="px-2 py-2 border-l border-slate-100 text-slate-650 font-semibold">
+                        {entry.publicHolidayShifts}
+                      </td>
+                      <td className="px-2 py-2 border-l border-slate-100 text-slate-650 font-semibold">
+                        {entry.totalLeave}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Fairness Ranking Standings Cards */}
+        <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm flex flex-col justify-between">
+          <div className="w-full">
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+              <span>⚖️</span> Fairness Standings
+            </h3>
+            {fairnessStandings ? (
+              <div className="grid grid-cols-2 gap-3 text-left">
+                <div className="bg-emerald-50/50 border border-emerald-100/50 rounded-2xl p-2.5">
+                  <span className="text-[8px] font-extrabold text-emerald-600 uppercase tracking-wider block">Most Balanced</span>
+                  <span className="text-xs font-bold text-emerald-950 mt-1 block truncate">
+                    {fairnessStandings.mostBalanced.name.toUpperCase()}
+                  </span>
+                  <span className="text-[9px] text-slate-500 font-medium">Score: {fairnessStandings.mostBalanced.fairnessScore}</span>
+                </div>
+                <div className="bg-rose-50/50 border border-rose-100/50 rounded-2xl p-2.5">
+                  <span className="text-[8px] font-extrabold text-rose-600 uppercase tracking-wider block">Needs Review</span>
+                  <span className="text-xs font-bold text-rose-955 mt-1 block truncate">
+                    {fairnessStandings.needsReview.name.toUpperCase()}
+                  </span>
+                  <span className="text-[9px] text-slate-500 font-medium">Score: {fairnessStandings.needsReview.fairnessScore}</span>
+                </div>
+                <div className="bg-indigo-50/50 border border-indigo-100/50 rounded-2xl p-2.5">
+                  <span className="text-[8px] font-extrabold text-indigo-600 uppercase tracking-wider block">Highest Night Load</span>
+                  <span className="text-xs font-bold text-indigo-955 mt-1 block truncate">
+                    {fairnessStandings.highestNight.name.toUpperCase()}
+                  </span>
+                  <span className="text-[9px] text-slate-500 font-medium">Nights: {fairnessStandings.highestNight.nightShifts}</span>
+                </div>
+                <div className="bg-amber-50/50 border border-amber-100/50 rounded-2xl p-2.5">
+                  <span className="text-[8px] font-extrabold text-amber-600 uppercase tracking-wider block">Highest Weekend Load</span>
+                  <span className="text-xs font-bold text-amber-955 mt-1 block truncate">
+                    {fairnessStandings.highestWeekend.name.toUpperCase()}
+                  </span>
+                  <span className="text-[9px] text-slate-500 font-medium">Weekends: {fairnessStandings.highestWeekend.weekendShifts}</span>
+                </div>
+                <div className="bg-teal-50/50 border border-teal-100/50 rounded-2xl p-2.5">
+                  <span className="text-[8px] font-extrabold text-teal-600 uppercase tracking-wider block">Highest Holiday Load</span>
+                  <span className="text-xs font-bold text-teal-955 mt-1 block truncate">
+                    {fairnessStandings.highestHoliday.name.toUpperCase()}
+                  </span>
+                  <span className="text-[9px] text-slate-500 font-medium">Holidays: {fairnessStandings.highestHoliday.publicHolidayShifts}</span>
+                </div>
+                <div className="bg-slate-50 border border-slate-150/60 rounded-2xl p-2.5">
+                  <span className="text-[8px] font-extrabold text-slate-500 uppercase tracking-wider block">Lowest Active Load</span>
+                  <span className="text-xs font-bold text-slate-950 mt-1 block truncate">
+                    {fairnessStandings.lowestActive.name.toUpperCase()}
+                  </span>
+                  <span className="text-[9px] text-slate-500 font-medium">Active: {fairnessStandings.lowestActive.activeShifts}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400 py-12 text-center">No standing data available.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 🚨 Coverage Issues Panel */}
+      <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm mb-8 text-left">
+        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+          <span>🚨</span> Roster Coverage &amp; Threshold Alerts
+        </h3>
+        
+        {coverageIssues.length === 0 ? (
+          <div className="py-8 text-center text-emerald-600 font-bold flex flex-col items-center justify-center gap-2 text-xs">
+            <span className="text-2xl">✅</span>
+            <span>No coverage issues detected for this month.</span>
+          </div>
+        ) : (
+          <div className="max-h-[300px] overflow-y-auto divide-y divide-slate-100 pr-2 custom-scrollbar">
+            {coverageIssues.map((issueItem) => {
+              const isHigh = issueItem.severity === 'high';
+              const isMedium = issueItem.severity === 'medium';
+              const cardBg = isHigh ? 'bg-rose-50/30' : isMedium ? 'bg-amber-50/30' : 'bg-slate-50/30';
+              const severityBadge = isHigh ? (
+                <span className="bg-rose-100 text-rose-800 text-[8px] px-1.5 py-0.5 rounded-full font-bold">HIGH</span>
+              ) : isMedium ? (
+                <span className="bg-amber-100 text-amber-800 text-[8px] px-1.5 py-0.5 rounded-full font-bold">MEDIUM</span>
+              ) : (
+                <span className="bg-slate-100 text-slate-800 text-[8px] px-1.5 py-0.5 rounded-full font-bold">LOW</span>
+              );
+
+              return (
+                <div key={issueItem.date} className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 gap-3 rounded-2xl ${cardBg} mb-2 border border-slate-100/70`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-850 font-extrabold text-xs">{issueItem.label}</span>
+                    {severityBadge}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {issueItem.issues.map((msg, i) => {
+                      let badgeStyle = 'bg-slate-100 text-slate-700';
+                      if (msg.includes('below minimum') || msg.includes('above maximum')) {
+                        badgeStyle = 'bg-rose-100 border border-rose-200 text-rose-800';
+                      } else if (msg.includes('Empty slots')) {
+                        badgeStyle = 'bg-amber-100 border border-amber-200 text-amber-800';
+                      } else if (msg.includes('Leave above maximum')) {
+                        badgeStyle = 'bg-orange-100 border border-orange-200 text-orange-850';
+                      }
+
+                      return (
+                        <span key={i} className={`text-[9px] font-bold rounded-lg px-2 py-0.5 ${badgeStyle}`}>
+                          {msg}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 📅 Year-to-Date Jan-Jun Section */}
+      <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm mb-8 text-left">
+        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-6">
+          <span>📅</span> Year-to-Date Performance (Jan–Jun)
+        </h3>
+
+        {!ytdStats || ytdStats.perMonthTotals.length === 0 ? (
+          <div className="py-12 text-center text-slate-400 italic text-xs">
+            No historical roster records available for Jan–Jun of the current year.
+          </div>
+        ) : (
+          <div>
+            {/* YTD summary cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+              <div className="rounded-2xl bg-indigo-50 border border-indigo-100 p-4">
+                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">YTD Active Shifts</span>
+                <span className="text-2xl font-black text-indigo-900 mt-2 block">{ytdStats.totalActiveShifts}</span>
+              </div>
+              <div className="rounded-2xl bg-rose-50 border border-rose-100 p-4">
+                <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block">YTD Night Shifts</span>
+                <span className="text-2xl font-black text-rose-900 mt-2 block">{ytdStats.totalNightShifts}</span>
+              </div>
+              <div className="rounded-2xl bg-purple-50 border border-purple-100/40 p-4">
+                <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider block">YTD Leave Days</span>
+                <span className="text-2xl font-black text-purple-900 mt-2 block">{ytdStats.totalLeaveDays}</span>
+              </div>
+              <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-4">
+                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">YTD Weekend Duties</span>
+                <span className="text-2xl font-black text-emerald-900 mt-2 block">{ytdStats.totalWeekendShifts}</span>
+              </div>
+            </div>
+
+            <div className="grid gap-6 md:grid-cols-3">
+              {/* Monthly trends table */}
+              <div className="md:col-span-1 border border-slate-100/70 rounded-3xl p-4 bg-slate-50/50">
+                <h4 className="text-[10px] font-bold text-slate-550 uppercase tracking-wider mb-3">Monthly Trends</h4>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-[10px] text-center">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-500 font-bold border-b border-slate-200">
+                        <th className="py-2 text-left pl-2">Month</th>
+                        <th className="py-2">Active</th>
+                        <th className="py-2">Night</th>
+                        <th className="py-2">Leave</th>
+                        <th className="py-2">Weekend</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {ytdStats.perMonthTotals.map((monthRow) => (
+                        <tr key={monthRow.month} className="hover:bg-slate-50">
+                          <td className="py-2 text-left pl-2 font-bold text-slate-700">{monthRow.month}</td>
+                          <td className="py-2 font-semibold text-slate-800">{monthRow.active}</td>
+                          <td className="py-2 font-semibold text-slate-800">{monthRow.night}</td>
+                          <td className="py-2 font-semibold text-slate-800">{monthRow.leave}</td>
+                          <td className="py-2 font-semibold text-slate-800">{monthRow.weekend}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* YTD member ranking table */}
+              <div className="md:col-span-2 border border-slate-100/70 rounded-3xl p-4">
+                <h4 className="text-[10px] font-bold text-slate-550 uppercase tracking-wider mb-3">Overall YTD Member Rankings</h4>
+                <div className="overflow-x-auto max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
+                  <table className="min-w-full text-[10px] text-center border-separate border-spacing-0">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 border-b border-slate-150 select-none">
+                        <th
+                          onClick={() => {
+                            const dir = ytdSortConfig.key === 'name' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                            setYtdSortConfig({ key: 'name', direction: dir });
+                          }}
+                          className="sticky left-0 z-10 bg-slate-50 py-2 text-left pl-2 font-bold cursor-pointer hover:bg-slate-100 border-b border-slate-150"
+                        >
+                          Name {ytdSortConfig.key === 'name' ? (ytdSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          onClick={() => {
+                            const dir = ytdSortConfig.key === 'activeShifts' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                            setYtdSortConfig({ key: 'activeShifts', direction: dir });
+                          }}
+                          className="py-2 font-bold cursor-pointer hover:bg-slate-100 border-l border-slate-100 border-b border-slate-150 bg-indigo-50/20 text-indigo-900"
+                        >
+                          Active {ytdSortConfig.key === 'activeShifts' ? (ytdSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          onClick={() => {
+                            const dir = ytdSortConfig.key === 'nightShifts' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                            setYtdSortConfig({ key: 'nightShifts', direction: dir });
+                          }}
+                          className="py-2 font-bold cursor-pointer hover:bg-slate-100 border-l border-slate-100 border-b border-slate-150 bg-rose-50/20 text-rose-900"
+                        >
+                          Night {ytdSortConfig.key === 'nightShifts' ? (ytdSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          onClick={() => {
+                            const dir = ytdSortConfig.key === 'weekendShifts' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                            setYtdSortConfig({ key: 'weekendShifts', direction: dir });
+                          }}
+                          className="py-2 font-bold cursor-pointer hover:bg-slate-100 border-l border-slate-100 border-b border-slate-150 bg-emerald-50/20 text-emerald-900"
+                        >
+                          Weekend {ytdSortConfig.key === 'weekendShifts' ? (ytdSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          onClick={() => {
+                            const dir = ytdSortConfig.key === 'publicHolidayShifts' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                            setYtdSortConfig({ key: 'publicHolidayShifts', direction: dir });
+                          }}
+                          className="py-2 font-bold cursor-pointer hover:bg-slate-100 border-l border-slate-100 border-b border-slate-150 bg-teal-50/20 text-teal-900"
+                        >
+                          Holiday {ytdSortConfig.key === 'publicHolidayShifts' ? (ytdSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          onClick={() => {
+                            const dir = ytdSortConfig.key === 'leaveDays' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                            setYtdSortConfig({ key: 'leaveDays', direction: dir });
+                          }}
+                          className="py-2 font-bold cursor-pointer hover:bg-slate-100 border-l border-slate-100 border-b border-slate-150 bg-purple-50/20 text-purple-905"
+                        >
+                          Leave {ytdSortConfig.key === 'leaveDays' ? (ytdSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white">
+                      {sortedYtdMemberStats.map((memberRow) => (
+                        <tr key={memberRow.name} className="hover:bg-slate-50 border-b border-slate-100">
+                          <td className="sticky left-0 bg-white py-2 text-left pl-2 font-bold text-slate-700 truncate max-w-[100px] shadow-sm ring-1 ring-slate-100">
+                            {memberRow.name.toUpperCase()}
+                          </td>
+                          <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.activeShifts}</td>
+                          <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.nightShifts}</td>
+                          <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.weekendShifts}</td>
+                          <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.publicHolidayShifts}</td>
+                          <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.leaveDays}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* 👤 Doctor Detail Slide-over / Modal Panel */}
       {selectedDoctor && (
         <div
@@ -481,7 +991,7 @@ export default function AnalyticsPage({
               </button>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
               {/* Core metrics summary cards */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-indigo-50/50 border border-indigo-100/60 rounded-2xl p-3">
@@ -502,24 +1012,96 @@ export default function AnalyticsPage({
                 </div>
               </div>
 
-              {/* Shift Breakdown List */}
+              {/* Fairness status card */}
+              <div className="flex justify-between items-center bg-slate-50 border border-slate-100 rounded-2xl p-3">
+                <div>
+                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Fairness Index</span>
+                  <span className="text-xs font-bold text-slate-805 mt-0.5 block">Score: {selectedDoctor.fairnessScore || 0}/100</span>
+                </div>
+                <div>
+                  {selectedDoctor.fairnessStatus === 'Balanced' ? (
+                    <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-0.5 rounded-full">Balanced</span>
+                  ) : selectedDoctor.fairnessStatus === 'Watch' ? (
+                    <span className="bg-amber-50 border border-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full">Watch</span>
+                  ) : (
+                    <span className="bg-rose-50 border border-rose-100 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded-full">Imbalanced</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Shift Mix Percentages */}
               <div>
-                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Shift Type Breakdown</h4>
-                <div className="rounded-2xl border border-slate-100 divide-y divide-slate-100 max-h-[180px] overflow-y-auto custom-scrollbar">
+                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Shift Mix Ratios</h4>
+                <div className="space-y-3 bg-slate-50/50 border border-slate-100 rounded-2xl p-3">
+                  {/* Active % */}
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                      <span>Active Shifts</span>
+                      <span className="font-bold">{selectedDoctor.activePercentage || 0}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
+                      <div className="bg-indigo-600 h-full rounded-full transition-all duration-500" style={{ width: `${selectedDoctor.activePercentage || 0}%` }} />
+                    </div>
+                  </div>
+                  {/* Leave % */}
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                      <span>Leaves</span>
+                      <span className="font-bold">{selectedDoctor.leavePercentage || 0}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
+                      <div className="bg-purple-600 h-full rounded-full transition-all duration-500" style={{ width: `${selectedDoctor.leavePercentage || 0}%` }} />
+                    </div>
+                  </div>
+                  {/* Night % */}
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                      <span>Night Shift Load</span>
+                      <span className="font-bold">{selectedDoctor.nightPercentage || 0}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
+                      <div className="bg-rose-500 h-full rounded-full transition-all duration-500" style={{ width: `${selectedDoctor.nightPercentage || 0}%` }} />
+                    </div>
+                  </div>
+                  {/* Weekend % */}
+                  <div>
+                    <div className="flex justify-between text-xs font-semibold text-slate-700 mb-1">
+                      <span>Weekend Duty Load</span>
+                      <span className="font-bold">{selectedDoctor.weekendPercentage || 0}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
+                      <div className="bg-emerald-600 h-full rounded-full transition-all duration-500" style={{ width: `${selectedDoctor.weekendPercentage || 0}%` }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Shift Breakdown List and Per-Shift Percentages */}
+              <div>
+                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Shift Type Distribution (%)</h4>
+                <div className="rounded-2xl border border-slate-100 divide-y divide-slate-100 max-h-[160px] overflow-y-auto custom-scrollbar">
                   {dynamicShiftColumns.map((col) => {
                     const count = selectedDoctor.counts[col] || 0;
+                    const pct = selectedDoctor.perShiftPercentages?.[col] || 0;
                     if (count === 0) return null;
                     return (
-                      <div key={col} className="flex justify-between items-center py-2 px-3 text-xs">
-                        <span className="font-bold text-slate-700">{col}</span>
-                        <span className="font-black text-slate-900">{count}</span>
+                      <div key={col} className="py-2 px-3">
+                        <div className="flex justify-between items-center text-xs mb-1">
+                          <span className="font-bold text-slate-700">{col} ({count})</span>
+                          <span className="font-black text-slate-900">{pct}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                          <div className="bg-teal-500 h-full rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
+                        </div>
                       </div>
                     );
                   })}
                   {selectedDoctor.counts.TOTAL_LEAVE > 0 && (
-                    <div className="flex justify-between items-center py-2 px-3 text-xs bg-slate-55/40 font-bold">
-                      <span className="text-purple-700 uppercase tracking-wide">Combined Leaves</span>
-                      <span className="text-purple-900 font-extrabold">{selectedDoctor.counts.TOTAL_LEAVE}</span>
+                    <div className="py-2.5 px-3 bg-slate-50/50">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-purple-750 font-extrabold uppercase tracking-wide">Combined Leaves ({selectedDoctor.counts.TOTAL_LEAVE})</span>
+                        <span className="text-purple-900 font-black">{selectedDoctor.leavePercentage}%</span>
+                      </div>
                     </div>
                   )}
                   {selectedDoctor.activeShiftsCount === 0 && selectedDoctor.counts.TOTAL_LEAVE === 0 && (
