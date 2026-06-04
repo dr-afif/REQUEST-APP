@@ -62,7 +62,7 @@ export const classifyPublicHolidayShift = (shift) => {
     normalizedShift = 'NIGHT';
   }
 
-  if (['AM', 'PM', 'NIGHT', 'PN'].includes(normalizedShift)) {
+  if (['AM', 'PM', 'AMX', 'PMX', 'NIGHT', 'PN'].includes(normalizedShift)) {
     return {
       normalizedShift, category: 'worked', isWorkedPublicHoliday: true, isPublicHolidayOff: false, earnsCredit: true
     };
