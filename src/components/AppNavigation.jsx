@@ -32,6 +32,7 @@ export default function AppNavigation({
     { id: 'updates', label: 'Updates', icon: '🔔' },
     ...(isAdmin ? [
       { id: 'summary', label: 'Summary', icon: '📊' },
+      { id: 'ph-tracker', label: 'PH Tracker', icon: '🇲🇾' },
       { id: 'admin', label: 'Admin Panel', icon: '🔑' }
     ] : []),
   ];

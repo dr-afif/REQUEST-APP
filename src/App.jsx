@@ -7,6 +7,7 @@ import RosterPage from './components/RosterPage';
 import UpdatesPage from './components/UpdatesPage';
 import AdminPanel from './components/AdminPanel';
 import AnalyticsPage from './components/AnalyticsPage';
+import PublicHolidayTrackerPage from './components/PublicHolidayTrackerPage';
 import AdminPinModal from './components/AdminPinModal';
 import OnboardingOverlay from './components/OnboardingOverlay';
 import ToastNotification from './components/ToastNotification';
@@ -163,7 +164,7 @@ export default function App() {
 
   // Automatic navigation guard for admin page access control
   useEffect(() => {
-    if ((currentPage === 'admin' || currentPage === 'summary') && selectedName?.trim().toLowerCase() !== 'admin') {
+    if ((currentPage === 'admin' || currentPage === 'summary' || currentPage === 'ph-tracker') && selectedName?.trim().toLowerCase() !== 'admin') {
       setCurrentPage('dashboard');
     }
   }, [currentPage, selectedName]);
@@ -1042,6 +1043,17 @@ export default function App() {
               masterRoster={masterRoster}
               shiftTypes={shiftTypes}
               teamMembers={teamMembers}
+              rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
+            />
+          </div>
+        )}
+
+        {currentPage === 'ph-tracker' && selectedName?.trim().toLowerCase() === 'admin' && (
+          <div className="animate-fadeIn">
+            <PublicHolidayTrackerPage
+              selectedName={selectedName}
+              names={allRosterNames}
+              masterRoster={masterRoster}
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
             />
           </div>
