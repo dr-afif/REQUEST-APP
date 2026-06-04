@@ -488,6 +488,19 @@ export default function AnalyticsPage({
                   {rankings.mostWeekend.length === 0 && <span className="text-[10px] text-slate-400">-</span>}
                 </div>
               </div>
+
+              {/* Most Weekend Leaves */}
+              <div>
+                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Most Weekend Leaves 🏖️</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  {rankings.mostWeekendLeaves && rankings.mostWeekendLeaves.slice(0, 3).map((doc, idx) => (
+                    <span key={doc.nameKey} className="inline-flex items-center gap-1 bg-teal-50 text-teal-700 border border-teal-100 rounded-full px-2 py-0.5 text-[10px] font-bold">
+                      {idx + 1}. {doc.name.split(' ')[0]} <span className="font-black">({doc.weekendLeavesCount || 0})</span>
+                    </span>
+                  ))}
+                  {(!rankings.mostWeekendLeaves || rankings.mostWeekendLeaves.length === 0) && <span className="text-[10px] text-slate-400">-</span>}
+                </div>
+              </div>
             </div>
           </div>
         </div>

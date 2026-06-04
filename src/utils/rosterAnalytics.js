@@ -532,6 +532,7 @@ export const calculateRosterAnalytics = ({
       leaveShiftsCount: 0,
       weekendShiftsCount: 0,
       holidayShiftsCount: 0,
+      weekendLeavesCount: 0,
       isInactive: inactiveNames.has(nameKey),
     };
   });
@@ -606,6 +607,10 @@ export const calculateRosterAnalytics = ({
           if (docEntry.counts[shiftType] !== undefined) {
             docEntry.counts[shiftType]++;
           }
+
+          if (day.isWeekend) {
+            docEntry.weekendLeavesCount++;
+          }
         }
       } else {
         totalEmptyCells++;
@@ -638,6 +643,7 @@ export const calculateRosterAnalytics = ({
   const mostActive = [...doctorList].sort((a, b) => b.activeShiftsCount - a.activeShiftsCount).slice(0, 5).filter(d => d.activeShiftsCount > 0);
   const mostLeave = [...doctorList].sort((a, b) => b.counts.TOTAL_LEAVE - a.counts.TOTAL_LEAVE).slice(0, 5).filter(d => d.counts.TOTAL_LEAVE > 0);
   const mostWeekend = [...doctorList].sort((a, b) => b.weekendShiftsCount - a.weekendShiftsCount).slice(0, 5).filter(d => d.weekendShiftsCount > 0);
+  const mostWeekendLeaves = [...doctorList].sort((a, b) => (b.weekendLeavesCount || 0) - (a.weekendLeavesCount || 0)).slice(0, 5).filter(d => (d.weekendLeavesCount || 0) > 0);
 
   const doctorListWithScores = calculateFairnessScores(doctorList);
   const doctorListWithMix = calculateShiftMix(doctorListWithScores, days.length);
@@ -662,6 +668,7 @@ export const calculateRosterAnalytics = ({
       mostActive,
       mostLeave,
       mostWeekend,
+      mostWeekendLeaves,
     },
     dynamicShiftColumns,
     daysList: days,
