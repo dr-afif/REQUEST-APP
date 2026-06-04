@@ -4,9 +4,10 @@ import {
   getGhkaUsage,
   matchGhkaToCredits,
   buildDoctorSummary,
-  buildWarnings,
   buildTrackerMatrix
 } from '../utils/publicHolidayTracker';
+import { normalizeForComparison } from '../utils/normalise';
+import { mapName } from '../utils/adapters';
 
 export default function PublicHolidayTrackerPage({
   selectedName,
@@ -171,6 +172,21 @@ export default function PublicHolidayTrackerPage({
         </div>
       </div>
 
+      {/* Temporary Debug Panel */}
+      {process.env.NODE_ENV === 'development' && totals.totalWorked === 0 && masterRoster.length > 0 && (
+        <div className="mb-8 rounded-3xl border border-indigo-100 bg-indigo-50/50 p-6 shadow-sm overflow-auto text-xs">
+          <h3 className="font-bold text-indigo-800 mb-2">DEBUG INFO: Zero Credits Detected</h3>
+          <ul className="list-disc pl-5 space-y-1 text-slate-700 font-mono">
+            <li>masterRoster length: {masterRoster.length}</li>
+            <li>validDoctors length: {validDoctors.length}</li>
+            <li>Matrix holidays mapped for {activeMonth}: {matrixRows.length}</li>
+            <li>Credits length: {credits.length}</li>
+            <li>Usages length: {usages.length}</li>
+            <li>Sample original row: {JSON.stringify(masterRoster[0])}</li>
+          </ul>
+        </div>
+      )}
+
       {/* Overview Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
@@ -305,12 +321,13 @@ export default function PublicHolidayTrackerPage({
                           <p className="text-[10px] text-slate-500 font-semibold mt-0.5">{formattedDate}</p>
                         </td>
                         {validDoctors.map(doc => {
-                          const recordEntry = row.doctors[doc.toLowerCase()];
+                          const docKey = normalizeForComparison(mapName(doc));
+                          const recordEntry = row.doctors[docKey];
                           
                           if (!recordEntry) {
                             // Did not work / empty row in master roster
                             return (
-                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-300 font-medium">—</span>
                               </td>
                             );
@@ -320,7 +337,7 @@ export default function PublicHolidayTrackerPage({
 
                           if (classification.category === 'empty') {
                              return (
-                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-300 font-medium">—</span>
                               </td>
                             );
@@ -328,7 +345,7 @@ export default function PublicHolidayTrackerPage({
 
                           if (classification.category === 'official_ph_off') {
                              return (
-                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-400 font-bold bg-slate-100 px-2 py-1 rounded-md border border-slate-200">HKA</span>
                               </td>
                             );
@@ -336,7 +353,7 @@ export default function PublicHolidayTrackerPage({
 
                           if (classification.category === 'other_non_working') {
                              return (
-                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                              <td key={docKey} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-1 rounded-md border border-slate-200">{originalShift}</span>
                               </td>
                             );
@@ -349,7 +366,7 @@ export default function PublicHolidayTrackerPage({
                           const statusText = isUsed ? `GHKA ${new Date(matchedRecord.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'Pending';
 
                           return (
-                            <td key={doc} className="py-2 px-3 text-center align-top border-b border-slate-100">
+                            <td key={docKey} className="py-2 px-3 text-center align-top border-b border-slate-100">
                               <div className={`flex flex-col items-center justify-center p-1.5 rounded-xl border ${badgeBg}`}>
                                 <span className="text-xs font-black">{classification.normalizedShift}</span>
                                 <div className="flex items-center gap-1 mt-0.5 opacity-80">

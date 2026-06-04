@@ -1,4 +1,46 @@
 import { HOLIDAYS } from './holidays';
+import { toIsoDate, normalizeForComparison } from './normalise';
+import { mapName } from './adapters';
+
+/**
+ * Normalizes roster row data explicitly to ensure date matching works and names are consistent.
+ */
+export const normalizeRosterEntry = (row) => {
+  if (!row) return null;
+  
+  const rawName = row.name || row.Name || row.MemberName || row.Doctor || row.doctor;
+  const rawDate = row.date || row.Date || row.DutyDate || row.RosterDate;
+  const shiftRaw = row.shift || row.Shift || row.Request || row.Duty || row.RosterShift;
+
+  if (!rawName || !rawDate || !shiftRaw) return null;
+
+  const doctorName = mapName(rawName);
+  const doctorKey = normalizeForComparison(doctorName);
+  const dateStr = toIsoDate(rawDate);
+
+  if (!dateStr || !doctorKey) return null;
+
+  return {
+    doctorName,
+    doctorKey,
+    dateStr,
+    shiftRaw
+  };
+};
+
+/**
+ * Gets the holiday name, handling both object and array formats of HOLIDAYS.
+ */
+export const getHolidayNameByDate = (dateStr) => {
+  if (!dateStr) return null;
+  if (Array.isArray(HOLIDAYS)) {
+    const h = HOLIDAYS.find(x => 
+      (x.date || x.Date || x.holidayDate) === dateStr
+    );
+    return h ? (h.name || h.Name || h.holidayName) : null;
+  }
+  return HOLIDAYS[dateStr] || null;
+};
 
 /**
  * Classifies a shift on a public holiday.
@@ -46,28 +88,27 @@ export const classifyPublicHolidayShift = (shift) => {
  */
 export const getPublicHolidayCredits = (masterRoster, names) => {
   const credits = [];
-  const nameSet = new Set(names.map(n => n.toLowerCase()));
+  const nameSet = new Set(names.map(n => normalizeForComparison(mapName(n))));
 
   masterRoster.forEach(row => {
-    const docName = row.name || row.Name;
-    const dateStr = row.date || row.Date;
-    const shiftRaw = row.shift || row.Shift;
+    const entry = normalizeRosterEntry(row);
+    if (!entry) return;
 
-    if (!docName || !dateStr || !shiftRaw) return;
-    if (!nameSet.has(docName.toLowerCase())) return;
+    if (!nameSet.has(entry.doctorKey)) return;
 
     // Check if date is a public holiday
-    const holidayName = HOLIDAYS[dateStr];
+    const holidayName = getHolidayNameByDate(entry.dateStr);
     if (holidayName) {
-      const classification = classifyPublicHolidayShift(shiftRaw);
+      const classification = classifyPublicHolidayShift(entry.shiftRaw);
 
       if (classification.earnsCredit) {
         credits.push({
-          doctorName: docName,
-          holidayDate: dateStr,
+          doctorName: entry.doctorName,
+          doctorKey: entry.doctorKey,
+          holidayDate: entry.dateStr,
           holidayName: holidayName,
           workedShift: classification.normalizedShift, // Store normalized shift
-          originalShift: shiftRaw,
+          originalShift: entry.shiftRaw,
           creditEarned: true
         });
       }
@@ -85,21 +126,20 @@ export const getPublicHolidayCredits = (masterRoster, names) => {
  */
 export const getGhkaUsage = (masterRoster, names) => {
   const usages = [];
-  const nameSet = new Set(names.map(n => n.toLowerCase()));
+  const nameSet = new Set(names.map(n => normalizeForComparison(mapName(n))));
 
   masterRoster.forEach(row => {
-    const docName = row.name || row.Name;
-    const dateStr = row.date || row.Date;
-    const shiftRaw = row.shift || row.Shift;
+    const entry = normalizeRosterEntry(row);
+    if (!entry) return;
 
-    if (!docName || !dateStr || !shiftRaw) return;
-    if (!nameSet.has(docName.toLowerCase())) return;
+    if (!nameSet.has(entry.doctorKey)) return;
 
-    const s = shiftRaw.toUpperCase().trim();
+    const s = entry.shiftRaw.toUpperCase().trim();
     if (s === 'GHKA') {
       usages.push({
-        doctorName: docName,
-        ghkaDate: dateStr
+        doctorName: entry.doctorName,
+        doctorKey: entry.doctorKey,
+        ghkaDate: entry.dateStr
       });
     }
   });
@@ -120,13 +160,15 @@ export const matchGhkaToCredits = (credits, usages) => {
   const usagesByDoc = {};
 
   credits.forEach(c => {
-    if (!creditsByDoc[c.doctorName]) creditsByDoc[c.doctorName] = [];
-    creditsByDoc[c.doctorName].push({ ...c });
+    const key = c.doctorKey || normalizeForComparison(c.doctorName);
+    if (!creditsByDoc[key]) creditsByDoc[key] = [];
+    creditsByDoc[key].push({ ...c });
   });
 
   usages.forEach(u => {
-    if (!usagesByDoc[u.doctorName]) usagesByDoc[u.doctorName] = [];
-    usagesByDoc[u.doctorName].push({ ...u });
+    const key = u.doctorKey || normalizeForComparison(u.doctorName);
+    if (!usagesByDoc[key]) usagesByDoc[key] = [];
+    usagesByDoc[key].push({ ...u });
   });
 
   const matchedRecords = [];
@@ -151,7 +193,8 @@ export const matchGhkaToCredits = (credits, usages) => {
       }
 
       matchedRecords.push({
-        doctorName: docName,
+        doctorName: credit.doctorName,
+        doctorKey: docName, // this is actually the key we grouped by
         holidayDate: credit.holidayDate,
         holidayName: credit.holidayName,
         workedShift: credit.workedShift,
@@ -164,7 +207,8 @@ export const matchGhkaToCredits = (credits, usages) => {
     // Any remaining usages are unmatched (GHKA taken without a corresponding PH credit)
     while (usageIdx < docUsages.length) {
       unmatchedUsages.push({
-        doctorName: docName,
+        doctorName: docUsages[usageIdx].doctorName,
+        doctorKey: docName,
         ghkaDate: docUsages[usageIdx].ghkaDate
       });
       usageIdx++;
@@ -190,10 +234,10 @@ export const buildDoctorSummary = (matchedRecords, unmatchedUsages, names) => {
   }));
 
   const sumMap = {};
-  summaries.forEach(s => { sumMap[s.name.toLowerCase()] = s; });
+  summaries.forEach(s => { sumMap[normalizeForComparison(mapName(s.name))] = s; });
 
   matchedRecords.forEach(record => {
-    const s = sumMap[record.doctorName.toLowerCase()];
+    const s = sumMap[record.doctorKey];
     if (s) {
       s.phWorked++;
       if (record.status === 'USED') {
@@ -205,7 +249,7 @@ export const buildDoctorSummary = (matchedRecords, unmatchedUsages, names) => {
   });
 
   unmatchedUsages.forEach(u => {
-    const s = sumMap[u.doctorName.toLowerCase()];
+    const s = sumMap[u.doctorKey];
     if (s) {
       s.ghkaUsed++;
       s.ghkaUsedWithoutCredit++;
@@ -266,29 +310,33 @@ export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRos
   const holidaysMap = {}; // Key: YYYY-MM-DD
   
   // 1. Initialize all holidays for the active month
-  Object.keys(HOLIDAYS).forEach(dateStr => {
-    if (dateStr.startsWith(activeMonth)) {
-      holidaysMap[dateStr] = {
-        date: dateStr,
-        name: HOLIDAYS[dateStr],
-        doctors: {}
-      };
-    }
+  const activeKeys = Array.isArray(HOLIDAYS) 
+    ? HOLIDAYS.filter(h => {
+        const d = h.date || h.Date || h.holidayDate;
+        return d && d.startsWith(activeMonth);
+      }).map(h => ({ date: h.date || h.Date || h.holidayDate, name: h.name || h.Name || h.holidayName }))
+    : Object.keys(HOLIDAYS).filter(d => d.startsWith(activeMonth)).map(d => ({ date: d, name: HOLIDAYS[d] }));
+
+  activeKeys.forEach(({ date, name }) => {
+    holidaysMap[date] = {
+      date: date,
+      name: name,
+      doctors: {}
+    };
   });
 
-  const nameSet = new Set(names.map(n => n.toLowerCase()));
+  const nameSet = new Set(names.map(n => normalizeForComparison(mapName(n))));
 
   // 2. Populate all shifts for these holiday dates from master roster
   masterRoster.forEach(row => {
-    const docName = row.name || row.Name;
-    const dateStr = row.date || row.Date;
-    const shiftRaw = row.shift || row.Shift;
+    const entry = normalizeRosterEntry(row);
+    if (!entry) return;
 
-    if (holidaysMap[dateStr] && docName && nameSet.has(docName.toLowerCase())) {
-      const classification = classifyPublicHolidayShift(shiftRaw);
-      holidaysMap[dateStr].doctors[docName.toLowerCase()] = {
+    if (holidaysMap[entry.dateStr] && nameSet.has(entry.doctorKey)) {
+      const classification = classifyPublicHolidayShift(entry.shiftRaw);
+      holidaysMap[entry.dateStr].doctors[entry.doctorKey] = {
         classification,
-        originalShift: shiftRaw,
+        originalShift: entry.shiftRaw,
         matchedRecord: null // To be filled below if earned
       };
     }
@@ -297,7 +345,7 @@ export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRos
   // 3. Inject matched records
   matchedRecords.forEach(record => {
     if (record.holidayDate.startsWith(activeMonth) && holidaysMap[record.holidayDate]) {
-      const docEntry = holidaysMap[record.holidayDate].doctors[record.doctorName.toLowerCase()];
+      const docEntry = holidaysMap[record.holidayDate].doctors[record.doctorKey];
       if (docEntry) {
         docEntry.matchedRecord = record;
       }
