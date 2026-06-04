@@ -38,6 +38,21 @@ export default function PublicHolidayTrackerPage({
     }
   });
 
+  const [memoStatuses, setMemoStatuses] = useState(() => {
+    try {
+      if (settings.phTrackerMemos) {
+        return typeof settings.phTrackerMemos === 'string'
+          ? JSON.parse(settings.phTrackerMemos)
+          : settings.phTrackerMemos;
+      }
+      return {};
+    } catch (e) {
+      return {};
+    }
+  });
+
+  const [isMemoEditMode, setIsMemoEditMode] = useState(false);
+
   useEffect(() => {
     if (settings.phTrackerOpeningBalances) {
       try {
@@ -49,7 +64,18 @@ export default function PublicHolidayTrackerPage({
         console.error('Failed to parse opening balances from settings');
       }
     }
-  }, [settings.phTrackerOpeningBalances]);
+    
+    if (settings.phTrackerMemos) {
+      try {
+        const parsed = typeof settings.phTrackerMemos === 'string'
+          ? JSON.parse(settings.phTrackerMemos)
+          : settings.phTrackerMemos;
+        setMemoStatuses(parsed);
+      } catch (e) {
+        console.error('Failed to parse memo statuses from settings');
+      }
+    }
+  }, [settings.phTrackerOpeningBalances, settings.phTrackerMemos]);
 
   const updateOpeningBalance = (docName, newBalance, note = '') => {
     const docKey = normalizeForComparison(mapName(docName));
@@ -70,6 +96,24 @@ export default function PublicHolidayTrackerPage({
     
     // Persist online
     onUpdateSetting('phTrackerOpeningBalances', JSON.stringify(newBalances));
+  };
+
+  const toggleMemoStatus = (docKey, holidayDate) => {
+    if (!isMemoEditMode) return;
+    const memoKey = `${docKey}_${holidayDate}`;
+    const currentStatus = !!memoStatuses[memoKey];
+    
+    const newStatuses = {
+      ...memoStatuses,
+      [memoKey]: !currentStatus
+    };
+    
+    if (!newStatuses[memoKey]) {
+      delete newStatuses[memoKey];
+    }
+    
+    setMemoStatuses(newStatuses);
+    onUpdateSetting('phTrackerMemos', JSON.stringify(newStatuses));
   };
 
   useEffect(() => {
@@ -377,13 +421,21 @@ export default function PublicHolidayTrackerPage({
 
         {/* Bottom: Tracker Matrix */}
         <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
-          <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex items-center justify-between">
+          <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex flex-wrap items-center justify-between gap-4">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
               <span>📅</span> Annual Replacement Matrix
             </h3>
-            <span className="text-[10px] font-bold text-slate-400 bg-slate-200/50 px-2 py-1 rounded-lg">
-              Year {year}
-            </span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setIsMemoEditMode(!isMemoEditMode)}
+                className={`text-[10px] font-bold px-3 py-1.5 rounded-lg transition border ${isMemoEditMode ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+              >
+                {isMemoEditMode ? 'Done Editing Memos' : 'Edit Memos'}
+              </button>
+              <span className="text-[10px] font-bold text-slate-400 bg-slate-200/50 px-2 py-1 rounded-lg">
+                Year {year}
+              </span>
+            </div>
           </div>
           
           <div className="overflow-x-auto p-0 no-scrollbar">
@@ -418,11 +470,19 @@ export default function PublicHolidayTrackerPage({
                           <p className="text-[9px] text-slate-500 font-semibold">{formattedDate}</p>
                         </td>
                         {validDoctors.map(doc => {
-                          const docKey = normalizeForComparison(mapName(doc));
-                          const recordEntry = row.doctors[docKey];
-                          
-                          if (!recordEntry) {
-                            // Did not work / empty row in master roster
+                          const docKey = normalizeForComparison(doc);
+                          const cellData = row.doctors[docKey];
+
+                          if (!cellData || !cellData.classification.earnsCredit) {
+                            // Either didn't work, or was official HKA off, etc.
+                            if (cellData && cellData.classification.category === 'official_ph_off') {
+                              return (
+                                <td key={docKey} className="py-1 px-1 text-center align-middle border-b border-slate-100">
+                                  <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">HKA</span>
+                                </td>
+                              );
+                            }
+                            // Empty / Other Non-Working
                             return (
                               <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-300 font-medium">—</span>
@@ -430,41 +490,36 @@ export default function PublicHolidayTrackerPage({
                             );
                           }
 
-                          const { classification, originalShift, matchedRecord } = recordEntry;
-
-                          if (classification.category === 'empty') {
-                             return (
-                              <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
-                                <span className="text-[10px] text-slate-300 font-medium">—</span>
-                              </td>
-                            );
-                          }
-
-                          if (classification.category === 'official_ph_off') {
-                             return (
-                              <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
-                                <span className="text-[9px] text-slate-400 font-bold bg-slate-100 px-1 py-0.5 rounded border border-slate-200">HKA</span>
-                              </td>
-                            );
-                          }
-
-                          if (classification.category === 'other_non_working') {
-                             return (
-                              <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
-                                <span className="text-[9px] text-slate-400 font-medium bg-slate-100 px-1 py-0.5 rounded border border-slate-200">{originalShift}</span>
-                              </td>
-                            );
-                          }
-
-                          // Worked
+                          const classification = cellData.classification;
+                          const matchedRecord = cellData.matchedRecord;
                           const isUsed = matchedRecord?.status === 'USED';
-                          const badgeBg = isUsed ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200';
-                          const statusIcon = isUsed ? '✓' : '⏳';
-                          const statusText = isUsed ? `${new Date(matchedRecord.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'Pend';
+                          const memoKey = `${docKey}_${row.date}`;
+                          const isMemoSubmitted = !!memoStatuses[memoKey];
+                          
+                          let badgeBg = 'bg-amber-100 text-amber-800 border-amber-200'; // Default pending (yellow)
+                          let statusIcon = '⏳';
+                          let statusText = 'Pend';
+
+                          if (isUsed) {
+                            if (isMemoSubmitted) {
+                              badgeBg = 'bg-emerald-100 text-emerald-800 border-emerald-200'; // Memo submitted (green)
+                              statusIcon = '✓';
+                            } else {
+                              badgeBg = 'bg-rose-100 text-rose-800 border-rose-200'; // Used, no memo (red)
+                              statusIcon = '❗';
+                            }
+                            statusText = `${new Date(matchedRecord.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
+                          }
 
                           return (
-                            <td key={docKey} className="py-1 px-1 text-center align-top border-b border-slate-100">
-                              <div className={`flex flex-col items-center justify-center py-1 px-0.5 rounded-lg border ${badgeBg} mx-0.5`}>
+                            <td 
+                              key={docKey} 
+                              className={`py-1 px-1 text-center align-top border-b border-slate-100 ${isUsed && isMemoEditMode ? 'cursor-pointer hover:bg-slate-100/50' : ''}`}
+                              onClick={() => {
+                                if (isUsed && isMemoEditMode) toggleMemoStatus(docKey, row.date);
+                              }}
+                            >
+                              <div className={`flex flex-col items-center justify-center py-1 px-0.5 rounded-lg border ${badgeBg} mx-0.5 transition-colors`}>
                                 <span className="text-[10px] font-black leading-tight">{classification.normalizedShift}</span>
                                 <div className="flex items-center gap-0.5 opacity-80 leading-tight">
                                   <span className="text-[8px] font-bold">{statusIcon}</span>
