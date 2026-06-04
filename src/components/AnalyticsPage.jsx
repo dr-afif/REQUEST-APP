@@ -27,6 +27,8 @@ export default function AnalyticsPage({
   const [fairnessSortConfig, setFairnessSortConfig] = useState({ key: 'fairnessScore', direction: 'desc' });
   const [ytdSortConfig, setYtdSortConfig] = useState({ key: 'activeShifts', direction: 'desc' });
   const [activeMonth, setActiveMonth] = useState(rosterMonth);
+  const [showLeaveDetails, setShowLeaveDetails] = useState(false);
+  const [showAmPmBalance, setShowAmPmBalance] = useState(true);
 
   useEffect(() => {
     if (rosterMonth) {
@@ -105,6 +107,47 @@ export default function AnalyticsPage({
       equitySignals,
     });
   }, [healthScore, doctorSummaries, coverageIssues, leaveClusters, equitySignals]);
+
+  // AM vs PM balance per member
+  const amPmBalance = useMemo(() => {
+    const totalAm = overview?.totalAmShifts || 0;
+    const totalPm = overview?.totalPmShifts || 0;
+    const totalAmPm = totalAm + totalPm;
+    // Team-wide ratio expressed as AM fraction (0–1)
+    const teamAmFraction = totalAmPm > 0 ? totalAm / totalAmPm : 0.5;
+    const teamPmFraction = 1 - teamAmFraction;
+
+    const members = doctorSummaries
+      .filter(d => !d.isInactive)
+      .map(d => {
+        const am = d.counts?.AM || 0;
+        const pm = d.counts?.PM || 0;
+        const total = am + pm;
+        const memberAmFraction = total > 0 ? am / total : null; // null = no AM/PM shifts
+        const deviation = memberAmFraction !== null ? Math.abs(memberAmFraction - teamAmFraction) : 0;
+
+        let status = 'ok';
+        let statusLabel = 'Balanced';
+        if (total === 0) { status = 'none'; statusLabel = 'No AM/PM'; }
+        else if (deviation > 0.25) { status = 'high'; statusLabel = 'Imbalanced'; }
+        else if (deviation > 0.12) { status = 'medium'; statusLabel = 'Watch'; }
+
+        return {
+          name: d.name,
+          nameKey: d.nameKey,
+          am,
+          pm,
+          total,
+          memberAmFraction,
+          deviation,
+          status,
+          statusLabel,
+        };
+      })
+      .sort((a, b) => b.deviation - a.deviation);
+
+    return { members, teamAmFraction, teamPmFraction, totalAm, totalPm };
+  }, [doctorSummaries, overview]);
 
   const sortedFairnessSummaries = useMemo(() => {
     const list = [...doctorSummaries];
@@ -584,55 +627,171 @@ export default function AnalyticsPage({
           );
         })()}
 
-        {/* D — Leave Clustering Panel */}
-        <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-            <span>📅</span> Leave Clustering Analysis
-          </h3>
-          {leaveClusters.length === 0 ? (
-            <div className="py-8 text-center text-emerald-600 font-bold flex flex-col items-center gap-2 text-xs">
-              <span className="text-2xl">✅</span>
-              <span>No leave clustering detected — leave distribution looks healthy.</span>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-[10px] text-left border-separate border-spacing-0">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-500 font-bold">
-                    <th className="py-2 pl-3 pr-2">Date</th>
-                    <th className="py-2 px-2">Day</th>
-                    <th className="py-2 px-2 text-center">Leave Count</th>
-                    <th className="py-2 px-2 text-center">Threshold</th>
-                    <th className="py-2 px-2 text-center">Over by</th>
-                    <th className="py-2 px-2 text-center">Severity</th>
-                    <th className="py-2 px-2">Note</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {leaveClusters.map(cluster => {
-                    const sevBadge = cluster.severity === 'high'
-                      ? 'bg-red-100 text-red-800'
-                      : cluster.severity === 'medium'
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-slate-100 text-slate-700';
+        {/* D — AM vs PM Balance Panel */}
+        <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowAmPmBalance(v => !v)}
+            className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50/60 transition text-left"
+          >
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <span>☀️️</span> AM vs PM Shift Balance
+              <span className="text-[9px] font-normal text-slate-400 normal-case tracking-normal">
+                Team ratio: {amPmBalance.totalAm}AM / {amPmBalance.totalPm}PM
+                ({amPmBalance.totalAm + amPmBalance.totalPm > 0
+                  ? `${Math.round(amPmBalance.teamAmFraction * 100)}% AM`
+                  : 'no data'})
+              </span>
+            </h3>
+            <span className="text-slate-400 text-sm font-bold flex-shrink-0 ml-2">{showAmPmBalance ? '▲' : '▼'}</span>
+          </button>
+
+          {showAmPmBalance && (
+            <div className="px-6 pb-5">
+              {/* Team ratio bar */}
+              <div className="mb-5">
+                <div className="flex justify-between text-[9px] font-bold text-slate-500 mb-1">
+                  <span className="text-emerald-700">AM — {Math.round(amPmBalance.teamAmFraction * 100)}%</span>
+                  <span className="text-amber-600">PM — {Math.round(amPmBalance.teamPmFraction * 100)}%</span>
+                </div>
+                <div className="w-full h-2.5 rounded-full overflow-hidden flex bg-slate-100">
+                  <div
+                    className="bg-emerald-400 h-full rounded-l-full transition-all duration-500"
+                    style={{ width: `${Math.round(amPmBalance.teamAmFraction * 100)}%` }}
+                  />
+                  <div
+                    className="bg-amber-400 h-full rounded-r-full flex-1 transition-all duration-500"
+                  />
+                </div>
+                <p className="text-[9px] text-slate-400 mt-1">Target: each member should be close to the team ratio above. Members with &gt;25% deviation are flagged as Imbalanced.</p>
+              </div>
+
+              {/* Per-member rows */}
+              {amPmBalance.members.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-6">No AM/PM data available for this month.</p>
+              ) : (
+                <div className="space-y-2">
+                  {amPmBalance.members.map(m => {
+                    const amPct = m.total > 0 ? Math.round((m.am / m.total) * 100) : 0;
+                    const pmPct = 100 - amPct;
+                    const statusStyle = m.status === 'high'
+                      ? { badge: 'bg-red-100 text-red-800', bar: 'border-red-200' }
+                      : m.status === 'medium'
+                      ? { badge: 'bg-amber-100 text-amber-800', bar: 'border-amber-200' }
+                      : m.status === 'none'
+                      ? { badge: 'bg-slate-100 text-slate-500', bar: 'border-slate-100' }
+                      : { badge: 'bg-emerald-100 text-emerald-800', bar: 'border-emerald-100' };
+
                     return (
-                      <tr key={cluster.date} className="hover:bg-slate-50 transition">
-                        <td className="py-2 pl-3 pr-2 font-bold text-slate-800">{cluster.label}</td>
-                        <td className="py-2 px-2 text-slate-500">{cluster.dayName}</td>
-                        <td className="py-2 px-2 text-center font-black text-slate-900">{cluster.totalLeave}</td>
-                        <td className="py-2 px-2 text-center text-slate-500">{cluster.threshold}</td>
-                        <td className="py-2 px-2 text-center font-bold text-rose-700">+{cluster.totalLeave - cluster.threshold}</td>
-                        <td className="py-2 px-2 text-center">
-                          <span className={`inline-block text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ${sevBadge}`}>
-                            {cluster.severity}
-                          </span>
-                        </td>
-                        <td className="py-2 px-2 text-slate-500 italic">{cluster.message}</td>
-                      </tr>
+                      <div key={m.nameKey} className={`rounded-xl border p-2.5 ${statusStyle.bar} bg-white`}>
+                        <div className="flex items-center justify-between gap-3 mb-1.5">
+                          <span className="text-[10px] font-bold text-slate-800 truncate flex-1">{m.name.toUpperCase()}</span>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <span className="text-[9px] text-slate-500 font-semibold">
+                              {m.am}AM / {m.pm}PM
+                            </span>
+                            <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ${statusStyle.badge}`}>
+                              {m.statusLabel}
+                            </span>
+                          </div>
+                        </div>
+                        {m.total > 0 ? (
+                          <>
+                            <div className="w-full h-1.5 rounded-full overflow-hidden flex bg-slate-100">
+                              <div
+                                className="bg-emerald-400 h-full rounded-l-full transition-all duration-500"
+                                style={{ width: `${amPct}%` }}
+                              />
+                              <div className="bg-amber-400 h-full rounded-r-full flex-1" />
+                            </div>
+                            <div className="flex justify-between text-[8px] text-slate-400 mt-0.5 font-semibold">
+                              <span>{amPct}% AM</span>
+                              <span>{pmPct}% PM</span>
+                            </div>
+                            {m.status !== 'ok' && m.status !== 'none' && (
+                              <p className="text-[8px] text-slate-500 mt-1">
+                                Deviation from team ratio: <span className="font-bold text-rose-600">{Math.round(m.deviation * 100)}%</span>
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-[9px] text-slate-400 italic">No AM or PM shifts this month.</p>
+                        )}
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* E — Leave Clustering Panel */}
+        <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowLeaveDetails(v => !v)}
+            className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50/60 transition text-left"
+          >
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <span>📅</span> Leave Clustering Analysis
+              {leaveClusters.length > 0 && (
+                <span className="ml-1 text-[9px] font-extrabold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded-full">
+                  {leaveClusters.length} flagged
+                </span>
+              )}
+            </h3>
+            <span className="text-slate-400 text-sm font-bold flex-shrink-0 ml-2">{showLeaveDetails ? '▲' : '▼'}</span>
+          </button>
+
+          {showLeaveDetails && (
+            <div className="px-6 pb-5">
+              {leaveClusters.length === 0 ? (
+                <div className="py-8 text-center text-emerald-600 font-bold flex flex-col items-center gap-2 text-xs">
+                  <span className="text-2xl">✅</span>
+                  <span>No leave clustering detected — leave distribution looks healthy.</span>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-[10px] text-left border-separate border-spacing-0">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 font-bold">
+                        <th className="py-2 pl-3 pr-2">Date</th>
+                        <th className="py-2 px-2">Day</th>
+                        <th className="py-2 px-2 text-center">Leave Count</th>
+                        <th className="py-2 px-2 text-center">Threshold</th>
+                        <th className="py-2 px-2 text-center">Over by</th>
+                        <th className="py-2 px-2 text-center">Severity</th>
+                        <th className="py-2 px-2">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {leaveClusters.map(cluster => {
+                        const sevBadge = cluster.severity === 'high'
+                          ? 'bg-red-100 text-red-800'
+                          : cluster.severity === 'medium'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-slate-100 text-slate-700';
+                        return (
+                          <tr key={cluster.date} className="hover:bg-slate-50 transition">
+                            <td className="py-2 pl-3 pr-2 font-bold text-slate-800">{cluster.label}</td>
+                            <td className="py-2 px-2 text-slate-500">{cluster.dayName}</td>
+                            <td className="py-2 px-2 text-center font-black text-slate-900">{cluster.totalLeave}</td>
+                            <td className="py-2 px-2 text-center text-slate-500">{cluster.threshold}</td>
+                            <td className="py-2 px-2 text-center font-bold text-rose-700">+{cluster.totalLeave - cluster.threshold}</td>
+                            <td className="py-2 px-2 text-center">
+                              <span className={`inline-block text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ${sevBadge}`}>
+                                {cluster.severity}
+                              </span>
+                            </td>
+                            <td className="py-2 px-2 text-slate-500 italic">{cluster.message}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
