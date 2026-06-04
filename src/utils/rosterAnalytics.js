@@ -686,8 +686,379 @@ export const calculateRosterAnalytics = ({
     },
     dynamicShiftColumns,
     daysList: days,
+    dayStatsList,
     coverageIssues,
     ytdStats,
     averages: doctorListWithScores.averages,
   };
+};
+
+// ─── Roster Health Intelligence ──────────────────────────────────────────────
+
+/**
+ * calculateEquitySignals
+ * Analyses how evenly night shifts, weekend duties, public holidays,
+ * and active shifts are distributed across all active members.
+ */
+export const calculateEquitySignals = (memberStats) => {
+  const empty = { average: 0, min: 0, max: 0, spread: 0, highest: [], lowest: [], severity: 'low' };
+  if (!Array.isArray(memberStats) || memberStats.length === 0) {
+    return {
+      nightEquity: { ...empty },
+      weekendEquity: { ...empty },
+      publicHolidayEquity: { ...empty },
+      activeShiftEquity: { ...empty },
+    };
+  }
+
+  const active = memberStats.filter(m => !m.isInactive);
+  const pool = active.length > 0 ? active : memberStats;
+
+  const buildSignal = (values, members) => {
+    if (values.length === 0) return { ...empty };
+    const sum = values.reduce((a, b) => a + b, 0);
+    const average = Number((sum / values.length).toFixed(1));
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const spread = max - min;
+
+    let severity = 'low';
+    if (spread > 3) severity = 'high';
+    else if (spread > 1) severity = 'medium';
+
+    const sorted = [...members].sort((a, b) => (b._val || 0) - (a._val || 0));
+    const highest = sorted.slice(0, 3).filter(m => (m._val || 0) > 0).map(m => ({ name: m.name, value: m._val }));
+    const lowest = [...members].sort((a, b) => (a._val || 0) - (b._val || 0)).slice(0, 3).map(m => ({ name: m.name, value: m._val }));
+
+    return { average, min, max, spread, highest, lowest, severity };
+  };
+
+  const nightPool = pool.map(m => ({ ...m, _val: m.counts?.NIGHT || m.nightShifts || 0 }));
+  const weekendPool = pool.map(m => ({ ...m, _val: m.weekendShiftsCount || m.weekendShifts || 0 }));
+  const holidayPool = pool.map(m => ({ ...m, _val: m.holidayShiftsCount || m.publicHolidayShifts || 0 }));
+  const activePool = pool.map(m => ({ ...m, _val: m.activeShiftsCount || m.activeShifts || 0 }));
+
+  return {
+    nightEquity: buildSignal(nightPool.map(m => m._val), nightPool),
+    weekendEquity: buildSignal(weekendPool.map(m => m._val), weekendPool),
+    publicHolidayEquity: buildSignal(holidayPool.map(m => m._val), holidayPool),
+    activeShiftEquity: buildSignal(activePool.map(m => m._val), activePool),
+  };
+};
+
+/**
+ * calculateLeaveClustering
+ * Flags dates where total leave count meets or exceeds the configured threshold.
+ */
+export const calculateLeaveClustering = (dayStats, thresholds = {}) => {
+  if (!Array.isArray(dayStats)) return [];
+
+  const threshold = thresholds.totalLeaveMax !== undefined ? Number(thresholds.totalLeaveMax) : 4;
+  const result = [];
+
+  dayStats.forEach(day => {
+    const totalLeave = day.leaveCount || 0;
+    if (totalLeave < threshold) return;
+
+    let severity = 'low';
+    if (totalLeave >= threshold + 2) severity = 'high';
+    else if (totalLeave >= threshold + 1) severity = 'medium';
+
+    let label = day.dateStr || '';
+    try {
+      const d = new Date(day.dateStr);
+      if (!isNaN(d.getTime())) {
+        const mo = d.toLocaleDateString('en-US', { month: 'short' });
+        label = `${mo} ${d.getDate()} (${day.dayName || d.toLocaleDateString('en-US', { weekday: 'short' })})`;
+      }
+    } catch (_) { /* ignore */ }
+
+    result.push({
+      date: day.dateStr,
+      label,
+      dayName: day.dayName || '',
+      totalLeave,
+      threshold,
+      severity,
+      leaveBreakdown: { total: totalLeave },
+      message: `${totalLeave} members on leave (threshold: ${threshold})`,
+    });
+  });
+
+  return result;
+};
+
+/**
+ * calculateRosterHealthScore
+ * Computes a weighted 0-100 health score from 6 sub-components with deduction explanations.
+ */
+export const calculateRosterHealthScore = ({
+  fairnessScores = [],
+  coverageIssues = [],
+  memberStats = [],
+  dayStats = [],
+  thresholds = {},
+}) => {
+  const safeDefault = {
+    score: 100,
+    status: 'Excellent',
+    severity: 'green',
+    components: { fairness: 100, coverage: 100, weekendEquity: 100, publicHolidayEquity: 100, leaveClustering: 100, nightEquity: 100 },
+    deductions: [],
+  };
+
+  // ── Fairness component (30%) ────────────────────────────────────────────────
+  let fairnessScore = 100;
+  const deductions = [];
+
+  const activeFairness = Array.isArray(fairnessScores)
+    ? fairnessScores.filter(m => !m.isInactive)
+    : [];
+  if (activeFairness.length > 0) {
+    const imbalanced = activeFairness.filter(m => m.fairnessStatus === 'Imbalanced').length;
+    const watch = activeFairness.filter(m => m.fairnessStatus === 'Watch').length;
+    if (imbalanced > 0) {
+      const pts = Math.min(imbalanced * 10, 50);
+      fairnessScore -= pts;
+      deductions.push({ label: 'Fairness imbalance', points: pts, severity: imbalanced >= 3 ? 'high' : 'medium', reason: `${imbalanced} member(s) have an Imbalanced fairness status` });
+    }
+    if (watch > 0) {
+      const pts = Math.min(watch * 4, 20);
+      fairnessScore -= pts;
+      deductions.push({ label: 'Members under watch', points: pts, severity: 'low', reason: `${watch} member(s) are in Watch status` });
+    }
+  }
+  fairnessScore = Math.max(0, Math.min(100, fairnessScore));
+
+  // ── Coverage component (25%) ────────────────────────────────────────────────
+  let coverageScore = 100;
+  const highCoverage = coverageIssues.filter(i => i.severity === 'high').length;
+  const medCoverage = coverageIssues.filter(i => i.severity === 'medium').length;
+  if (highCoverage > 0) {
+    const pts = Math.min(highCoverage * 8, 60);
+    coverageScore -= pts;
+    deductions.push({ label: 'High severity coverage issues', points: pts, severity: 'high', reason: `${highCoverage} date(s) have critical staffing shortfalls` });
+  }
+  if (medCoverage > 0) {
+    const pts = Math.min(medCoverage * 3, 20);
+    coverageScore -= pts;
+    deductions.push({ label: 'Medium coverage alerts', points: pts, severity: 'medium', reason: `${medCoverage} date(s) have medium coverage warnings` });
+  }
+  coverageScore = Math.max(0, Math.min(100, coverageScore));
+
+  // ── Night equity component (15%) ────────────────────────────────────────────
+  let nightEquityScore = 100;
+  const activePool = Array.isArray(memberStats) ? memberStats.filter(m => !m.isInactive) : [];
+  if (activePool.length > 1) {
+    const nights = activePool.map(m => m.counts?.NIGHT || m.nightShifts || 0);
+    const spread = Math.max(...nights) - Math.min(...nights);
+    if (spread > 3) {
+      const pts = Math.min(spread * 5, 50);
+      nightEquityScore -= pts;
+      deductions.push({ label: 'Night shift spread is uneven', points: pts, severity: spread > 5 ? 'high' : 'medium', reason: `Night shift range spans ${spread} (max: ${Math.max(...nights)}, min: ${Math.min(...nights)})` });
+    } else if (spread > 1) {
+      nightEquityScore -= 10;
+      deductions.push({ label: 'Night shift minor imbalance', points: 10, severity: 'low', reason: `Night shift range spans ${spread}` });
+    }
+  }
+  nightEquityScore = Math.max(0, Math.min(100, nightEquityScore));
+
+  // ── Weekend equity component (10%) ──────────────────────────────────────────
+  let weekendEquityScore = 100;
+  if (activePool.length > 1) {
+    const weekends = activePool.map(m => m.weekendShiftsCount || m.weekendShifts || 0);
+    const spread = Math.max(...weekends) - Math.min(...weekends);
+    if (spread > 3) {
+      const pts = Math.min(spread * 4, 40);
+      weekendEquityScore -= pts;
+      deductions.push({ label: 'Weekend duties clustered among few members', points: pts, severity: spread > 5 ? 'high' : 'medium', reason: `Weekend duty range spans ${spread}` });
+    } else if (spread > 1) {
+      weekendEquityScore -= 8;
+      deductions.push({ label: 'Weekend minor imbalance', points: 8, severity: 'low', reason: `Weekend duty range spans ${spread}` });
+    }
+  }
+  weekendEquityScore = Math.max(0, Math.min(100, weekendEquityScore));
+
+  // ── Public holiday equity component (10%) ───────────────────────────────────
+  let phEquityScore = 100;
+  if (activePool.length > 1) {
+    const holidays = activePool.map(m => m.holidayShiftsCount || m.publicHolidayShifts || 0);
+    const spread = Math.max(...holidays) - Math.min(...holidays);
+    if (spread > 3) {
+      const pts = Math.min(spread * 4, 40);
+      phEquityScore -= pts;
+      deductions.push({ label: 'Public holiday duties uneven', points: pts, severity: 'medium', reason: `Holiday range spans ${spread}` });
+    } else if (spread > 1) {
+      phEquityScore -= 6;
+      deductions.push({ label: 'Public holiday minor imbalance', points: 6, severity: 'low', reason: `Holiday range spans ${spread}` });
+    }
+  }
+  phEquityScore = Math.max(0, Math.min(100, phEquityScore));
+
+  // ── Leave clustering component (10%) ────────────────────────────────────────
+  let leaveClusterScore = 100;
+  const leaveClusters = calculateLeaveClustering(dayStats, thresholds);
+  const highLeave = leaveClusters.filter(d => d.severity === 'high').length;
+  const medLeave = leaveClusters.filter(d => d.severity === 'medium').length;
+  const lowLeave = leaveClusters.filter(d => d.severity === 'low').length;
+  if (highLeave > 0) {
+    const pts = Math.min(highLeave * 8, 40);
+    leaveClusterScore -= pts;
+    deductions.push({ label: 'High leave concentration detected', points: pts, severity: 'high', reason: `${highLeave} date(s) exceed the leave threshold by 2+` });
+  }
+  if (medLeave > 0) {
+    const pts = Math.min(medLeave * 4, 20);
+    leaveClusterScore -= pts;
+    deductions.push({ label: 'Multiple high-leave days detected', points: pts, severity: 'medium', reason: `${medLeave} date(s) exceed the leave threshold by 1` });
+  }
+  if (lowLeave > 0) {
+    leaveClusterScore -= Math.min(lowLeave * 2, 10);
+  }
+  leaveClusterScore = Math.max(0, Math.min(100, leaveClusterScore));
+
+  // ── Weighted overall score ───────────────────────────────────────────────────
+  const weighted =
+    fairnessScore * 0.30 +
+    coverageScore * 0.25 +
+    nightEquityScore * 0.15 +
+    weekendEquityScore * 0.10 +
+    phEquityScore * 0.10 +
+    leaveClusterScore * 0.10;
+
+  const score = Math.max(0, Math.min(100, Math.round(weighted)));
+
+  let status = 'Excellent';
+  let severity = 'green';
+  if (score >= 90) { status = 'Excellent'; severity = 'green'; }
+  else if (score >= 80) { status = 'Good'; severity = 'blue'; }
+  else if (score >= 65) { status = 'Needs Review'; severity = 'amber'; }
+  else { status = 'High Risk'; severity = 'red'; }
+
+  // Sort deductions by points descending
+  deductions.sort((a, b) => b.points - a.points);
+
+  return {
+    score,
+    status,
+    severity,
+    components: {
+      fairness: fairnessScore,
+      coverage: coverageScore,
+      nightEquity: nightEquityScore,
+      weekendEquity: weekendEquityScore,
+      publicHolidayEquity: phEquityScore,
+      leaveClustering: leaveClusterScore,
+    },
+    deductions,
+  };
+};
+
+/**
+ * generateHealthInsights
+ * Converts health analytics into human-readable, actionable insight cards.
+ */
+export const generateHealthInsights = ({
+  healthScore = null,
+  fairnessScores = [],
+  coverageIssues = [],
+  leaveClusters = [],
+  equitySignals = null,
+}) => {
+  const insights = [];
+
+  // Coverage
+  if (coverageIssues.length > 0) {
+    const high = coverageIssues.filter(i => i.severity === 'high').length;
+    const severity = high >= 3 ? 'high' : high >= 1 ? 'medium' : 'low';
+    insights.push({
+      type: 'coverage',
+      severity,
+      title: 'Coverage needs review',
+      description: `There are ${coverageIssues.length} date(s) with staffing issues, including ${high} high-severity day(s).`,
+      recommendation: high > 0
+        ? 'Review high-severity dates before finalising the roster.'
+        : 'Check medium-severity dates to ensure adequate coverage.',
+    });
+  }
+
+  // Night equity
+  if (equitySignals?.nightEquity) {
+    const ne = equitySignals.nightEquity;
+    if (ne.severity !== 'low') {
+      insights.push({
+        type: 'night',
+        severity: ne.severity,
+        title: 'Night shift imbalance detected',
+        description: `Highest night count is ${ne.max} while lowest is ${ne.min} (spread: ${ne.spread}).`,
+        recommendation: 'Consider assigning future night duties to members with a lower count.',
+      });
+    }
+  }
+
+  // Weekend equity
+  if (equitySignals?.weekendEquity) {
+    const we = equitySignals.weekendEquity;
+    if (we.severity !== 'low') {
+      insights.push({
+        type: 'weekend',
+        severity: we.severity,
+        title: 'Weekend duty imbalance detected',
+        description: `Weekend duty range spans ${we.spread} (max: ${we.max}, min: ${we.min}).`,
+        recommendation: 'Redistribute upcoming weekend assignments to members with fewer weekend duties.',
+      });
+    }
+  }
+
+  // Public holiday equity
+  if (equitySignals?.publicHolidayEquity) {
+    const phe = equitySignals.publicHolidayEquity;
+    if (phe.severity !== 'low' && phe.max > 0) {
+      insights.push({
+        type: 'holiday',
+        severity: phe.severity,
+        title: 'Public holiday duty imbalance',
+        description: `Public holiday spread is ${phe.spread} (max: ${phe.max}, min: ${phe.min}).`,
+        recommendation: 'Ensure holiday duties are spread more evenly in future months.',
+      });
+    }
+  }
+
+  // Leave clustering
+  if (leaveClusters.length > 0) {
+    const high = leaveClusters.filter(d => d.severity === 'high').length;
+    insights.push({
+      type: 'leave',
+      severity: high > 0 ? 'high' : leaveClusters.length > 2 ? 'medium' : 'low',
+      title: 'Leave clustering detected',
+      description: `${leaveClusters.length} date(s) exceed the configured leave threshold.`,
+      recommendation: 'Review whether leave approvals are concentrated on the same days.',
+    });
+  }
+
+  // Fairness
+  if (Array.isArray(fairnessScores)) {
+    const imbalanced = fairnessScores.filter(m => !m.isInactive && m.fairnessStatus === 'Imbalanced').length;
+    if (imbalanced > 0) {
+      insights.push({
+        type: 'fairness',
+        severity: imbalanced >= 3 ? 'high' : 'medium',
+        title: 'Roster fairness imbalance',
+        description: `${imbalanced} member(s) have an Imbalanced fairness status.`,
+        recommendation: 'Check the Fairness Scoring table to identify which members need rebalancing.',
+      });
+    }
+  }
+
+  // Overall health — positive signal
+  if (healthScore && healthScore.score >= 90 && insights.length === 0) {
+    insights.push({
+      type: 'fairness',
+      severity: 'info',
+      title: 'Roster is in excellent health',
+      description: `Overall health score is ${healthScore.score}/100 with no major issues detected.`,
+      recommendation: 'Continue monitoring as the month progresses.',
+    });
+  }
+
+  return insights;
 };

@@ -1,5 +1,11 @@
 import { useState, useMemo, useEffect } from 'react';
-import { calculateRosterAnalytics } from '../utils/rosterAnalytics';
+import {
+  calculateRosterAnalytics,
+  calculateRosterHealthScore,
+  calculateLeaveClustering,
+  calculateEquitySignals,
+  generateHealthInsights,
+} from '../utils/rosterAnalytics';
 
 export default function AnalyticsPage({
   selectedName,
@@ -69,7 +75,36 @@ export default function AnalyticsPage({
     });
   }, [names, masterRoster, requests, teamMembers, shiftTypes, activeMonth, includeInactive, tallyThresholds]);
 
-  const { overview, doctorSummaries, rankings, dynamicShiftColumns, coverageIssues, ytdStats, averages } = analytics;
+  const { overview, doctorSummaries, rankings, dynamicShiftColumns, coverageIssues, ytdStats, averages, dayStatsList } = analytics;
+
+  // ── Roster Health Intelligence ───────────────────────────────────────────
+  const leaveClusters = useMemo(() => {
+    return calculateLeaveClustering(dayStatsList || [], tallyThresholds);
+  }, [dayStatsList, tallyThresholds]);
+
+  const equitySignals = useMemo(() => {
+    return calculateEquitySignals(doctorSummaries);
+  }, [doctorSummaries]);
+
+  const healthScore = useMemo(() => {
+    return calculateRosterHealthScore({
+      fairnessScores: doctorSummaries,
+      coverageIssues,
+      memberStats: doctorSummaries,
+      dayStats: dayStatsList || [],
+      thresholds: tallyThresholds,
+    });
+  }, [doctorSummaries, coverageIssues, dayStatsList, tallyThresholds]);
+
+  const healthInsights = useMemo(() => {
+    return generateHealthInsights({
+      healthScore,
+      fairnessScores: doctorSummaries,
+      coverageIssues,
+      leaveClusters,
+      equitySignals,
+    });
+  }, [healthScore, doctorSummaries, coverageIssues, leaveClusters, equitySignals]);
 
   const sortedFairnessSummaries = useMemo(() => {
     const list = [...doctorSummaries];
@@ -311,6 +346,294 @@ export default function AnalyticsPage({
           </button>
         </div>
       </div>
+
+      {/* ❤️ Roster Health Intelligence */}
+      <div className="mb-8 space-y-5">
+
+        {/* A — Health Score Card */}
+        {(() => {
+          const sevMap = {
+            green:  { ring: 'ring-emerald-200', bg: 'bg-emerald-50',  text: 'text-emerald-700',  badgeBg: 'bg-emerald-100 text-emerald-800', bar: 'bg-emerald-500', icon: '✅' },
+            blue:   { ring: 'ring-blue-200',    bg: 'bg-blue-50',    text: 'text-blue-700',    badgeBg: 'bg-blue-100 text-blue-800',   bar: 'bg-blue-500',   icon: '🔵' },
+            amber:  { ring: 'ring-amber-200',   bg: 'bg-amber-50',   text: 'text-amber-700',   badgeBg: 'bg-amber-100 text-amber-800',  bar: 'bg-amber-500',  icon: '⚠️' },
+            red:    { ring: 'ring-red-200',     bg: 'bg-red-50',     text: 'text-red-700',     badgeBg: 'bg-red-100 text-red-800',    bar: 'bg-red-500',    icon: '🚨' },
+          };
+          const style = sevMap[healthScore.severity] || sevMap.green;
+          const components = [
+            { label: 'Fairness',         key: 'fairness',           color: 'bg-indigo-500' },
+            { label: 'Coverage',         key: 'coverage',           color: 'bg-rose-500'   },
+            { label: 'Night Equity',     key: 'nightEquity',        color: 'bg-violet-500' },
+            { label: 'Weekend Equity',   key: 'weekendEquity',      color: 'bg-emerald-500' },
+            { label: 'PH Equity',        key: 'publicHolidayEquity',color: 'bg-teal-500'   },
+            { label: 'Leave Clustering', key: 'leaveClustering',    color: 'bg-amber-500'  },
+          ];
+          return (
+            <div className={`rounded-3xl border bg-white p-6 shadow-sm ring-1 ${style.ring}`}>
+              <div className="flex flex-col lg:flex-row lg:items-start gap-6">
+                {/* Score display */}
+                <div className="flex-shrink-0 flex flex-col items-center justify-center text-center min-w-[140px]">
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">Roster Health</span>
+                  <div className={`text-6xl font-black ${style.text} leading-none`}>{healthScore.score}</div>
+                  <div className="text-slate-400 text-xs font-bold mt-0.5">/ 100</div>
+                  <span className={`mt-3 inline-block px-3 py-1 rounded-full text-xs font-extrabold tracking-wide ${style.badgeBg}`}>
+                    {style.icon} {healthScore.status}
+                  </span>
+                  {/* Ring meter */}
+                  <div className="mt-3 w-20 h-20 relative">
+                    <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
+                      <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e2e8f0" strokeWidth="3" />
+                      <circle
+                        cx="18" cy="18" r="15.9" fill="none"
+                        stroke={healthScore.severity === 'green' ? '#10b981' : healthScore.severity === 'blue' ? '#3b82f6' : healthScore.severity === 'amber' ? '#f59e0b' : '#ef4444'}
+                        strokeWidth="3"
+                        strokeDasharray={`${healthScore.score} ${100 - healthScore.score}`}
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <span className="absolute inset-0 flex items-center justify-center text-sm font-black text-slate-700">{healthScore.score}%</span>
+                  </div>
+                </div>
+                {/* Component bars */}
+                <div className="flex-1 space-y-3">
+                  <h3 className="text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-3">Health Component Breakdown</h3>
+                  {components.map(({ label, key, color }) => {
+                    const val = healthScore.components[key] ?? 100;
+                    return (
+                      <div key={key}>
+                        <div className="flex justify-between text-[10px] font-semibold text-slate-600 mb-1">
+                          <span>{label}</span>
+                          <span className="font-black text-slate-800">{val}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                          <div
+                            className={`${color} h-full rounded-full transition-all duration-700`}
+                            style={{ width: `${val}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Deductions */}
+                <div className="flex-shrink-0 lg:min-w-[240px] xl:min-w-[280px]">
+                  <h3 className="text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-3">Top Deductions</h3>
+                  {healthScore.deductions.length === 0 ? (
+                    <div className="text-xs text-emerald-600 font-semibold flex items-center gap-1.5">
+                      <span>✅</span> No major health deductions.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
+                      {healthScore.deductions.map((d, i) => {
+                        const dStyle = d.severity === 'high'
+                          ? 'bg-red-50 border-red-100 text-red-800'
+                          : d.severity === 'medium'
+                          ? 'bg-amber-50 border-amber-100 text-amber-800'
+                          : 'bg-slate-50 border-slate-100 text-slate-700';
+                        const badgeStyle = d.severity === 'high'
+                          ? 'bg-red-100 text-red-800'
+                          : d.severity === 'medium'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-slate-100 text-slate-600';
+                        return (
+                          <div key={i} className={`rounded-xl border p-2.5 ${dStyle}`}>
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span className="text-[10px] font-bold truncate">{d.label}</span>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ${badgeStyle}`}>{d.severity}</span>
+                                <span className="text-[10px] font-black">-{d.points}pts</span>
+                              </div>
+                            </div>
+                            <p className="text-[9px] opacity-80 leading-tight">{d.reason}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* B — Health Insights Panel */}
+        {healthInsights.length > 0 && (
+          <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+              <span>💡</span> Health Insights &amp; Recommendations
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+              {healthInsights.map((insight, i) => {
+                const typeIcons = { coverage: '🏥', night: '🌙', weekend: '⛱️', holiday: '🎉', leave: '📅', fairness: '⚖️' };
+                const sevStyle = insight.severity === 'high'
+                  ? 'border-red-100 bg-red-50/40'
+                  : insight.severity === 'medium'
+                  ? 'border-amber-100 bg-amber-50/40'
+                  : insight.severity === 'info'
+                  ? 'border-emerald-100 bg-emerald-50/30'
+                  : 'border-slate-100 bg-slate-50/40';
+                const badgeStyle = insight.severity === 'high'
+                  ? 'bg-red-100 text-red-800'
+                  : insight.severity === 'medium'
+                  ? 'bg-amber-100 text-amber-800'
+                  : insight.severity === 'info'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-slate-100 text-slate-700';
+                return (
+                  <div key={i} className={`rounded-2xl border p-4 text-left ${sevStyle}`}>
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-base">{typeIcons[insight.type] || '📌'}</span>
+                        <span className="text-xs font-extrabold text-slate-800">{insight.title}</span>
+                      </div>
+                      <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase flex-shrink-0 ${badgeStyle}`}>
+                        {insight.severity}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-600 mb-2 leading-relaxed">{insight.description}</p>
+                    <p className="text-[9px] font-semibold text-slate-500 italic leading-relaxed">💬 {insight.recommendation}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* C — Equity Signals Panel */}
+        {(() => {
+          const signals = [
+            { label: 'Night Equity',      key: 'nightEquity',        icon: '🌙', color: 'text-violet-700', ringColor: 'ring-violet-100', bg: 'bg-violet-50/40' },
+            { label: 'Weekend Equity',    key: 'weekendEquity',      icon: '⛱️', color: 'text-emerald-700', ringColor: 'ring-emerald-100', bg: 'bg-emerald-50/40' },
+            { label: 'Public Holiday Equity', key: 'publicHolidayEquity', icon: '🎉', color: 'text-teal-700', ringColor: 'ring-teal-100', bg: 'bg-teal-50/40' },
+            { label: 'Active Shift Equity',   key: 'activeShiftEquity',  icon: '🏥', color: 'text-indigo-700', ringColor: 'ring-indigo-100', bg: 'bg-indigo-50/40' },
+          ];
+          return (
+            <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+                <span>📊</span> Equity Signal Analysis
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                {signals.map(({ label, key, icon, color, ringColor, bg }) => {
+                  const sig = equitySignals?.[key];
+                  if (!sig) return null;
+                  const spreadBadge = sig.severity === 'high'
+                    ? 'bg-red-100 text-red-800'
+                    : sig.severity === 'medium'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-emerald-100 text-emerald-800';
+                  return (
+                    <div key={key} className={`rounded-2xl border ring-1 ${ringColor} ${bg} p-4 text-left`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-base">{icon}</span>
+                          <span className={`text-[10px] font-extrabold uppercase tracking-wider ${color}`}>{label}</span>
+                        </div>
+                        <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ${spreadBadge}`}>
+                          {sig.severity}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 text-center mb-3">
+                        <div className="bg-white rounded-xl p-1.5 border border-slate-100">
+                          <div className="text-[8px] text-slate-400 font-bold uppercase">Min</div>
+                          <div className="text-sm font-black text-slate-800">{sig.min}</div>
+                        </div>
+                        <div className="bg-white rounded-xl p-1.5 border border-slate-100">
+                          <div className="text-[8px] text-slate-400 font-bold uppercase">Avg</div>
+                          <div className="text-sm font-black text-slate-800">{sig.average}</div>
+                        </div>
+                        <div className="bg-white rounded-xl p-1.5 border border-slate-100">
+                          <div className="text-[8px] text-slate-400 font-bold uppercase">Max</div>
+                          <div className="text-sm font-black text-slate-800">{sig.max}</div>
+                        </div>
+                      </div>
+                      <div className="text-[9px] font-semibold text-slate-500 mb-2">
+                        Spread: <span className="font-black text-slate-700">{sig.spread}</span>
+                      </div>
+                      {sig.highest.length > 0 && (
+                        <div className="mb-1.5">
+                          <span className="text-[8px] font-extrabold text-slate-400 uppercase">Highest</span>
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {sig.highest.map(m => (
+                              <span key={m.name} className="text-[9px] font-bold bg-white border border-slate-200 rounded-full px-1.5 py-0.5 text-slate-700">
+                                {m.name.split(' ')[0]} ({m.value})
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {sig.lowest.length > 0 && (
+                        <div>
+                          <span className="text-[8px] font-extrabold text-slate-400 uppercase">Lowest</span>
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {sig.lowest.map(m => (
+                              <span key={m.name} className="text-[9px] font-bold bg-white border border-slate-200 rounded-full px-1.5 py-0.5 text-slate-500">
+                                {m.name.split(' ')[0]} ({m.value})
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* D — Leave Clustering Panel */}
+        <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+            <span>📅</span> Leave Clustering Analysis
+          </h3>
+          {leaveClusters.length === 0 ? (
+            <div className="py-8 text-center text-emerald-600 font-bold flex flex-col items-center gap-2 text-xs">
+              <span className="text-2xl">✅</span>
+              <span>No leave clustering detected — leave distribution looks healthy.</span>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-[10px] text-left border-separate border-spacing-0">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 font-bold">
+                    <th className="py-2 pl-3 pr-2">Date</th>
+                    <th className="py-2 px-2">Day</th>
+                    <th className="py-2 px-2 text-center">Leave Count</th>
+                    <th className="py-2 px-2 text-center">Threshold</th>
+                    <th className="py-2 px-2 text-center">Over by</th>
+                    <th className="py-2 px-2 text-center">Severity</th>
+                    <th className="py-2 px-2">Note</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {leaveClusters.map(cluster => {
+                    const sevBadge = cluster.severity === 'high'
+                      ? 'bg-red-100 text-red-800'
+                      : cluster.severity === 'medium'
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-slate-100 text-slate-700';
+                    return (
+                      <tr key={cluster.date} className="hover:bg-slate-50 transition">
+                        <td className="py-2 pl-3 pr-2 font-bold text-slate-800">{cluster.label}</td>
+                        <td className="py-2 px-2 text-slate-500">{cluster.dayName}</td>
+                        <td className="py-2 px-2 text-center font-black text-slate-900">{cluster.totalLeave}</td>
+                        <td className="py-2 px-2 text-center text-slate-500">{cluster.threshold}</td>
+                        <td className="py-2 px-2 text-center font-bold text-rose-700">+{cluster.totalLeave - cluster.threshold}</td>
+                        <td className="py-2 px-2 text-center">
+                          <span className={`inline-block text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ${sevBadge}`}>
+                            {cluster.severity}
+                          </span>
+                        </td>
+                        <td className="py-2 px-2 text-slate-500 italic">{cluster.message}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+      </div>{/* /Health Intelligence */}
 
       {/* 🚀 Overview Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 gap-4 mb-8">
