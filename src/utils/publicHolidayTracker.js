@@ -364,10 +364,14 @@ export const buildWarnings = (summaries) => {
 export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRoster = []) => {
   const holidaysMap = {}; // Key: YYYY-MM-DD
   
-  // 1. Initialize all holidays
+  const activeYear = activeMonth ? activeMonth.split('-')[0] : String(new Date().getFullYear());
+  // 1. Initialize all holidays for the active year
   const activeKeys = Array.isArray(HOLIDAYS) 
-    ? HOLIDAYS.map(h => ({ date: h.date || h.Date || h.holidayDate, name: h.name || h.Name || h.holidayName }))
-    : Object.keys(HOLIDAYS).map(d => ({ date: d, name: HOLIDAYS[d] }));
+    ? HOLIDAYS.filter(h => {
+        const d = h.date || h.Date || h.holidayDate;
+        return d && d.startsWith(activeYear);
+      }).map(h => ({ date: h.date || h.Date || h.holidayDate, name: h.name || h.Name || h.holidayName }))
+    : Object.keys(HOLIDAYS).filter(d => d.startsWith(activeYear)).map(d => ({ date: d, name: HOLIDAYS[d] }));
 
   activeKeys.forEach(({ date, name }) => {
     holidaysMap[date] = {
