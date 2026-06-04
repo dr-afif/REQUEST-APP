@@ -2140,14 +2140,14 @@ export default function RosterPage({
                                       title={parseShiftValue(val).isStandby ? "Click to remove standby" : "Click to set standby"}
                                     >
                                       <span>{parseShiftValue(val).cleanShift}</span>
-                                      <span className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[8px] font-extrabold leading-none ${
+                                      <span className={`inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold leading-none min-w-[12px] h-[12px] ${
                                         parseShiftValue(val).isStandby ? 'bg-white text-amber-600' : 'bg-slate-200 text-slate-600'
                                       }`}>
-                                        STANDBY
+                                        S
                                       </span>
                                       {parseShiftValue(val).isExtended && (
-                                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-blue-500 text-white leading-none shadow-sm select-none" title="Extended Shift">
-                                          EXTENDED
+                                        <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-blue-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">
+                                          EX
                                         </span>
                                       )}
                                     </button>
@@ -2167,14 +2167,14 @@ export default function RosterPage({
                                     >
                                       <span>{parseShiftValue(val).cleanShift}</span>
                                       {parseShiftValue(val).isStandby && (
-                                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-amber-500 text-white leading-none shadow-sm select-none" title="Standby">
-                                          STANDBY
+                                        <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-amber-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Standby">
+                                          S
                                         </span>
                                       )}
-                                      <span className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[8px] font-extrabold leading-none ${
+                                      <span className={`inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold leading-none min-w-[12px] h-[12px] ${
                                         parseShiftValue(val).isExtended ? 'bg-white text-blue-600' : 'bg-slate-200 text-slate-600'
                                       }`}>
-                                        EXTENDED
+                                        EX
                                       </span>
                                     </button>
                                   ) : (
@@ -2210,13 +2210,13 @@ export default function RosterPage({
                                     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} ${getShiftBadgeClass(val, isRequested)}`} title={cellTooltip}>
                                       {parseShiftValue(val).cleanShift}
                                       {parseShiftValue(val).isStandby && (
-                                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-amber-500 text-white leading-none shadow-sm select-none" title="Standby">
-                                          STANDBY
+                                        <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-amber-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Standby">
+                                          S
                                         </span>
                                       )}
                                       {parseShiftValue(val).isExtended && (
-                                        <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-blue-500 text-white leading-none shadow-sm select-none" title="Extended Shift">
-                                          EXTENDED
+                                        <span className="inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold bg-blue-500 text-white leading-none min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">
+                                          EX
                                         </span>
                                       )}
                                     </span>
@@ -2748,14 +2748,10 @@ export default function RosterPage({
                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold ${getShiftBadgeClass(activeCommentDetail.val)}`}>
                   {parseShiftValue(activeCommentDetail.val).cleanShift || 'OFF'}
                   {parseShiftValue(activeCommentDetail.val).isStandby && (
-                    <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-500 text-white shadow-sm select-none" title="Standby">
-                      STANDBY
-                    </span>
+                    <span className="inline-flex items-center justify-center px-1 rounded-full text-[9px] font-extrabold bg-amber-500 text-white min-w-[12px] h-[12px] shadow-sm select-none" title="Standby">S</span>
                   )}
                   {parseShiftValue(activeCommentDetail.val).isExtended && (
-                    <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-blue-500 text-white shadow-sm select-none" title="Extended Shift">
-                      EXTENDED
-                    </span>
+                    <span className="inline-flex items-center justify-center px-1 rounded-full text-[9px] font-extrabold bg-blue-500 text-white min-w-[12px] h-[12px] shadow-sm select-none" title="Extended Shift">EX</span>
                   )}
                 </span>
               </div>
