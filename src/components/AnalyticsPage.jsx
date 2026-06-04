@@ -343,7 +343,7 @@ export default function AnalyticsPage({
       </div>
 
       {/* Sticky Month Navigator */}
-      <div className="sticky top-0 z-40 mb-6 -mx-4 md:-mx-8 px-4 md:px-8 py-2 bg-white/80 backdrop-blur-md border-b border-slate-200/60 shadow-sm">
+      <div className="sticky top-[84px] lg:top-7 z-40 mb-6 -mx-4 md:-mx-8 px-4 md:px-8 py-2 bg-white/80 backdrop-blur-md border-b border-slate-200/60 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest hidden sm:block">Viewing month</span>
           <div className="flex items-center gap-1.5 bg-white border border-slate-200/80 rounded-2xl p-1 shadow-sm">
