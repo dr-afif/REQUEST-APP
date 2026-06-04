@@ -148,18 +148,55 @@ export const getGhkaUsage = (masterRoster, names) => {
 };
 
 /**
+ * Generates synthetic credits from opening balances.
+ * @param {Object} openingBalances - Object keyed by doctorKey
+ * @param {Array} names - Array of active doctor names
+ * @returns {Array} List of synthetic opening balance credits
+ */
+export const buildOpeningBalanceCredits = (openingBalances, names) => {
+  const syntheticCredits = [];
+  const nameSet = new Set(names.map(n => normalizeForComparison(mapName(n))));
+
+  Object.entries(openingBalances || {}).forEach(([doctorKey, data]) => {
+    if (nameSet.has(doctorKey) && data.openingBalance > 0) {
+      for (let i = 0; i < data.openingBalance; i++) {
+        syntheticCredits.push({
+          doctorName: data.doctorName || data.name || doctorKey, // fallback if doctorName missing
+          doctorKey: doctorKey,
+          holidayDate: null,
+          holidayName: "Carry-forward GHKA credit",
+          workedShift: "CARRY_FORWARD",
+          creditEarned: true,
+          source: "opening_balance",
+          sequence: i + 1
+        });
+      }
+    }
+  });
+
+  return syntheticCredits;
+};
+
+/**
  * Step 3 & 4: Match earned credits to GHKA usages using chronological FIFO.
  * Prepares the output schema for Phase 5B (manual overrides support).
  * @param {Array} credits - Earned PH credits
  * @param {Array} usages - GHKA usages
+ * @param {Object} openingBalances - Opening balances
+ * @param {Array} names - Array of active doctor names
  * @returns {Object} { matchedRecords, unmatchedUsages }
  */
-export const matchGhkaToCredits = (credits, usages) => {
+export const matchGhkaToCredits = (credits, usages, openingBalances = {}, names = []) => {
+  const syntheticCredits = buildOpeningBalanceCredits(openingBalances, names);
+
   // Group by doctor
   const creditsByDoc = {};
   const usagesByDoc = {};
 
-  credits.forEach(c => {
+  // Prioritize synthetic credits (opening balances) before real credits
+  const allCredits = [...syntheticCredits, ...credits];
+
+  allCredits.forEach(c => {
     const key = c.doctorKey || normalizeForComparison(c.doctorName);
     if (!creditsByDoc[key]) creditsByDoc[key] = [];
     creditsByDoc[key].push({ ...c });
@@ -200,7 +237,7 @@ export const matchGhkaToCredits = (credits, usages) => {
         workedShift: credit.workedShift,
         matchedGhkaDate: matchedGhkaDate,
         status: status,
-        source: 'auto' // Important for Phase 5B
+        source: credit.source || 'auto' // Important for Phase 5B
       });
     });
 
@@ -222,28 +259,42 @@ export const matchGhkaToCredits = (credits, usages) => {
  * Step 5: Build doctor summary totals.
  * @param {Array} matchedRecords - Output from matchGhkaToCredits
  * @param {Array} names - Array of active doctor names
+ * @param {Object} openingBalances
  * @returns {Array} Summaries per doctor
  */
-export const buildDoctorSummary = (matchedRecords, unmatchedUsages, names) => {
-  const summaries = names.map(name => ({
-    name,
-    phWorked: 0,
-    ghkaUsed: 0,
-    ghkaUsedWithoutCredit: 0,
-    outstanding: 0
-  }));
+export const buildDoctorSummary = (matchedRecords, unmatchedUsages, names, openingBalances = {}) => {
+  const summaries = names.map(name => {
+    const doctorKey = normalizeForComparison(mapName(name));
+    return {
+      name,
+      doctorKey,
+      openingBalance: openingBalances[doctorKey]?.openingBalance || 0,
+      phWorked: 0,
+      ghkaUsed: 0,
+      usedFromOpeningBalance: 0,
+      usedFromCurrentYearCredit: 0,
+      outstanding: 0,
+      excessGhkaUsed: 0
+    };
+  });
 
   const sumMap = {};
-  summaries.forEach(s => { sumMap[normalizeForComparison(mapName(s.name))] = s; });
+  summaries.forEach(s => { sumMap[s.doctorKey] = s; });
 
   matchedRecords.forEach(record => {
     const s = sumMap[record.doctorKey];
     if (s) {
-      s.phWorked++;
+      if (record.source === 'auto') {
+        s.phWorked++;
+      }
+      
       if (record.status === 'USED') {
         s.ghkaUsed++;
-      } else if (record.status === 'PENDING') {
-        s.outstanding++;
+        if (record.source === 'opening_balance') {
+          s.usedFromOpeningBalance++;
+        } else {
+          s.usedFromCurrentYearCredit++;
+        }
       }
     }
   });
@@ -252,9 +303,13 @@ export const buildDoctorSummary = (matchedRecords, unmatchedUsages, names) => {
     const s = sumMap[u.doctorKey];
     if (s) {
       s.ghkaUsed++;
-      s.ghkaUsedWithoutCredit++;
-      // Outstanding remains unchanged (it's PH Worked - Valid GHKA Used)
     }
+  });
+
+  summaries.forEach(s => {
+    const totalAvailable = s.openingBalance + s.phWorked;
+    s.outstanding = Math.max(0, totalAvailable - s.ghkaUsed);
+    s.excessGhkaUsed = Math.max(0, s.ghkaUsed - totalAvailable);
   });
 
   return summaries.sort((a, b) => b.outstanding - a.outstanding || b.phWorked - a.phWorked || a.name.localeCompare(b.name));
@@ -279,13 +334,13 @@ export const buildWarnings = (summaries) => {
       });
     }
 
-    if (s.ghkaUsedWithoutCredit > 0) {
+    if (s.excessGhkaUsed > 0) {
       warnings.push({
         doctorName: s.name,
-        type: 'UNMATCHED_GHKA',
-        message: `${s.name} has taken ${s.ghkaUsedWithoutCredit} GHKA shift(s) without earning corresponding PH credits.`,
+        type: 'EXCESS_GHKA',
+        message: `${s.name} has taken ${s.excessGhkaUsed} GHKA shift(s) exceeding their available opening and earned credits.`,
         severity: 'high',
-        count: s.ghkaUsedWithoutCredit
+        count: s.excessGhkaUsed
       });
     }
   });

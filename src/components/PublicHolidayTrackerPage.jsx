@@ -20,6 +20,34 @@ export default function PublicHolidayTrackerPage({
 
   const [activeMonth, setActiveMonth] = useState(rosterMonth);
   const [sortConfig, setSortConfig] = useState({ key: 'outstanding', direction: 'desc' });
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+
+  const [openingBalances, setOpeningBalances] = useState(() => {
+    try {
+      const saved = localStorage.getItem('phTrackerOpeningBalances');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      return {};
+    }
+  });
+
+  const updateOpeningBalance = (docName, newBalance, note = '') => {
+    const docKey = normalizeForComparison(mapName(docName));
+    const newBalances = {
+      ...openingBalances,
+      [docKey]: {
+        doctorName: docName,
+        openingBalance: parseInt(newBalance) || 0,
+        note: note,
+        updatedAt: new Date().toISOString()
+      }
+    };
+    if (newBalances[docKey].openingBalance === 0 && !note) {
+      delete newBalances[docKey]; // cleanup empties
+    }
+    setOpeningBalances(newBalances);
+    localStorage.setItem('phTrackerOpeningBalances', JSON.stringify(newBalances));
+  };
 
   useEffect(() => {
     if (rosterMonth) {
@@ -36,8 +64,8 @@ export default function PublicHolidayTrackerPage({
   const { credits, usages, matched, unmatched, summaries, warnings, matrixRows } = useMemo(() => {
     const phCredits = getPublicHolidayCredits(masterRoster, validDoctors);
     const ghkaUsages = getGhkaUsage(masterRoster, validDoctors);
-    const { matchedRecords, unmatchedUsages } = matchGhkaToCredits(phCredits, ghkaUsages);
-    const docSummaries = buildDoctorSummary(matchedRecords, unmatchedUsages, validDoctors);
+    const { matchedRecords, unmatchedUsages } = matchGhkaToCredits(phCredits, ghkaUsages, openingBalances, validDoctors);
+    const docSummaries = buildDoctorSummary(matchedRecords, unmatchedUsages, validDoctors, openingBalances);
     const docWarnings = buildWarnings(docSummaries);
     
     // Matrix is filtered by active month
@@ -52,23 +80,27 @@ export default function PublicHolidayTrackerPage({
       warnings: docWarnings,
       matrixRows: mRows
     };
-  }, [masterRoster, validDoctors, activeMonth]);
+  }, [masterRoster, validDoctors, activeMonth, openingBalances]);
 
   // Calculate top-level totals
   const totals = useMemo(() => {
+    let totalOpeningBalance = 0;
     let totalWorked = 0;
     let totalUsed = 0;
     let totalOutstanding = 0;
+    let totalExcess = 0;
     let doctorsWithOutstanding = 0;
 
     summaries.forEach(s => {
+      totalOpeningBalance += s.openingBalance;
       totalWorked += s.phWorked;
       totalUsed += s.ghkaUsed;
       totalOutstanding += s.outstanding;
+      totalExcess += s.excessGhkaUsed;
       if (s.outstanding > 0) doctorsWithOutstanding++;
     });
 
-    return { totalWorked, totalUsed, totalOutstanding, doctorsWithOutstanding };
+    return { totalOpeningBalance, totalWorked, totalUsed, totalOutstanding, totalExcess, doctorsWithOutstanding };
   }, [summaries]);
 
   // Sortable summary
@@ -191,20 +223,20 @@ export default function PublicHolidayTrackerPage({
       {/* Overview Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total PH Worked</p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Opening Balance</p>
+          <p className="text-2xl font-black text-indigo-400 mt-2">{totals.totalOpeningBalance}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">PH Worked This Year</p>
           <p className="text-2xl font-black text-indigo-600 mt-2">{totals.totalWorked}</p>
         </div>
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total GHKA Used</p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">GHKA Used This Year</p>
           <p className="text-2xl font-black text-emerald-600 mt-2">{totals.totalUsed}</p>
         </div>
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Outstanding GHKA</p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Closing Outstanding</p>
           <p className="text-2xl font-black text-amber-500 mt-2">{totals.totalOutstanding}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Docs w/ Outstanding</p>
-          <p className="text-2xl font-black text-slate-700 mt-2">{totals.doctorsWithOutstanding}</p>
         </div>
       </div>
 
@@ -232,6 +264,67 @@ export default function PublicHolidayTrackerPage({
         </div>
       )}
 
+      {/* Opening Balances Editor Toggle */}
+      <div className="mb-4 flex justify-end">
+        <button
+          onClick={() => setIsEditorOpen(!isEditorOpen)}
+          className="text-xs font-bold px-4 py-2 bg-slate-800 text-white rounded-xl shadow-sm hover:bg-slate-700 transition"
+        >
+          {isEditorOpen ? 'Close Opening Balances Editor' : 'Edit Opening Balances'}
+        </button>
+      </div>
+
+      {isEditorOpen && (
+        <div className="mb-8 rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden animate-fadeIn">
+          <div className="p-5 border-b border-slate-100 bg-slate-50">
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <span>⚖️</span> Opening Balances Editor
+            </h3>
+            <p className="text-[10px] text-slate-500 mt-1">Set carry-forward GHKA credits from previous years. Changes save automatically.</p>
+          </div>
+          <div className="p-0 overflow-x-auto max-h-[400px] overflow-y-auto no-scrollbar border-b border-slate-100">
+            <table className="min-w-full text-left text-xs">
+              <thead className="sticky top-0 bg-white shadow-sm">
+                <tr className="text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                  <th className="py-3 px-5 font-bold">Doctor Name</th>
+                  <th className="py-3 px-5 font-bold">Opening Balance</th>
+                  <th className="py-3 px-5 font-bold w-1/2">Note / Year</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {validDoctors.map(doc => {
+                  const docKey = normalizeForComparison(mapName(doc));
+                  const data = openingBalances[docKey] || { openingBalance: 0, note: '' };
+                  return (
+                    <tr key={docKey} className="hover:bg-slate-50 transition">
+                      <td className="py-2.5 px-5 font-bold text-slate-700">{doc}</td>
+                      <td className="py-2.5 px-5">
+                        <input
+                          type="number"
+                          min="0"
+                          value={data.openingBalance}
+                          onChange={(e) => updateOpeningBalance(doc, e.target.value, data.note)}
+                          className="w-20 px-2 py-1 text-center bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition font-bold"
+                        />
+                      </td>
+                      <td className="py-2.5 px-5">
+                        <input
+                          type="text"
+                          placeholder="e.g. Carry forward from 2025"
+                          value={data.note}
+                          onChange={(e) => updateOpeningBalance(doc, data.openingBalance, e.target.value)}
+                          className="w-full px-3 py-1 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition placeholder:text-slate-300"
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Two Column Layout: Summary Table and Tracker Matrix */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         
@@ -243,33 +336,57 @@ export default function PublicHolidayTrackerPage({
             </h3>
           </div>
           <div className="overflow-y-auto flex-1 p-0 no-scrollbar">
-            <table className="min-w-full text-left text-[11px]">
+            <table className="min-w-full text-left text-[10px]">
               <thead className="sticky top-0 bg-white shadow-sm z-10">
                 <tr className="text-slate-400 uppercase tracking-wider">
-                  <th className="py-3 px-4 font-bold cursor-pointer hover:text-indigo-600" onClick={() => handleSort('name')}>
+                  <th className="py-3 px-3 font-bold cursor-pointer hover:text-indigo-600" onClick={() => handleSort('name')}>
                     Doctor {sortConfig.key === 'name' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
                   </th>
-                  <th className="py-3 px-3 font-bold text-center cursor-pointer hover:text-indigo-600" onClick={() => handleSort('phWorked')}>
+                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="Opening Balance" onClick={() => handleSort('openingBalance')}>
+                    Open {sortConfig.key === 'openingBalance' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                  </th>
+                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="PH Worked This Year" onClick={() => handleSort('phWorked')}>
                     Worked {sortConfig.key === 'phWorked' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
                   </th>
-                  <th className="py-3 px-3 font-bold text-center cursor-pointer hover:text-indigo-600" onClick={() => handleSort('ghkaUsed')}>
+                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="Total GHKA Used" onClick={() => handleSort('ghkaUsed')}>
                     Used {sortConfig.key === 'ghkaUsed' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
                   </th>
-                  <th className="py-3 px-4 font-bold text-center cursor-pointer hover:text-indigo-600" onClick={() => handleSort('outstanding')}>
+                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="From Opening" onClick={() => handleSort('usedFromOpeningBalance')}>
+                    (Open) {sortConfig.key === 'usedFromOpeningBalance' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                  </th>
+                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" title="From PH Worked" onClick={() => handleSort('usedFromCurrentYearCredit')}>
+                    (PH) {sortConfig.key === 'usedFromCurrentYearCredit' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                  </th>
+                  <th className="py-3 px-2 font-bold text-center cursor-pointer hover:text-indigo-600" onClick={() => handleSort('outstanding')}>
                     Outst. {sortConfig.key === 'outstanding' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
+                  </th>
+                  <th className="py-3 px-3 font-bold text-center cursor-pointer hover:text-indigo-600 text-rose-500" onClick={() => handleSort('excessGhkaUsed')}>
+                    Excess {sortConfig.key === 'excessGhkaUsed' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {sortedSummaries.map(s => (
                   <tr key={s.name} className="hover:bg-slate-50 transition">
-                    <td className="py-2.5 px-4 font-bold text-slate-700 truncate max-w-[120px]">{s.name}</td>
-                    <td className="py-2.5 px-3 text-center font-semibold text-slate-600">{s.phWorked}</td>
-                    <td className="py-2.5 px-3 text-center font-semibold text-slate-600">{s.ghkaUsed}</td>
-                    <td className="py-2.5 px-4 text-center">
-                      <span className={`inline-block px-2 py-0.5 rounded-full font-bold ${s.outstanding > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
+                    <td className="py-2.5 px-3 font-bold text-slate-700 truncate max-w-[100px]">{s.name}</td>
+                    <td className="py-2.5 px-2 text-center font-semibold text-slate-500">{s.openingBalance}</td>
+                    <td className="py-2.5 px-2 text-center font-semibold text-indigo-600">{s.phWorked}</td>
+                    <td className="py-2.5 px-2 text-center font-semibold text-emerald-600">{s.ghkaUsed}</td>
+                    <td className="py-2.5 px-2 text-center font-medium text-slate-400">{s.usedFromOpeningBalance}</td>
+                    <td className="py-2.5 px-2 text-center font-medium text-slate-400">{s.usedFromCurrentYearCredit}</td>
+                    <td className="py-2.5 px-2 text-center">
+                      <span className={`inline-block px-1.5 py-0.5 rounded-md font-bold ${s.outstanding > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
                         {s.outstanding}
                       </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      {s.excessGhkaUsed > 0 ? (
+                        <span className="inline-block px-1.5 py-0.5 rounded-md font-bold bg-rose-100 text-rose-700">
+                          {s.excessGhkaUsed}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300 font-medium">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
