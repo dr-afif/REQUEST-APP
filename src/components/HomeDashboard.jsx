@@ -565,9 +565,16 @@ export default function HomeDashboard({
                     let cellStyle = 'bg-slate-50/50 text-slate-300 hover:bg-slate-100/50';
                     let labelColor = 'text-slate-400';
                     let shiftBadge = '';
+                    let isStandby = false;
+                    let isExtended = false;
 
                     if (shift) {
-                      const sLower = shift.toLowerCase();
+                      const parsed = parseShiftValue(shift);
+                      const cleanShift = parsed.cleanShift;
+                      isStandby = parsed.isStandby;
+                      isExtended = parsed.isExtended;
+
+                      const sLower = cleanShift.toLowerCase();
                       if (sLower.includes('off') || sLower === 'off') {
                         cellStyle = 'bg-emerald-50/55 text-emerald-600 hover:bg-emerald-50 border border-emerald-100/45';
                         labelColor = 'text-emerald-500';
@@ -575,7 +582,7 @@ export default function HomeDashboard({
                       } else if (sLower.includes('night') || sLower === 'n' || sLower === 'on' || sLower === 'on1' || sLower === 'on2') {
                         cellStyle = 'bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-800';
                         labelColor = 'text-slate-400';
-                        shiftBadge = (sLower.includes('night') || sLower === 'n') ? '🌙' : shift.toUpperCase();
+                        shiftBadge = (sLower.includes('night') || sLower === 'n') ? '🌙' : cleanShift.toUpperCase();
                       } else if (sLower.includes('am')) {
                         cellStyle = 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-100';
                         labelColor = 'text-amber-600';
@@ -587,7 +594,7 @@ export default function HomeDashboard({
                       } else {
                         cellStyle = 'bg-slate-100 text-slate-800 hover:bg-slate-200 border border-slate-200';
                         labelColor = 'text-slate-500';
-                        shiftBadge = shift.substring(0, 3).toUpperCase();
+                        shiftBadge = cleanShift.substring(0, 3).toUpperCase();
                       }
                     }
 
@@ -601,9 +608,25 @@ export default function HomeDashboard({
                         <span className={`text-[10px] self-start leading-none ${isToday ? 'text-indigo-600 font-extrabold' : labelColor}`}>
                           {day.dayNum}
                         </span>
-                        <span className="text-[9px] font-extrabold uppercase mt-auto tracking-tighter truncate max-w-full leading-none mb-0.5">
-                          {shiftBadge}
-                        </span>
+                        <div className="flex flex-col items-center mt-auto w-full">
+                          <span className="text-[9px] font-extrabold uppercase tracking-tighter truncate max-w-full leading-none mb-0.5">
+                            {shiftBadge}
+                          </span>
+                          {(isStandby || isExtended) && (
+                            <div className="flex items-center gap-0.5 mt-0.5 select-none">
+                              {isStandby && (
+                                <span className="inline-flex items-center justify-center rounded-full text-[6.5px] font-extrabold bg-amber-500 text-white leading-none w-2.5 h-2.5 shadow-sm" title="Standby">
+                                  S
+                                </span>
+                              )}
+                              {isExtended && (
+                                <span className="inline-flex items-center justify-center rounded-full text-[6.5px] font-extrabold bg-blue-500 text-white leading-none w-2.5 h-2.5 shadow-sm" title="Extended Shift">
+                                  EX
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
