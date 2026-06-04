@@ -113,7 +113,6 @@ export default function PublicHolidayTrackerPage({
     }
     
     setMemoStatuses(newStatuses);
-    onUpdateSetting('phTrackerMemos', JSON.stringify(newStatuses));
   };
 
   useEffect(() => {
@@ -427,7 +426,12 @@ export default function PublicHolidayTrackerPage({
             </h3>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => setIsMemoEditMode(!isMemoEditMode)}
+                onClick={() => {
+                  if (isMemoEditMode) {
+                    onUpdateSetting('phTrackerMemos', JSON.stringify(memoStatuses));
+                  }
+                  setIsMemoEditMode(!isMemoEditMode);
+                }}
                 className={`text-[10px] font-bold px-3 py-1.5 rounded-lg transition border ${isMemoEditMode ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
               >
                 {isMemoEditMode ? 'Done Editing Memos' : 'Edit Memos'}
