@@ -2,6 +2,33 @@ import { useMemo } from 'react';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 import { mapName } from '../utils/adapters';
 
+// Helper to parse standby status and extended shift status from a shift name string
+const parseShiftValue = (rawVal) => {
+  if (!rawVal) return { cleanShift: '', isStandby: false, isExtended: false };
+  const rawStr = String(rawVal).trim();
+  const upStr = rawStr.toUpperCase();
+  const isStandby = upStr.endsWith('(S)') || upStr.endsWith('-S') || upStr.includes('(S)');
+  let isExtended = upStr.endsWith('(X)') || upStr.endsWith('-X') || upStr.includes('(X)');
+  
+  if (!isExtended && upStr.length > 1 && upStr.endsWith('X')) {
+    isExtended = true;
+  }
+
+  // Remove standby and extended modifiers in a case-insensitive way
+  let cleanShift = rawStr
+    .replace(/\(s\)/i, '')
+    .replace(/-s/i, '')
+    .replace(/\(x\)/i, '')
+    .replace(/-x/i, '')
+    .trim();
+    
+  if (isExtended && !upStr.endsWith('(X)') && !upStr.endsWith('-X') && upStr.endsWith('X')) {
+    cleanShift = cleanShift.slice(0, -1);
+  }
+  
+  return { cleanShift, isStandby, isExtended };
+};
+
 export default function HomeDashboard({
   selectedName,
   names = [],
@@ -401,30 +428,54 @@ export default function HomeDashboard({
 
               <div className="mt-5 flex items-center justify-between">
                 <div>
-                  <h3 className="text-3xl font-extrabold text-slate-800">
-                    {todayHighlight?.shift}
-                  </h3>
-                  {todayHighlight?.isOverride && (
-                    <span className="mt-2 inline-block rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-600 border border-emerald-100">
-                      REQUESTED SHIFT
-                    </span>
-                  )}
+                  {(() => {
+                    const { cleanShift, isStandby, isExtended } = parseShiftValue(todayHighlight?.shift);
+                    return (
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h3 className="text-3xl font-extrabold text-slate-800">
+                            {cleanShift || 'No Duty 💤'}
+                          </h3>
+                          {isStandby && (
+                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-500 text-white leading-none shadow-sm select-none align-middle" title="Standby">
+                              STANDBY
+                            </span>
+                          )}
+                          {isExtended && (
+                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-500 text-white leading-none shadow-sm select-none align-middle" title="Extended Shift">
+                              EXTENDED
+                            </span>
+                          )}
+                        </div>
+                        {todayHighlight?.isOverride && (
+                          <span className="self-start inline-block rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-600 border border-emerald-100">
+                            REQUESTED SHIFT
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="text-4xl">
-                  {todayHighlight?.shift.toLowerCase().includes('night') ||
-                  todayHighlight?.shift.toLowerCase() === 'n' ||
-                  todayHighlight?.shift.toLowerCase() === 'on' ||
-                  todayHighlight?.shift.toLowerCase() === 'on1' ||
-                  todayHighlight?.shift.toLowerCase() === 'on2'
-                    ? '🌙'
-                    : todayHighlight?.shift.toLowerCase().includes('off') ||
-                      todayHighlight?.shift.toLowerCase() === 'off' ||
-                      todayHighlight?.shift.toLowerCase() === 'al' ||
-                      todayHighlight?.shift.toLowerCase() === 'mc' ||
-                      todayHighlight?.shift.toLowerCase() === 'course' ||
-                      todayHighlight?.shift.toLowerCase().includes('leave')
-                      ? '💤'
-                      : '☀️'}
+                  {(() => {
+                    const { cleanShift } = parseShiftValue(todayHighlight?.shift);
+                    const sLower = (cleanShift || '').toLowerCase();
+                    return sLower.includes('night') ||
+                      sLower === 'n' ||
+                      sLower === 'on' ||
+                      sLower === 'on1' ||
+                      sLower === 'on2'
+                      ? '🌙'
+                      : sLower.includes('off') ||
+                        sLower === 'off' ||
+                        sLower === 'al' ||
+                        sLower === 'mc' ||
+                        sLower === 'course' ||
+                        sLower.includes('leave') ||
+                        !cleanShift
+                        ? '💤'
+                        : '☀️';
+                  })()}
                 </div>
               </div>
 
