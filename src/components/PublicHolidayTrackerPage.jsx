@@ -4,6 +4,7 @@ import {
   getGhkaUsage,
   matchGhkaToCredits,
   buildDoctorSummary,
+  buildWarnings,
   buildTrackerMatrix
 } from '../utils/publicHolidayTracker';
 import { normalizeForComparison } from '../utils/normalise';
