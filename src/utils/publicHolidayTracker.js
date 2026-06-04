@@ -1,22 +1,41 @@
 import { HOLIDAYS } from './holidays';
 
 /**
- * Normalizes night shift variants to a standard "NIGHT" representation.
+ * Classifies a shift on a public holiday.
+ * @param {String} shift
+ * @returns {Object}
  */
-const normalizeShift = (shift) => {
-  if (!shift) return '';
-  const s = shift.toUpperCase().trim();
-  if (['NIGHT', 'N', 'ON', 'ON1', 'ON2'].includes(s)) return 'NIGHT';
-  return s;
-};
+export const classifyPublicHolidayShift = (shift) => {
+  if (!shift) {
+    return {
+      normalizedShift: '', category: 'empty', isWorkedPublicHoliday: false, isPublicHolidayOff: false, earnsCredit: false
+    };
+  }
+  
+  const cleanShiftRaw = shift.replace(/\s*\([SX]\)$/i, '').trim();
+  const s = cleanShiftRaw.toUpperCase();
+  let normalizedShift = s;
+  
+  if (['NIGHT', 'N', 'ON', 'ON1', 'ON2'].includes(s)) {
+    normalizedShift = 'NIGHT';
+  }
 
-/**
- * Checks if a shift is a qualifying working shift for PH credits.
- */
-const isWorkingShift = (shift) => {
-  if (!shift) return false;
-  const s = normalizeShift(shift);
-  return ['AM', 'PM', 'NIGHT', 'PN'].includes(s);
+  if (['AM', 'PM', 'NIGHT', 'PN'].includes(normalizedShift)) {
+    return {
+      normalizedShift, category: 'worked', isWorkedPublicHoliday: true, isPublicHolidayOff: false, earnsCredit: true
+    };
+  }
+
+  if (s === 'HKA') {
+    return {
+      normalizedShift, category: 'official_ph_off', isWorkedPublicHoliday: false, isPublicHolidayOff: true, earnsCredit: false
+    };
+  }
+
+  // AL, MC, EL, OFF, COURSE, etc.
+  return {
+    normalizedShift, category: 'other_non_working', isWorkedPublicHoliday: false, isPublicHolidayOff: true, earnsCredit: false
+  };
 };
 
 /**
@@ -40,16 +59,14 @@ export const getPublicHolidayCredits = (masterRoster, names) => {
     // Check if date is a public holiday
     const holidayName = HOLIDAYS[dateStr];
     if (holidayName) {
-      // Clean shift (remove standby/extended suffixes for logic matching)
-      const cleanShiftRaw = shiftRaw.replace(/\s*\([SX]\)$/i, '').trim();
-      const normShift = normalizeShift(cleanShiftRaw);
+      const classification = classifyPublicHolidayShift(shiftRaw);
 
-      if (isWorkingShift(normShift)) {
+      if (classification.earnsCredit) {
         credits.push({
           doctorName: docName,
           holidayDate: dateStr,
           holidayName: holidayName,
-          workedShift: normShift, // Store normalized shift (e.g. NIGHT instead of ON1)
+          workedShift: classification.normalizedShift, // Store normalized shift
           originalShift: shiftRaw,
           creditEarned: true
         });
@@ -242,24 +259,48 @@ export const buildWarnings = (summaries) => {
  * @param {Array} matchedRecords - Output from matchGhkaToCredits
  * @param {Array} names - Array of active doctor names
  * @param {String} activeMonth - YYYY-MM
+ * @param {Array} masterRoster - The full master roster array to extract HKA and other non-working shifts
  * @returns {Array} List of rows (holidays) with column data for each doctor
  */
-export const buildTrackerMatrix = (matchedRecords, names, activeMonth) => {
-  // Extract all unique holidays worked by anyone in the active month
-  // Or actually, just all holidays that occurred in the active month that ANYONE worked.
+export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRoster = []) => {
   const holidaysMap = {}; // Key: YYYY-MM-DD
   
+  // 1. Initialize all holidays for the active month
+  Object.keys(HOLIDAYS).forEach(dateStr => {
+    if (dateStr.startsWith(activeMonth)) {
+      holidaysMap[dateStr] = {
+        date: dateStr,
+        name: HOLIDAYS[dateStr],
+        doctors: {}
+      };
+    }
+  });
+
+  const nameSet = new Set(names.map(n => n.toLowerCase()));
+
+  // 2. Populate all shifts for these holiday dates from master roster
+  masterRoster.forEach(row => {
+    const docName = row.name || row.Name;
+    const dateStr = row.date || row.Date;
+    const shiftRaw = row.shift || row.Shift;
+
+    if (holidaysMap[dateStr] && docName && nameSet.has(docName.toLowerCase())) {
+      const classification = classifyPublicHolidayShift(shiftRaw);
+      holidaysMap[dateStr].doctors[docName.toLowerCase()] = {
+        classification,
+        originalShift: shiftRaw,
+        matchedRecord: null // To be filled below if earned
+      };
+    }
+  });
+  
+  // 3. Inject matched records
   matchedRecords.forEach(record => {
-    if (record.holidayDate.startsWith(activeMonth)) {
-      if (!holidaysMap[record.holidayDate]) {
-        holidaysMap[record.holidayDate] = {
-          date: record.holidayDate,
-          name: record.holidayName,
-          doctors: {}
-        };
+    if (record.holidayDate.startsWith(activeMonth) && holidaysMap[record.holidayDate]) {
+      const docEntry = holidaysMap[record.holidayDate].doctors[record.doctorName.toLowerCase()];
+      if (docEntry) {
+        docEntry.matchedRecord = record;
       }
-      // Assuming a doctor only works one shift per PH date
-      holidaysMap[record.holidayDate].doctors[record.doctorName.toLowerCase()] = record;
     }
   });
 

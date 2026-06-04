@@ -39,7 +39,7 @@ export default function PublicHolidayTrackerPage({
     const docWarnings = buildWarnings(docSummaries);
     
     // Matrix is filtered by active month
-    const mRows = buildTrackerMatrix(matchedRecords, validDoctors, activeMonth);
+    const mRows = buildTrackerMatrix(matchedRecords, validDoctors, activeMonth, masterRoster);
 
     return {
       credits: phCredits,
@@ -305,27 +305,53 @@ export default function PublicHolidayTrackerPage({
                           <p className="text-[10px] text-slate-500 font-semibold mt-0.5">{formattedDate}</p>
                         </td>
                         {validDoctors.map(doc => {
-                          const record = row.doctors[doc.toLowerCase()];
+                          const recordEntry = row.doctors[doc.toLowerCase()];
                           
-                          if (!record) {
-                            // Did not work
+                          if (!recordEntry) {
+                            // Did not work / empty row in master roster
                             return (
-                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center">
+                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
                                 <span className="text-[10px] text-slate-300 font-medium">—</span>
                               </td>
                             );
                           }
 
+                          const { classification, originalShift, matchedRecord } = recordEntry;
+
+                          if (classification.category === 'empty') {
+                             return (
+                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                                <span className="text-[10px] text-slate-300 font-medium">—</span>
+                              </td>
+                            );
+                          }
+
+                          if (classification.category === 'official_ph_off') {
+                             return (
+                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                                <span className="text-[10px] text-slate-400 font-bold bg-slate-100 px-2 py-1 rounded-md border border-slate-200">HKA</span>
+                              </td>
+                            );
+                          }
+
+                          if (classification.category === 'other_non_working') {
+                             return (
+                              <td key={doc} className="py-3 px-4 bg-slate-50/30 text-center border-b border-slate-100">
+                                <span className="text-[10px] text-slate-400 font-medium bg-slate-100 px-2 py-1 rounded-md border border-slate-200">{originalShift}</span>
+                              </td>
+                            );
+                          }
+
                           // Worked
-                          const isUsed = record.status === 'USED';
+                          const isUsed = matchedRecord?.status === 'USED';
                           const badgeBg = isUsed ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200';
                           const statusIcon = isUsed ? '✓' : '⏳';
-                          const statusText = isUsed ? `GHKA ${new Date(record.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'Pending';
+                          const statusText = isUsed ? `GHKA ${new Date(matchedRecord.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'Pending';
 
                           return (
-                            <td key={doc} className="py-2 px-3 text-center align-top">
+                            <td key={doc} className="py-2 px-3 text-center align-top border-b border-slate-100">
                               <div className={`flex flex-col items-center justify-center p-1.5 rounded-xl border ${badgeBg}`}>
-                                <span className="text-xs font-black">{record.workedShift}</span>
+                                <span className="text-xs font-black">{classification.normalizedShift}</span>
                                 <div className="flex items-center gap-1 mt-0.5 opacity-80">
                                   <span className="text-[9px] font-bold">{statusIcon}</span>
                                   <span className="text-[9px] font-bold whitespace-nowrap">{statusText}</span>
