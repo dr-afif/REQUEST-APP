@@ -320,6 +320,7 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
     totalNightShifts: 0,
     totalLeaveDays: 0,
     totalWeekendShifts: 0,
+    totalWeekendLeaves: 0,
     perMemberYtdStats: [],
     perMonthTotals: [],
   };
@@ -366,7 +367,8 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
       active: 0,
       night: 0,
       leave: 0,
-      weekend: 0
+      weekend: 0,
+      weekendLeaves: 0
     };
   });
 
@@ -379,7 +381,8 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
       nightShifts: 0,
       weekendShifts: 0,
       publicHolidayShifts: 0,
-      leaveDays: 0
+      leaveDays: 0,
+      weekendLeaves: 0
     };
   });
 
@@ -441,6 +444,10 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
     } else {
       doctorStats[nameKey].leaveDays++;
       monthlyStats[mo].leave++;
+      if (isWeekend) {
+        doctorStats[nameKey].weekendLeaves++;
+        monthlyStats[mo].weekendLeaves++;
+      }
     }
   });
 
@@ -452,6 +459,7 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
   let totalNightShifts = 0;
   let totalLeaveDays = 0;
   let totalWeekendShifts = 0;
+  let totalWeekendLeaves = 0;
 
   Object.keys(doctorStats).forEach(key => {
     const d = doctorStats[key];
@@ -459,6 +467,7 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
     totalNightShifts += d.nightShifts;
     totalLeaveDays += d.leaveDays;
     totalWeekendShifts += d.weekendShifts;
+    totalWeekendLeaves += d.weekendLeaves || 0;
   });
 
   const perMemberYtdStats = Object.values(doctorStats);
@@ -470,7 +479,8 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
       active: monthlyStats[mo].active,
       night: monthlyStats[mo].night,
       leave: monthlyStats[mo].leave,
-      weekend: monthlyStats[mo].weekend
+      weekend: monthlyStats[mo].weekend,
+      weekendLeaves: monthlyStats[mo].weekendLeaves
     }));
 
   return {
@@ -478,6 +488,7 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
     totalNightShifts,
     totalLeaveDays,
     totalWeekendShifts,
+    totalWeekendLeaves,
     perMemberYtdStats,
     perMonthTotals
   };
@@ -544,6 +555,7 @@ export const calculateRosterAnalytics = ({
   let totalPmShifts = 0;
   let totalNightShifts = 0;
   let totalLeaveDays = 0;
+  let totalWeekendLeaves = 0;
   let totalEmptyCells = 0;
 
   const ACTIVE_SHIFTS = new Set(['AM', 'PM', 'NIGHT', 'PN', 'OH']);
@@ -610,6 +622,7 @@ export const calculateRosterAnalytics = ({
 
           if (day.isWeekend) {
             docEntry.weekendLeavesCount++;
+            totalWeekendLeaves++;
           }
         }
       } else {
@@ -659,6 +672,7 @@ export const calculateRosterAnalytics = ({
       totalPmShifts,
       totalNightShifts,
       totalLeaveDays,
+      totalWeekendLeaves,
       totalEmptyCells,
     },
     doctorSummaries: doctorListWithMix,

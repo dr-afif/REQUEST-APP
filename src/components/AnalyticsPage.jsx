@@ -313,7 +313,7 @@ export default function AnalyticsPage({
       </div>
 
       {/* 🚀 Overview Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 gap-4 mb-8">
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Members</p>
           <p className="text-2xl font-black text-teal-600 mt-2">{overview.totalMembers}</p>
@@ -337,6 +337,10 @@ export default function AnalyticsPage({
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Leave Days</p>
           <p className="text-2xl font-black text-purple-600 mt-2">{overview.totalLeaveDays}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Weekend Leaves</p>
+          <p className="text-2xl font-black text-teal-600 mt-2">{overview.totalWeekendLeaves || 0}</p>
         </div>
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Unassigned</p>
@@ -891,7 +895,7 @@ export default function AnalyticsPage({
         ) : (
           <div>
             {/* YTD summary cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
               <div className="rounded-2xl bg-indigo-50 border border-indigo-100 p-4">
                 <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">YTD Active Shifts</span>
                 <span className="text-2xl font-black text-indigo-900 mt-2 block">{ytdStats.totalActiveShifts}</span>
@@ -908,6 +912,10 @@ export default function AnalyticsPage({
                 <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">YTD Weekend Duties</span>
                 <span className="text-2xl font-black text-emerald-900 mt-2 block">{ytdStats.totalWeekendShifts}</span>
               </div>
+              <div className="rounded-2xl bg-teal-50 border border-teal-100 p-4">
+                <span className="text-[10px] font-bold text-teal-500 uppercase tracking-wider block">YTD Weekend Leaves</span>
+                <span className="text-2xl font-black text-teal-900 mt-2 block">{ytdStats.totalWeekendLeaves || 0}</span>
+              </div>
             </div>
 
             <div className="grid gap-6 md:grid-cols-3">
@@ -923,6 +931,7 @@ export default function AnalyticsPage({
                         <th className="py-2">Night</th>
                         <th className="py-2">Leave</th>
                         <th className="py-2">Weekend</th>
+                        <th className="py-2">W. Leave</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
@@ -933,6 +942,7 @@ export default function AnalyticsPage({
                           <td className="py-2 font-semibold text-slate-800">{monthRow.night}</td>
                           <td className="py-2 font-semibold text-slate-800">{monthRow.leave}</td>
                           <td className="py-2 font-semibold text-slate-800">{monthRow.weekend}</td>
+                          <td className="py-2 font-semibold text-slate-800">{monthRow.weekendLeaves || 0}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -985,6 +995,15 @@ export default function AnalyticsPage({
                         </th>
                         <th
                           onClick={() => {
+                            const dir = ytdSortConfig.key === 'weekendLeaves' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
+                            setYtdSortConfig({ key: 'weekendLeaves', direction: dir });
+                          }}
+                          className="py-2 font-bold cursor-pointer hover:bg-slate-100 border-l border-slate-100 border-b border-slate-150 bg-teal-50/10 text-teal-900"
+                        >
+                          W. Leave {ytdSortConfig.key === 'weekendLeaves' ? (ytdSortConfig.direction === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          onClick={() => {
                             const dir = ytdSortConfig.key === 'publicHolidayShifts' && ytdSortConfig.direction === 'asc' ? 'desc' : 'asc';
                             setYtdSortConfig({ key: 'publicHolidayShifts', direction: dir });
                           }}
@@ -1012,6 +1031,7 @@ export default function AnalyticsPage({
                           <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.activeShifts}</td>
                           <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.nightShifts}</td>
                           <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.weekendShifts}</td>
+                          <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold bg-teal-50/10">{memberRow.weekendLeaves || 0}</td>
                           <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.publicHolidayShifts}</td>
                           <td className="py-2 border-l border-slate-100 text-slate-800 font-semibold">{memberRow.leaveDays}</td>
                         </tr>
@@ -1074,7 +1094,11 @@ export default function AnalyticsPage({
                   <span className="text-[9px] font-extrabold text-emerald-500 uppercase tracking-wider block">Weekend Duties</span>
                   <span className="text-xl font-black text-emerald-900 mt-1 block">{selectedDoctor.weekendShiftsCount}</span>
                 </div>
-                <div className="bg-rose-50/50 border border-rose-100/60 rounded-2xl p-3">
+                <div className="bg-teal-50/50 border border-teal-100/60 rounded-2xl p-3">
+                  <span className="text-[9px] font-extrabold text-teal-500 uppercase tracking-wider block">Weekend Leaves</span>
+                  <span className="text-xl font-black text-teal-900 mt-1 block">{selectedDoctor.weekendLeavesCount || 0}</span>
+                </div>
+                <div className="bg-rose-50/50 border border-rose-100/60 rounded-2xl p-3 col-span-2">
                   <span className="text-[9px] font-extrabold text-rose-500 uppercase tracking-wider block">Holiday Duties</span>
                   <span className="text-xl font-black text-rose-900 mt-1 block">{selectedDoctor.holidayShiftsCount}</span>
                 </div>
