@@ -399,7 +399,7 @@ export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRos
   
   // 3. Inject matched records
   matchedRecords.forEach(record => {
-    if (record.holidayDate.startsWith(activeMonth) && holidaysMap[record.holidayDate]) {
+    if (record.holidayDate && record.holidayDate.startsWith(activeMonth) && holidaysMap[record.holidayDate]) {
       const docEntry = holidaysMap[record.holidayDate].doctors[record.doctorKey];
       if (docEntry) {
         docEntry.matchedRecord = record;
