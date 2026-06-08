@@ -9,6 +9,7 @@ import {
 } from '../utils/publicHolidayTracker';
 import { normalizeForComparison } from '../utils/normalise';
 import { mapName } from '../utils/adapters';
+import { APP_ICONS } from '../constants/icons';
 
 export default function PublicHolidayTrackerPage({
   selectedName,
@@ -211,7 +212,7 @@ export default function PublicHolidayTrackerPage({
       {/* Page Header */}
       <div className="mb-4">
         <h1 className="text-3xl font-extrabold flex items-center gap-2">
-          <span>🇲🇾</span>
+          <APP_ICONS.phTracker className="w-8 h-8 text-indigo-700" />
           <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Public Holiday Tracker</span>
         </h1>
         <p className="text-sm text-slate-500 mt-2">
@@ -258,7 +259,7 @@ export default function PublicHolidayTrackerPage({
       {warnings.length > 0 && (
         <div className="mb-8 rounded-3xl border border-rose-100 bg-rose-50/50 p-6 shadow-sm">
           <h3 className="text-xs font-bold text-rose-800 uppercase tracking-wider flex items-center gap-2 mb-4">
-            <span>⚠️</span> Tracker Warnings
+            <APP_ICONS.warning className="w-4 h-4" /> Tracker Warnings
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {warnings.map((w, idx) => (
@@ -292,7 +293,7 @@ export default function PublicHolidayTrackerPage({
         <div className="mb-8 rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden animate-fadeIn">
           <div className="p-5 border-b border-slate-100 bg-slate-50">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <span>⚖️</span> Opening Balances Editor
+              <APP_ICONS.edit className="w-4 h-4" /> Opening Balances Editor
             </h3>
             <p className="text-[10px] text-slate-500 mt-1">Set carry-forward GHKA credits from previous years. Changes save automatically.</p>
           </div>
@@ -346,7 +347,7 @@ export default function PublicHolidayTrackerPage({
         <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
           <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <span>👥</span> Doctor Summary
+              <APP_ICONS.team className="w-4 h-4" /> Doctor Summary
             </h3>
           </div>
           <div className="overflow-x-auto p-0 no-scrollbar border-b border-slate-100">
@@ -422,7 +423,7 @@ export default function PublicHolidayTrackerPage({
         <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
           <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex flex-wrap items-center justify-between gap-4">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <span>📅</span> Annual Replacement Matrix
+              <APP_ICONS.calendar className="w-4 h-4" /> Annual Replacement Matrix
             </h3>
             <div className="flex items-center gap-3">
               <button
@@ -445,7 +446,7 @@ export default function PublicHolidayTrackerPage({
           <div className="overflow-x-auto p-0 no-scrollbar">
             {matrixRows.length === 0 ? (
               <div className="flex flex-col items-center justify-center text-slate-400 p-8 text-center gap-3">
-                <span className="text-4xl">🏝️</span>
+                <APP_ICONS.info className="w-8 h-8 text-slate-300" />
                 <p className="text-sm font-bold">No public holidays found.</p>
               </div>
             ) : (
@@ -501,16 +502,16 @@ export default function PublicHolidayTrackerPage({
                           const isMemoSubmitted = !!memoStatuses[memoKey];
                           
                           let badgeBg = 'bg-amber-100 text-amber-800 border-amber-200'; // Default pending (yellow)
-                          let statusIcon = '⏳';
+                          let statusIcon = <APP_ICONS.clock className="w-2.5 h-2.5" />;
                           let statusText = 'Pend';
 
                           if (isUsed) {
                             if (isMemoSubmitted) {
                               badgeBg = 'bg-emerald-100 text-emerald-800 border-emerald-200'; // Memo submitted (green)
-                              statusIcon = '✓';
+                              statusIcon = <APP_ICONS.check className="w-2.5 h-2.5" />;
                             } else {
                               badgeBg = 'bg-rose-100 text-rose-800 border-rose-200'; // Used, no memo (red)
-                              statusIcon = '❗';
+                              statusIcon = <APP_ICONS.warning className="w-2.5 h-2.5" />;
                             }
                             statusText = `${new Date(matchedRecord.matchedGhkaDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
                           }
@@ -526,7 +527,7 @@ export default function PublicHolidayTrackerPage({
                               <div className={`flex flex-col items-center justify-center py-1 px-0.5 rounded-lg border ${badgeBg} mx-0.5 transition-colors`}>
                                 <span className="text-[10px] font-black leading-tight">{classification.normalizedShift}</span>
                                 <div className="flex items-center gap-0.5 opacity-80 leading-tight">
-                                  <span className="text-[8px] font-bold">{statusIcon}</span>
+                                  <span className="flex items-center justify-center">{statusIcon}</span>
                                   <span className="text-[8px] font-bold whitespace-nowrap">{statusText}</span>
                                 </div>
                               </div>

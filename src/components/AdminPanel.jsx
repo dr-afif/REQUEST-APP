@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { buildUserMonthlyUsage } from '../utils/quota';
+import { APP_ICONS } from '../constants/icons';
 
 export default function AdminPanel({
   requests = [],
@@ -537,7 +538,9 @@ export default function AdminPanel({
       
       {/* Page Title */}
       <div className="mb-8">
-        <h1 className="text-3xl font-extrabold text-slate-800">🔑 Roster Administration Panel</h1>
+        <h1 className="text-3xl font-extrabold text-slate-800 flex items-center gap-2">
+          <APP_ICONS.admin className="w-8 h-8 text-slate-800" /> Roster Administration Panel
+        </h1>
         <p className="text-sm text-slate-500 mt-1">
           Perform administrative changes, oversee change submissions, customize date caps, and configure shift quotas.
         </p>
@@ -567,7 +570,9 @@ export default function AdminPanel({
       </div>
 
       <div className={`${activeAdminPage === 'activity' ? 'mb-8' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
-        <h2 className="text-xl font-bold text-slate-800 mb-2">📢 Manage Activity History &amp; Bulletins</h2>
+        <h2 className="text-xl font-bold text-slate-800 mb-2 flex items-center gap-2">
+          <APP_ICONS.activity className="w-6 h-6" /> Manage Activity History &amp; Bulletins
+        </h2>
         <p className="text-xs text-slate-400 mb-6">
           Add custom alerts or request logs that will be displayed in the scrolling announcement banner and updates timeline.
         </p>
@@ -592,7 +597,7 @@ export default function AdminPanel({
                         : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    Megaphone 📢
+                    Megaphone <APP_ICONS.activity className="w-4 h-4 inline-block ml-1" />
                   </button>
                   <button
                     type="button"
@@ -603,7 +608,7 @@ export default function AdminPanel({
                         : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                     }`}
                   >
-                    Roster Event 📅
+                    Roster Event <APP_ICONS.calendar className="w-4 h-4 inline-block ml-1" />
                   </button>
                 </div>
               </div>
@@ -618,7 +623,7 @@ export default function AdminPanel({
                     value={actCustomText}
                     onChange={(e) => setActCustomText(e.target.value)}
                     required
-                    placeholder="e.g. 📢 The upcoming June Roster is now published and open for swap request submissions!"
+                    placeholder="e.g. The upcoming June Roster is now published and open for swap request submissions!"
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
                   />
                 </div>
@@ -780,9 +785,9 @@ export default function AdminPanel({
 
               <button
                 type="submit"
-                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
+                className="w-full flex justify-center items-center gap-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
               >
-                📢 Post Update Event
+                <APP_ICONS.activity className="w-4 h-4" /> Post Update Event
               </button>
             </form>
           </div>
@@ -799,10 +804,10 @@ export default function AdminPanel({
                     <div key={act.ID} className="flex items-start justify-between py-3 text-xs gap-4 border-b border-slate-100 last:border-0">
                       <div className="flex-1 space-y-1">
                         <div className="flex items-center gap-2">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
                             isCustom ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
                           }`}>
-                            {isCustom ? '📢 Announcement' : '📅 Roster Log'}
+                            {isCustom ? <><APP_ICONS.activity className="w-3 h-3" /> Announcement</> : <><APP_ICONS.calendar className="w-3 h-3" /> Roster Log</>}
                           </span>
                           {act.Timestamp && (
                             <span className="text-[10px] text-slate-400">
@@ -874,8 +879,8 @@ export default function AdminPanel({
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-                <span className="text-2xl">📭</span>
-                <p className="mt-1 text-xs font-semibold">No dynamic announcements are stored in Google Sheets.</p>
+                <APP_ICONS.info className="w-8 h-8 text-slate-300" />
+                <p className="mt-2 text-xs font-semibold">No dynamic announcements are stored in Google Sheets.</p>
                 <p className="text-[10px] text-slate-400 mt-1">Use the left form to post an update!</p>
               </div>
             )}
@@ -891,7 +896,9 @@ export default function AdminPanel({
           {APPROVAL_WORKFLOW_ENABLED && (
           <div className={`${activeAdminPage === 'rules' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-slate-800">📋 Roster Approval Requests Queue</h2>
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <APP_ICONS.document className="w-5 h-5 text-slate-800" /> Roster Approval Requests Queue
+              </h2>
               <span className="rounded-full bg-indigo-100 px-3 py-1 text-xs font-bold text-indigo-700">
                 {adminQueue.length} Pending
               </span>
@@ -931,16 +938,16 @@ export default function AdminPanel({
                         <button
                           type="button"
                           onClick={() => onUpdateApproval(req.ID, 'Approved')}
-                          className="flex-1 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 text-xs transition"
+                          className="flex-1 flex justify-center items-center gap-1 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 text-xs transition"
                         >
-                          ✅ Approve & Override
+                          <APP_ICONS.check className="w-4 h-4" /> Approve & Override
                         </button>
                         <button
                           type="button"
                           onClick={() => onUpdateApproval(req.ID, 'Rejected')}
-                          className="flex-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-bold py-2 text-xs transition"
+                          className="flex-1 flex justify-center items-center gap-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-bold py-2 text-xs transition"
                         >
-                          ❌ Reject
+                          <APP_ICONS.warning className="w-4 h-4" /> Reject
                         </button>
                       </div>
                     </div>
@@ -949,7 +956,7 @@ export default function AdminPanel({
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400">
-                <span className="text-3xl">☕</span>
+                <APP_ICONS.check className="w-8 h-8 text-emerald-500" />
                 <p className="mt-2 text-sm font-semibold">Your queue is fully cleared! Time to rest.</p>
               </div>
             )}
@@ -958,7 +965,9 @@ export default function AdminPanel({
 
           {/* Date-Specific Shift Blocker Console */}
           <div className={`${activeAdminPage === 'rules' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
-            <h2 className="text-lg font-bold text-slate-800 mb-4">🛑 Date-Specific Shift Blocker</h2>
+            <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <APP_ICONS.warning className="w-5 h-5 text-rose-600" /> Date-Specific Shift Blocker
+            </h2>
             
             <form onSubmit={handleAddBlockSubmit} className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
@@ -1008,9 +1017,9 @@ export default function AdminPanel({
 
               <button
                 type="submit"
-                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
+                className="w-full flex justify-center items-center gap-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
               >
-                🔒 Apply Shift Limitation Rule
+                <APP_ICONS.save className="w-4 h-4" /> Apply Shift Limitation Rule
               </button>
             </form>
 
@@ -1050,13 +1059,15 @@ export default function AdminPanel({
           {/* 👥 Team Members Directory Card */}
           <div className={`${activeAdminPage === 'team' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-slate-800">👥 Team Members Directory</h2>
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <APP_ICONS.team className="w-5 h-5" /> Team Members Directory
+              </h2>
               <button
                 type="button"
                 onClick={() => handleOpenAddModal('team')}
-                className="rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 text-xs transition whitespace-nowrap"
+                className="flex items-center gap-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 text-xs transition whitespace-nowrap"
               >
-                ➕ Add Member
+                <APP_ICONS.add className="w-4 h-4" /> Add Member
               </button>
             </div>
             <p className="text-xs text-slate-400 mb-6">
@@ -1082,8 +1093,8 @@ export default function AdminPanel({
                             {member.active === false ? 'Inactive' : 'Active'}
                           </span>
                           {member.phone && (
-                            <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full whitespace-nowrap">
-                              📞 {member.phone}
+                            <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full whitespace-nowrap flex items-center gap-1">
+                              Phone {member.phone}
                             </span>
                           )}
                         </div>
@@ -1105,16 +1116,16 @@ export default function AdminPanel({
                         <button
                           type="button"
                           onClick={() => handleOpenEditModal(member)}
-                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
+                          className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
                         >
-                          ✏️ Edit
+                          <APP_ICONS.edit className="w-3 h-3" /> Edit
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDeleteMember(member.name)}
-                          className="rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-500 hover:bg-rose-100 transition"
+                          className="flex items-center justify-center rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-500 hover:bg-rose-100 transition"
                         >
-                          🗑
+                          Delete
                         </button>
                       </div>
                     </div>
@@ -1201,7 +1212,9 @@ export default function AdminPanel({
 
           {/* Shift Types Management Card */}
           <div className={`${activeAdminPage === 'shifts' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
-            <h2 className="text-lg font-bold text-slate-800 mb-4">⚙️ Shift Types Configuration</h2>
+            <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <APP_ICONS.settings className="w-5 h-5" /> Shift Types Configuration
+            </h2>
             
             <form onSubmit={handleAddShiftTypeSubmit} className="space-y-4 mb-6">
               <div>
@@ -1250,9 +1263,9 @@ export default function AdminPanel({
 
               <button
                 type="submit"
-                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
+                className="w-full flex justify-center items-center gap-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 text-xs transition"
               >
-                ➕ Add Shift Type
+                <APP_ICONS.add className="w-4 h-4" /> Add Shift Type
               </button>
             </form>
 
@@ -1311,8 +1324,8 @@ export default function AdminPanel({
                                   editShiftIsPublic ? 'translate-x-4' : 'translate-x-0'
                                 }`} />
                               </div>
-                              <span className={`text-[11px] font-bold ${editShiftIsPublic ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                {editShiftIsPublic ? '👁️ Public' : '🔒 Admin Only'}
+                              <span className={`flex items-center gap-1 text-[11px] font-bold ${editShiftIsPublic ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                {editShiftIsPublic ? <><APP_ICONS.check className="w-3 h-3" /> Public</> : <><APP_ICONS.admin className="w-3 h-3" /> Admin Only</>}
                               </span>
                             </label>
                           </div>
@@ -1361,14 +1374,14 @@ export default function AdminPanel({
                           <div className="flex-1 min-w-0">
                             <span className="block font-bold text-slate-800 text-sm truncate">{st.Name}</span>
                             <div className="flex flex-wrap gap-1.5 mt-1">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
                                 st.IsPublic ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
                               }`}>
-                                {st.IsPublic ? '👁️ Public' : '🔒 Admin Only'}
+                                {st.IsPublic ? <><APP_ICONS.check className="w-3 h-3" /> Public</> : <><APP_ICONS.admin className="w-3 h-3" /> Admin Only</>}
                               </span>
                               {group && (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">
-                                  ⚡ {group.GroupName}
+                                <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">
+                                  <APP_ICONS.activity className="w-3 h-3" /> {group.GroupName}
                                 </span>
                               )}
                             </div>
@@ -1379,18 +1392,18 @@ export default function AdminPanel({
                             <button
                               type="button"
                               onClick={() => startEditShift(st)}
-                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
+                              className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
                             >
-                              ✏️ Edit
+                              <APP_ICONS.edit className="w-3 h-3" /> Edit
                             </button>
                             <button
                               type="button"
                               onClick={() => {
                                 if (confirm(`Delete shift type "${st.Name}"?`)) onDeleteShiftType(st.ID);
                               }}
-                              className="rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-500 hover:bg-rose-100 transition"
+                              className="flex items-center justify-center rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-500 hover:bg-rose-100 transition"
                             >
-                              🗑
+                              Delete
                             </button>
                           </div>
                         </div>
@@ -1406,7 +1419,9 @@ export default function AdminPanel({
 
           {/* Quota Limit Groups Card */}
           <div className={`${activeAdminPage === 'rules' ? '' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
-            <h2 className="text-lg font-bold text-slate-800 mb-4">📊 Quota Limit Groups</h2>
+            <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <APP_ICONS.analytics className="w-5 h-5" /> Quota Limit Groups
+            </h2>
             
             <form onSubmit={handleAddLimitGroupSubmit} className="space-y-4 mb-6">
               <div className="grid gap-4 sm:grid-cols-2">
@@ -1440,9 +1455,9 @@ export default function AdminPanel({
 
               <button
                 type="submit"
-                className="w-full rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 text-xs transition"
+                className="w-full flex justify-center items-center gap-1 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 text-xs transition"
               >
-                ➕ Add Limit Group
+                <APP_ICONS.add className="w-4 h-4" /> Add Limit Group
               </button>
             </form>
 
@@ -1485,7 +1500,9 @@ export default function AdminPanel({
       <div className={`${activeAdminPage === 'overview' ? 'mt-8' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
-            <h2 className="text-xl font-bold text-slate-800 mb-1">📈 Monthly Quota Overview</h2>
+            <h2 className="text-xl font-bold text-slate-800 mb-1 flex items-center gap-2">
+              <APP_ICONS.analytics className="w-6 h-6" /> Monthly Quota Overview
+            </h2>
             <p className="text-xs text-slate-400">
               Track request limits for all active users for a given month.
             </p>
@@ -1570,7 +1587,9 @@ export default function AdminPanel({
 
       {/* 🔧 Global Portal Settings */}
       <div className={`${activeAdminPage === 'rules' ? 'mt-8' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
-        <h2 className="text-xl font-bold text-slate-800 mb-2">🔧 Global Portal Settings</h2>
+        <h2 className="text-xl font-bold text-slate-800 mb-2 flex items-center gap-2">
+          <APP_ICONS.settings className="w-6 h-6" /> Global Portal Settings
+        </h2>
         <p className="text-xs text-slate-400 mb-6">
           Configure default values and global policies that apply to all roster portal members.
         </p>
@@ -1662,10 +1681,10 @@ export default function AdminPanel({
           <div className="w-full max-w-md rounded-3xl border border-slate-100 bg-white p-6 shadow-2xl animate-scaleUp transition-all duration-300">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
-              <h3 className="text-lg font-bold text-slate-800">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 {memberModalMode === 'add'
-                  ? memberModalDirectory === 'ep' ? 'Add New EP' : '👤 Add New Team Member'
-                  : memberModalDirectory === 'ep' ? 'Edit EP' : '✏️ Edit Team Member'}
+                  ? memberModalDirectory === 'ep' ? 'Add New EP' : <><APP_ICONS.team className="w-5 h-5" /> Add New Team Member</>
+                  : memberModalDirectory === 'ep' ? 'Edit EP' : <><APP_ICONS.edit className="w-5 h-5" /> Edit Team Member</>}
               </h3>
               <button
                 type="button"

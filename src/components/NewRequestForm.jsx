@@ -264,7 +264,7 @@ export default function NewRequestForm({
           />
         </label>
 
-        {/* 📊 Live Monthly Limit Warning Card (regular users only) */}
+        {/* Live Monthly Limit Warning Card (regular users only) */}
         {selectedName?.trim().toLowerCase() !== 'admin' && formState.date && (
           (() => {
             const monthlyLimit = Number(settings?.monthly_request_limit) || 10;

@@ -6,6 +6,7 @@ import {
   calculateEquitySignals,
   generateHealthInsights,
 } from '../utils/rosterAnalytics';
+import { APP_ICONS } from '../constants/icons';
 
 export default function AnalyticsPage({
   selectedName,
@@ -400,10 +401,10 @@ export default function AnalyticsPage({
         {/* A — Health Score Card */}
         {(() => {
           const sevMap = {
-            green:  { ring: 'ring-emerald-200', bg: 'bg-emerald-50',  text: 'text-emerald-700',  badgeBg: 'bg-emerald-100 text-emerald-800', bar: 'bg-emerald-500', icon: '✅' },
-            blue:   { ring: 'ring-blue-200',    bg: 'bg-blue-50',    text: 'text-blue-700',    badgeBg: 'bg-blue-100 text-blue-800',   bar: 'bg-blue-500',   icon: '🔵' },
-            amber:  { ring: 'ring-amber-200',   bg: 'bg-amber-50',   text: 'text-amber-700',   badgeBg: 'bg-amber-100 text-amber-800',  bar: 'bg-amber-500',  icon: '⚠️' },
-            red:    { ring: 'ring-red-200',     bg: 'bg-red-50',     text: 'text-red-700',     badgeBg: 'bg-red-100 text-red-800',    bar: 'bg-red-500',    icon: '🚨' },
+            green:  { ring: 'ring-emerald-200', bg: 'bg-emerald-50',  text: 'text-emerald-700',  badgeBg: 'bg-emerald-100 text-emerald-800', bar: 'bg-emerald-500', icon: <APP_ICONS.check className="w-3.5 h-3.5" /> },
+            blue:   { ring: 'ring-blue-200',    bg: 'bg-blue-50',    text: 'text-blue-700',    badgeBg: 'bg-blue-100 text-blue-800',   bar: 'bg-blue-500',   icon: <APP_ICONS.info className="w-3.5 h-3.5" /> },
+            amber:  { ring: 'ring-amber-200',   bg: 'bg-amber-50',   text: 'text-amber-700',   badgeBg: 'bg-amber-100 text-amber-800',  bar: 'bg-amber-500',  icon: <APP_ICONS.warning className="w-3.5 h-3.5" /> },
+            red:    { ring: 'ring-red-200',     bg: 'bg-red-50',     text: 'text-red-700',     badgeBg: 'bg-red-100 text-red-800',    bar: 'bg-red-500',    icon: <APP_ICONS.warning className="w-3.5 h-3.5" /> },
           };
           const style = sevMap[healthScore.severity] || sevMap.green;
           const components = [
@@ -422,7 +423,7 @@ export default function AnalyticsPage({
                   <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">Roster Health</span>
                   <div className={`text-6xl font-black ${style.text} leading-none`}>{healthScore.score}</div>
                   <div className="text-slate-400 text-xs font-bold mt-0.5">/ 100</div>
-                  <span className={`mt-3 inline-block px-3 py-1 rounded-full text-xs font-extrabold tracking-wide ${style.badgeBg}`}>
+                  <span className={`mt-3 flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold tracking-wide ${style.badgeBg}`}>
                     {style.icon} {healthScore.status}
                   </span>
                   {/* Ring meter */}
@@ -466,7 +467,7 @@ export default function AnalyticsPage({
                   <h3 className="text-[10px] font-extrabold text-slate-500 uppercase tracking-widest mb-3">Top Deductions</h3>
                   {healthScore.deductions.length === 0 ? (
                     <div className="text-xs text-emerald-600 font-semibold flex items-center gap-1.5">
-                      <span>✅</span> No major health deductions.
+                      <APP_ICONS.check className="w-4 h-4" /> No major health deductions.
                     </div>
                   ) : (
                     <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
@@ -506,11 +507,18 @@ export default function AnalyticsPage({
         {healthInsights.length > 0 && (
           <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-              <span>💡</span> Health Insights &amp; Recommendations
+              <APP_ICONS.info className="w-4 h-4" /> Health Insights &amp; Recommendations
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
               {healthInsights.map((insight, i) => {
-                const typeIcons = { coverage: '🏥', night: '🌙', weekend: '⛱️', holiday: '🎉', leave: '📅', fairness: '⚖️' };
+                const typeIcons = { 
+                  coverage: <APP_ICONS.activity className="w-4 h-4" />, 
+                  night: <APP_ICONS.clock className="w-4 h-4" />, 
+                  weekend: <APP_ICONS.calendar className="w-4 h-4" />, 
+                  holiday: <APP_ICONS.phTracker className="w-4 h-4" />, 
+                  leave: <APP_ICONS.document className="w-4 h-4" />, 
+                  fairness: <APP_ICONS.admin className="w-4 h-4" /> 
+                };
                 const sevStyle = insight.severity === 'high'
                   ? 'border-red-100 bg-red-50/40'
                   : insight.severity === 'medium'
@@ -529,7 +537,7 @@ export default function AnalyticsPage({
                   <div key={i} className={`rounded-2xl border p-4 text-left ${sevStyle}`}>
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-base">{typeIcons[insight.type] || '📌'}</span>
+                        {typeIcons[insight.type] || <APP_ICONS.info className="w-4 h-4" />}
                         <span className="text-xs font-extrabold text-slate-800">{insight.title}</span>
                       </div>
                       <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase flex-shrink-0 ${badgeStyle}`}>
@@ -537,7 +545,9 @@ export default function AnalyticsPage({
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-600 mb-2 leading-relaxed">{insight.description}</p>
-                    <p className="text-[9px] font-semibold text-slate-500 italic leading-relaxed">💬 {insight.recommendation}</p>
+                    <p className="text-[9px] font-semibold text-slate-500 italic leading-relaxed flex gap-1 items-start">
+                      <APP_ICONS.info className="w-3 h-3 flex-shrink-0 mt-0.5" /> {insight.recommendation}
+                    </p>
                   </div>
                 );
               })}
@@ -548,15 +558,15 @@ export default function AnalyticsPage({
         {/* C — Equity Signals Panel */}
         {(() => {
           const signals = [
-            { label: 'Night Equity',      key: 'nightEquity',        icon: '🌙', color: 'text-violet-700', ringColor: 'ring-violet-100', bg: 'bg-violet-50/40' },
-            { label: 'Weekend Equity',    key: 'weekendEquity',      icon: '⛱️', color: 'text-emerald-700', ringColor: 'ring-emerald-100', bg: 'bg-emerald-50/40' },
-            { label: 'Public Holiday Equity', key: 'publicHolidayEquity', icon: '🎉', color: 'text-teal-700', ringColor: 'ring-teal-100', bg: 'bg-teal-50/40' },
-            { label: 'Active Shift Equity',   key: 'activeShiftEquity',  icon: '🏥', color: 'text-indigo-700', ringColor: 'ring-indigo-100', bg: 'bg-indigo-50/40' },
+            { label: 'Night Equity',      key: 'nightEquity',        icon: <APP_ICONS.clock className="w-4 h-4" />, color: 'text-violet-700', ringColor: 'ring-violet-100', bg: 'bg-violet-50/40' },
+            { label: 'Weekend Equity',    key: 'weekendEquity',      icon: <APP_ICONS.calendar className="w-4 h-4" />, color: 'text-emerald-700', ringColor: 'ring-emerald-100', bg: 'bg-emerald-50/40' },
+            { label: 'Public Holiday Equity', key: 'publicHolidayEquity', icon: <APP_ICONS.phTracker className="w-4 h-4" />, color: 'text-teal-700', ringColor: 'ring-teal-100', bg: 'bg-teal-50/40' },
+            { label: 'Active Shift Equity',   key: 'activeShiftEquity',  icon: <APP_ICONS.activity className="w-4 h-4" />, color: 'text-indigo-700', ringColor: 'ring-indigo-100', bg: 'bg-indigo-50/40' },
           ];
           return (
             <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-                <span>📊</span> Equity Signal Analysis
+                <APP_ICONS.analytics className="w-4 h-4" /> Equity Signal Analysis
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 {signals.map(({ label, key, icon, color, ringColor, bg }) => {
@@ -571,7 +581,7 @@ export default function AnalyticsPage({
                     <div key={key} className={`rounded-2xl border ring-1 ${ringColor} ${bg} p-4 text-left`}>
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-base">{icon}</span>
+                          {icon}
                           <span className={`text-[10px] font-extrabold uppercase tracking-wider ${color}`}>{label}</span>
                         </div>
                         <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-full uppercase ${spreadBadge}`}>
@@ -635,7 +645,7 @@ export default function AnalyticsPage({
             className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50/60 transition text-left"
           >
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <span>☀️️</span> AM vs PM Shift Balance
+              <APP_ICONS.activity className="w-4 h-4" /> AM vs PM Shift Balance
               <span className="text-[9px] font-normal text-slate-400 normal-case tracking-normal">
                 Team ratio: {amPmBalance.totalAm}AM / {amPmBalance.totalPm}PM
                 ({amPmBalance.totalAm + amPmBalance.totalPm > 0
@@ -734,7 +744,7 @@ export default function AnalyticsPage({
             className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50/60 transition text-left"
           >
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <span>📅</span> Leave Clustering Analysis
+              <APP_ICONS.calendar className="w-4 h-4" /> Leave Clustering Analysis
               {leaveClusters.length > 0 && (
                 <span className="ml-1 text-[9px] font-extrabold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded-full">
                   {leaveClusters.length} flagged
@@ -748,7 +758,7 @@ export default function AnalyticsPage({
             <div className="px-6 pb-5">
               {leaveClusters.length === 0 ? (
                 <div className="py-8 text-center text-emerald-600 font-bold flex flex-col items-center gap-2 text-xs">
-                  <span className="text-2xl">✅</span>
+                  <APP_ICONS.check className="w-8 h-8" />
                   <span>No leave clustering detected — leave distribution looks healthy.</span>
                 </div>
               ) : (
@@ -840,7 +850,7 @@ export default function AnalyticsPage({
           <div className="relative flex-1 max-w-sm">
             <input
               type="text"
-              placeholder="🔍 Search doctor by name..."
+              placeholder="Search doctor by name..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-1.5 pl-8 text-xs font-semibold outline-none focus:border-indigo-400 focus:bg-white transition"
@@ -868,11 +878,11 @@ export default function AnalyticsPage({
             onChange={(e) => setChartMetric(e.target.value)}
             className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 outline-none focus:border-indigo-400 focus:bg-white cursor-pointer"
           >
-            <option value="NIGHT">Night Shifts 🌙</option>
-            <option value="activeShiftsCount">Active Shifts 🏥</option>
-            <option value="counts.TOTAL_LEAVE">Leave Days 💤</option>
-            <option value="AM">AM Shifts ☀️</option>
-            <option value="PM">PM Shifts 🌤️</option>
+            <option value="NIGHT">Night Shifts</option>
+            <option value="activeShiftsCount">Active Shifts</option>
+            <option value="counts.TOTAL_LEAVE">Leave Days</option>
+            <option value="AM">AM Shifts</option>
+            <option value="PM">PM Shifts</option>
           </select>
         </div>
       </div>
@@ -882,7 +892,7 @@ export default function AnalyticsPage({
         {/* Horizontal Bar Chart Card */}
         <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm lg:col-span-2">
           <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-            <span>📈</span> Member Ranking ({chartData.label})
+            <APP_ICONS.analytics className="w-4 h-4" /> Member Ranking ({chartData.label})
           </h2>
           <div className="max-h-[360px] overflow-y-auto pr-2 space-y-1.5 custom-scrollbar">
             {chartData.items.length === 0 ? (
@@ -911,12 +921,12 @@ export default function AnalyticsPage({
         <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm flex flex-col justify-between">
           <div>
             <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-              <span>🏆</span> Key Statistics
+              <APP_ICONS.analytics className="w-4 h-4" /> Key Statistics
             </h2>
             <div className="space-y-4">
               {/* Most Nights */}
               <div>
-                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Most Night Shifts 🌙</p>
+                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">Most Night Shifts <APP_ICONS.clock className="w-3 h-3" /></p>
                 <div className="flex gap-1.5 flex-wrap">
                   {rankings.mostNights.slice(0, 3).map((doc, idx) => (
                     <span key={doc.nameKey} className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 border border-rose-100 rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -929,7 +939,7 @@ export default function AnalyticsPage({
 
               {/* Least Nights */}
               <div>
-                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Least Night Shifts (Active) 😴</p>
+                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">Least Night Shifts (Active) <APP_ICONS.clock className="w-3 h-3" /></p>
                 <div className="flex gap-1.5 flex-wrap">
                   {rankings.leastNights.slice(0, 3).map((doc, idx) => (
                     <span key={doc.nameKey} className="inline-flex items-center gap-1 bg-slate-50 text-slate-700 border border-slate-200 rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -942,7 +952,7 @@ export default function AnalyticsPage({
 
               {/* Most Active Duties */}
               <div>
-                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Most Active Duties 🏥</p>
+                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">Most Active Duties <APP_ICONS.activity className="w-3 h-3" /></p>
                 <div className="flex gap-1.5 flex-wrap">
                   {rankings.mostActive.slice(0, 3).map((doc, idx) => (
                     <span key={doc.nameKey} className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -955,7 +965,7 @@ export default function AnalyticsPage({
 
               {/* Most Leaves */}
               <div>
-                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Most Leave Days 💤</p>
+                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">Most Leave Days <APP_ICONS.document className="w-3 h-3" /></p>
                 <div className="flex gap-1.5 flex-wrap">
                   {rankings.mostLeave.slice(0, 3).map((doc, idx) => (
                     <span key={doc.nameKey} className="inline-flex items-center gap-1 bg-purple-50 text-purple-700 border border-purple-100 rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -968,7 +978,7 @@ export default function AnalyticsPage({
 
               {/* Most Weekend duties */}
               <div>
-                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Most Weekend Duties ⛱️</p>
+                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">Most Weekend Duties <APP_ICONS.calendar className="w-3 h-3" /></p>
                 <div className="flex gap-1.5 flex-wrap">
                   {rankings.mostWeekend.slice(0, 3).map((doc, idx) => (
                     <span key={doc.nameKey} className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -981,7 +991,7 @@ export default function AnalyticsPage({
 
               {/* Most Weekend Leaves */}
               <div>
-                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5">Most Weekend Leaves 🏖️</p>
+                <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">Most Weekend Leaves <APP_ICONS.calendar className="w-3 h-3 text-teal-400" /></p>
                 <div className="flex gap-1.5 flex-wrap">
                   {rankings.mostWeekendLeaves && rankings.mostWeekendLeaves.slice(0, 3).map((doc, idx) => (
                     <span key={doc.nameKey} className="inline-flex items-center gap-1 bg-teal-50 text-teal-700 border border-teal-100 rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -1000,7 +1010,7 @@ export default function AnalyticsPage({
       <div className="rounded-3xl border border-slate-150/70 bg-white p-1 shadow-sm overflow-hidden mb-8">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-            <span>👤</span> Individual Doctor summaries
+            <APP_ICONS.team className="w-4 h-4" /> Individual Doctor summaries
           </h3>
           <span className="text-[10px] font-semibold text-slate-400">Click any row to view breakdown details</span>
         </div>
@@ -1109,7 +1119,7 @@ export default function AnalyticsPage({
         <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm lg:col-span-2">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 mb-4 gap-2">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <span>⚖️</span> Fairness Scoring
+              <APP_ICONS.admin className="w-4 h-4" /> Fairness Scoring
             </h3>
             {averages && (
               <div className="flex flex-wrap gap-2 text-[9px] font-bold text-slate-500 bg-slate-50 border border-slate-150/50 rounded-lg px-2 py-1">
@@ -1258,7 +1268,7 @@ export default function AnalyticsPage({
         <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm flex flex-col justify-between">
           <div className="w-full">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-              <span>⚖️</span> Fairness Standings
+              <APP_ICONS.admin className="w-4 h-4" /> Fairness Standings
             </h3>
             {fairnessStandings ? (
               <div className="grid grid-cols-2 gap-3 text-left">
@@ -1315,12 +1325,12 @@ export default function AnalyticsPage({
       {/* 🚨 Coverage Issues Panel */}
       <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm mb-8 text-left">
         <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-          <span>🚨</span> Roster Coverage &amp; Threshold Alerts
+          <APP_ICONS.warning className="w-4 h-4 text-rose-600" /> Roster Coverage &amp; Threshold Alerts
         </h3>
         
         {coverageIssues.length === 0 ? (
           <div className="py-8 text-center text-emerald-600 font-bold flex flex-col items-center justify-center gap-2 text-xs">
-            <span className="text-2xl">✅</span>
+            <APP_ICONS.check className="w-8 h-8" />
             <span>No coverage issues detected for this month.</span>
           </div>
         ) : (
@@ -1371,7 +1381,7 @@ export default function AnalyticsPage({
       {/* 📅 Year-to-Date Jan-Jun Section */}
       <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm mb-8 text-left">
         <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-6">
-          <span>📅</span> Year-to-Date Performance (Jan–Jun)
+          <APP_ICONS.calendar className="w-4 h-4" /> Year-to-Date Performance (Jan–Jun)
         </h3>
 
         {!ytdStats || ytdStats.perMonthTotals.length === 0 ? (

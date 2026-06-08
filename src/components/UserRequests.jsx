@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { normalizeForComparison } from '../utils/normalise';
+import { APP_ICONS } from '../constants/icons';
 
 function formatDisplayDate(dateLike) {
   const date = new Date(dateLike);
@@ -204,7 +205,7 @@ export default function UserRequests({
                           {formatDisplayDate(request.date)} | {request.request}
                         </p>
                         <p className="text-xs text-slate-500">
-                          {isSaving ? "🔄 Syncing with Google Sheets..." : `Submitted ${submissionLabel}`}
+                          {isSaving ? <><APP_ICONS.activity className="w-3 h-3 inline-block mr-1 animate-spin" /> Syncing with Google Sheets...</> : `Submitted ${submissionLabel}`}
                         </p>
                         {request.comment ? (
                           <p className="mt-1 max-w-lg text-xs text-slate-600">{request.comment}</p>

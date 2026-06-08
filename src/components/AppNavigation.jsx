@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { normalizeForComparison } from '../utils/normalise';
+import { APP_ICONS } from '../constants/icons';
 
 export default function AppNavigation({
   currentPage,
@@ -26,14 +27,14 @@ export default function AppNavigation({
   }, [syncStatus]);
 
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
-    { id: 'roster', label: 'Full Roster', icon: '📅' },
-    { id: 'requests', label: 'Request Panel', icon: '📝' },
-    { id: 'updates', label: 'Updates', icon: '🔔' },
+    { id: 'dashboard', label: 'Dashboard', icon: APP_ICONS.dashboard },
+    { id: 'roster', label: 'Full Roster', icon: APP_ICONS.roster },
+    { id: 'requests', label: 'Request Panel', icon: APP_ICONS.requests },
+    { id: 'updates', label: 'Updates', icon: APP_ICONS.updates },
     ...(isAdmin ? [
-      { id: 'summary', label: 'Summary', icon: '📊' },
-      { id: 'ph-tracker', label: 'PH Tracker', icon: '🇲🇾' },
-      { id: 'admin', label: 'Admin Panel', icon: '🔑' }
+      { id: 'summary', label: 'Summary', icon: APP_ICONS.analytics },
+      { id: 'ph-tracker', label: 'PH Tracker', icon: APP_ICONS.phTracker },
+      { id: 'admin', label: 'Admin Panel', icon: APP_ICONS.admin }
     ] : []),
   ];
 
@@ -64,11 +65,11 @@ export default function AppNavigation({
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Google Sheets</span>
           <button
             type="button"
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-xs shadow-xs transition hover:bg-slate-50 active:scale-95 cursor-pointer"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-xs shadow-sm transition hover:bg-slate-50 active:scale-95 cursor-pointer text-slate-600 hover:text-indigo-600"
             onClick={onRefresh}
             title="Refresh database"
           >
-            🔄
+            <APP_ICONS.refresh className="w-3.5 h-3.5" />
           </button>
         </div>
 
@@ -87,7 +88,7 @@ export default function AppNavigation({
                     : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                 }`}
               >
-                <span className="text-base">{item.icon}</span>
+                <item.icon className={`w-5 h-5 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
                 <span>{item.label}</span>
                 {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-indigo-600" />}
               </button>
@@ -98,9 +99,9 @@ export default function AppNavigation({
         {/* User Account / Profile Footer */}
         <div className="border-t border-slate-100 pt-6">
           <div className="rounded-2xl bg-slate-50 p-4 border border-slate-150 flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <span className="text-sm">👤</span>
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Active User</span>
+            <div className="flex items-center gap-2 text-slate-500">
+              <APP_ICONS.user className="w-4 h-4" />
+              <span className="text-xs font-bold uppercase tracking-wider">Active User</span>
             </div>
 
             {isAdmin ? (
@@ -112,7 +113,7 @@ export default function AppNavigation({
                     onChange={(e) => onSelectName(e.target.value)}
                     className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-1.5 pl-3 pr-8 text-sm font-semibold text-slate-700 shadow-inner outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 cursor-pointer"
                   >
-                    <option value="Admin">🔒 Admin</option>
+                    <option value="Admin">Admin</option>
                     {names.map((name) => (
                       <option key={name} value={name}>
                         {name}
@@ -128,20 +129,21 @@ export default function AppNavigation({
                   onClick={() => onSelectName('')}
                   className="w-full flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-100 bg-rose-50 px-3 text-xs font-bold text-rose-600 shadow-xs transition hover:bg-rose-100/80 active:scale-95 cursor-pointer"
                 >
-                  🚪 Exit Admin
+                  <APP_ICONS.logout className="w-3.5 h-3.5" /> Exit Admin
                 </button>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 shadow-xs truncate">
-                  {isGuest ? '👁️ Read-Only Guest' : selectedName}
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 shadow-xs truncate flex items-center gap-2">
+                  {isGuest && <APP_ICONS.info className="w-4 h-4 text-slate-400" />}
+                  {isGuest ? 'Read-Only Guest' : selectedName}
                 </div>
                 <button
                   type="button"
                   onClick={() => onSelectName('')}
                   className="w-full flex h-9 items-center justify-center gap-1.5 rounded-xl border border-rose-150 bg-rose-50 px-3 text-xs font-bold text-rose-600 shadow-xs transition hover:bg-rose-100/80 active:scale-95 cursor-pointer"
                 >
-                  🚪 Log Out / Exit
+                  <APP_ICONS.logout className="w-3.5 h-3.5" /> Log Out / Exit
                 </button>
               </div>
             )}
@@ -171,8 +173,9 @@ export default function AppNavigation({
         {/* Header Right Actions */}
         <div className="flex items-center gap-2">
           {/* User Name Pill */}
-          <span className="max-w-[100px] truncate text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1">
-            {isAdmin ? '🔒 Admin' : isGuest ? 'Guest' : selectedName}
+          <span className="max-w-[100px] truncate text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1 flex items-center gap-1">
+            {isAdmin && <APP_ICONS.adminBadge className="w-3 h-3 text-indigo-600" />}
+            {isAdmin ? 'Admin' : isGuest ? 'Guest' : selectedName}
           </span>
 
           <button
@@ -181,7 +184,7 @@ export default function AppNavigation({
             onClick={onRefresh}
             title="Refresh database"
           >
-            🔄
+            <APP_ICONS.refresh className="w-3.5 h-3.5 text-slate-600 hover:text-indigo-600" />
           </button>
 
           <button
@@ -190,7 +193,7 @@ export default function AppNavigation({
             className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-100 bg-rose-50 text-xs font-bold text-rose-600 shadow-xs active:scale-95 cursor-pointer"
             title="Log Out"
           >
-            🚪
+            <APP_ICONS.logout className="w-3.5 h-3.5" />
           </button>
         </div>
       </header>
@@ -212,7 +215,7 @@ export default function AppNavigation({
                   : 'text-slate-500 active:scale-95'
               }`}
             >
-              <span className="text-lg leading-none">{item.icon}</span>
+              <item.icon className={`w-6 h-6 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
               <span className="text-[9px] font-bold mt-1 tracking-tight leading-none">
                 {item.label.split(' ')[0]} {/* Grab short first word for label */}
               </span>

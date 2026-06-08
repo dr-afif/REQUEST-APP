@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 import { mapName } from '../utils/adapters';
+import { APP_ICONS } from '../constants/icons';
 
 // Helper to parse standby status and extended shift status from a shift name string
 const parseShiftValue = (rawVal) => {
@@ -332,8 +333,8 @@ export default function HomeDashboard({
         <div className="absolute right-0 top-0 h-40 w-40 translate-x-12 -translate-y-12 rounded-full bg-white/10 blur-xl" />
         <div className="relative z-10 flex flex-col justify-between gap-6 sm:flex-row sm:items-center">
           <div>
-            <span className="rounded-full bg-white/20 px-3.5 py-1 text-xs font-semibold uppercase tracking-wider backdrop-blur-md">
-              🏥 ED Staff Hub
+            <span className="rounded-full bg-white/20 px-3.5 py-1 text-xs font-semibold uppercase tracking-wider backdrop-blur-md flex items-center gap-1.5 w-max">
+              <APP_ICONS.info className="w-3.5 h-3.5" /> ED Staff Hub
             </span>
             <h1 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
               {selectedName ? `Welcome back, ${selectedName}!` : 'Welcome to ED Roster'}
@@ -350,9 +351,13 @@ export default function HomeDashboard({
           <button
             type="button"
             onClick={() => onNavigate(selectedName && !isGuest ? 'requests' : 'roster')}
-            className="self-start rounded-2xl bg-white px-5 py-3 text-sm font-bold text-teal-800 shadow-lg hover:bg-slate-50 transition active:scale-95 sm:self-auto"
+            className="self-start rounded-2xl bg-white px-5 py-3 text-sm font-bold text-teal-800 shadow-lg hover:bg-slate-50 transition active:scale-95 sm:self-auto flex items-center gap-2"
           >
-            {selectedName && !isGuest ? '📝 Submit Request' : '📅 View Roster'}
+            {selectedName && !isGuest ? (
+              <><APP_ICONS.requests className="w-4 h-4" /> Submit Request</>
+            ) : (
+              <><APP_ICONS.roster className="w-4 h-4" /> View Roster</>
+            )}
           </button>
         </div>
       </div>
@@ -363,7 +368,7 @@ export default function HomeDashboard({
       {false && selectedName && pendingPartnerSwaps.length > 0 && (
         <div className="mt-8 rounded-3xl border border-indigo-100 bg-indigo-50/50 p-6">
           <div className="flex items-center gap-2 mb-4">
-            <span className="text-xl">⚠️</span>
+            <APP_ICONS.warning className="w-6 h-6 text-indigo-900" />
             <h2 className="text-lg font-bold text-indigo-900">Shift Swap Action Needed</h2>
             <span className="rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-bold text-indigo-50">
               {pendingPartnerSwaps.length}
@@ -396,16 +401,16 @@ export default function HomeDashboard({
                   <button
                     type="button"
                     onClick={() => onUpdateApproval(swap.ID, 'Pending Admin')}
-                    className="flex-1 rounded-xl bg-indigo-600 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition"
                   >
-                    ✅ Accept
+                    <APP_ICONS.check className="w-3.5 h-3.5" /> Accept
                   </button>
                   <button
                     type="button"
                     onClick={() => onUpdateApproval(swap.ID, 'Rejected')}
-                    className="flex-1 rounded-xl border border-slate-200 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition"
                   >
-                    ❌ Reject
+                    <APP_ICONS.close className="w-3.5 h-3.5" /> Reject
                   </button>
                 </div>
               </div>
@@ -422,7 +427,7 @@ export default function HomeDashboard({
           {selectedName ? (
             <>
               <div className="flex justify-between items-center text-xs text-slate-400 font-bold uppercase tracking-wider">
-                <span>🗓️ Today's Roster Duty</span>
+                <span className="flex items-center gap-1.5"><APP_ICONS.calendar className="w-3.5 h-3.5" /> Today's Roster Duty</span>
                 <span>{formatHeaderDate(todayStr)}</span>
               </div>
 
@@ -433,8 +438,8 @@ export default function HomeDashboard({
                     return (
                       <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h3 className="text-3xl font-extrabold text-slate-800">
-                            {cleanShift || 'No Duty 💤'}
+                          <h3 className="text-3xl font-extrabold text-slate-800 flex items-center gap-2">
+                            {cleanShift ? cleanShift : <span className="flex items-center gap-2">No Duty <APP_ICONS.info className="w-6 h-6 text-slate-300" /></span>}
                           </h3>
                           {isStandby && (
                             <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-500 text-white leading-none shadow-sm select-none align-middle" title="Standby">
@@ -456,25 +461,17 @@ export default function HomeDashboard({
                     );
                   })()}
                 </div>
-                <div className="text-4xl">
+                <div className="flex items-center justify-center">
                   {(() => {
                     const { cleanShift } = parseShiftValue(todayHighlight?.shift);
                     const sLower = (cleanShift || '').toLowerCase();
-                    return sLower.includes('night') ||
-                      sLower === 'n' ||
-                      sLower === 'on' ||
-                      sLower === 'on1' ||
-                      sLower === 'on2'
-                      ? '🌙'
-                      : sLower.includes('off') ||
-                        sLower === 'off' ||
-                        sLower === 'al' ||
-                        sLower === 'mc' ||
-                        sLower === 'course' ||
-                        sLower.includes('leave') ||
-                        !cleanShift
-                        ? '💤'
-                        : '☀️';
+                    if (sLower.includes('night') || sLower === 'n' || sLower === 'on' || sLower === 'on1' || sLower === 'on2') {
+                      return <APP_ICONS.clock className="w-10 h-10 text-slate-800" />;
+                    }
+                    if (sLower.includes('off') || sLower === 'al' || sLower === 'mc' || sLower === 'course' || sLower.includes('leave') || !cleanShift) {
+                      return <APP_ICONS.user className="w-10 h-10 text-emerald-500" />;
+                    }
+                    return <APP_ICONS.calendar className="w-10 h-10 text-amber-500" />;
                   })()}
                 </div>
               </div>
@@ -482,7 +479,7 @@ export default function HomeDashboard({
               {/* Pending Request Status */}
               {todayHighlight?.pending && (
                 <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-1.5 text-xs font-semibold text-indigo-600">
-                  <span className="animate-pulse">⏳</span>
+                  <APP_ICONS.clock className="w-4 h-4 animate-pulse" />
                   <span>
                     {todayHighlight.pending.type} shift request is{' '}
                     <span className="font-bold text-indigo-700 underline">{todayHighlight.pending.status}</span>
@@ -497,7 +494,7 @@ export default function HomeDashboard({
                   {/* Manual/Admin Comments */}
                   {todayHighlight.manualComments.map((comment, idx) => (
                     <div key={`manual-${idx}`} className="flex items-start gap-1.5 text-slate-600 bg-slate-50 rounded-xl p-2.5 border border-slate-100">
-                      <span className="text-slate-400">📝</span>
+                      <APP_ICONS.document className="w-4 h-4 text-slate-400 shrink-0" />
                       <div>
                         <span className="font-bold text-slate-700 block mb-0.5">Notes</span>
                         <p className="leading-relaxed">{comment}</p>
@@ -508,7 +505,7 @@ export default function HomeDashboard({
                   {/* Request Comments */}
                   {todayHighlight.requestComments.map((req, idx) => (
                     <div key={`req-${idx}`} className="flex items-start gap-1.5 text-indigo-700 bg-indigo-50/50 rounded-xl p-2.5 border border-indigo-50">
-                      <span className="text-indigo-400">✉️</span>
+                      <APP_ICONS.send className="w-4 h-4 text-indigo-400 shrink-0" />
                       <div>
                         <span className="font-bold text-indigo-900 block mb-0.5">
                           Request Comment ({req.type})
@@ -523,7 +520,9 @@ export default function HomeDashboard({
             </>
           ) : (
             <div className="relative overflow-hidden rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
-              <div className="text-3xl mb-2">👋</div>
+              <div className="flex justify-center mb-2">
+                <APP_ICONS.user className="w-8 h-8 text-slate-400" />
+              </div>
               <h3 className="text-sm font-bold text-slate-700">No Profile Selected</h3>
               <p className="mt-1 text-xs text-slate-500 max-w-xs mx-auto">
                 Select your name in the dropdown above to view your personalized daily duties and shifts automatically.
@@ -536,7 +535,9 @@ export default function HomeDashboard({
         {selectedName && (
           <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-bold text-slate-800">🗓️ Your Scheduled Duties</h2>
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <APP_ICONS.calendar className="w-5 h-5" /> Your Scheduled Duties
+              </h2>
               <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full uppercase">
                 {monthName}
               </span>
@@ -578,11 +579,11 @@ export default function HomeDashboard({
                       if (sLower.includes('off') || sLower === 'off') {
                         cellStyle = 'bg-emerald-50/55 text-emerald-600 hover:bg-emerald-50 border border-emerald-100/45';
                         labelColor = 'text-emerald-500';
-                        shiftBadge = '💤';
+                        shiftBadge = <APP_ICONS.check className="w-3 h-3 mx-auto" />;
                       } else if (sLower.includes('night') || sLower === 'n' || sLower === 'on' || sLower === 'on1' || sLower === 'on2') {
                         cellStyle = 'bg-slate-900 text-slate-100 hover:bg-slate-800 border border-slate-800';
                         labelColor = 'text-slate-400';
-                        shiftBadge = (sLower.includes('night') || sLower === 'n') ? '🌙' : cleanShift.toUpperCase();
+                        shiftBadge = (sLower.includes('night') || sLower === 'n') ? <APP_ICONS.clock className="w-3 h-3 mx-auto" /> : cleanShift.toUpperCase();
                       } else if (sLower.includes('am')) {
                         cellStyle = 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-100';
                         labelColor = 'text-amber-600';
