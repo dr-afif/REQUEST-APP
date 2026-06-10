@@ -231,6 +231,8 @@ export default function UserSection({
           onDateSelect={handleDateSelect}
           selectedDate={selectedDate}
           onMonthChange={setCalendarMonth}
+          shiftBlocks={shiftBlocks}
+          limitGroups={limitGroups}
         />
       ) : (
         <div className="rounded-3xl border border-slate-150/70 bg-white p-4 shadow-sm sm:p-6">

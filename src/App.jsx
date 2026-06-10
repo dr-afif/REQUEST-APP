@@ -991,6 +991,8 @@ export default function App() {
               onUploadMasterRoster={handleUploadBaseline}
               onRefresh={loadAllData}
               shiftTypes={shiftTypes}
+              limitGroups={limitGroups}
+              shiftBlocks={shiftBlocks}
               teamMembers={teamMembers}
               emergencyPhysicians={emergencyPhysicians}
               onSubmitRequest={handleSubmitRequest}

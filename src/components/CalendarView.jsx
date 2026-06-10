@@ -66,6 +66,8 @@ export default function CalendarView({
   onDateSelect,
   selectedDate,
   onMonthChange,
+  shiftBlocks = [],
+  limitGroups = [],
 }) {
   const [autoReferenceDate, setAutoReferenceDate] = useState(() =>
     getUpcomingMonthReference(),
@@ -120,6 +122,16 @@ export default function CalendarView({
       return acc;
     }, {});
   }, [requests]);
+
+  const blocksByDate = useMemo(() => {
+    return shiftBlocks.reduce((acc, block) => {
+      const dateKey = toIsoDate(block.Date || block.date);
+      if (!dateKey) return acc;
+      if (!acc[dateKey]) acc[dateKey] = [];
+      acc[dateKey].push(block);
+      return acc;
+    }, {});
+  }, [shiftBlocks]);
 
   const monthTitle = effectiveReferenceDate.toLocaleDateString(undefined, {
     month: 'long',
@@ -225,10 +237,35 @@ export default function CalendarView({
 
             const cellTitle = isHoliday ? holidayName : undefined;
 
+            const dayBlocks = blocksByDate[dateKey] || [];
+
             const inner = (
               <>
                 <div className="calendar__cell-header flex-col items-start gap-0.5 w-full">
-                  <span className={dateNumClass}>{dayNumber}</span>
+                  <div className="flex justify-between items-start w-full">
+                    <span className={dateNumClass}>{dayNumber}</span>
+                    {dayBlocks.length > 0 && (
+                      <div className="flex flex-col gap-0.5 items-end">
+                        {dayBlocks.map(block => {
+                          const shiftType = block.ShiftType || block.shiftType;
+                          const maxSlots = block.MaxSlots ?? block.maxSlots;
+                          const blockId = block.ID || block.id || Math.random();
+                          const group = limitGroups.find(lg => lg.ID === shiftType);
+                          const groupName = group ? group.GroupName : shiftType;
+                          const isZero = String(maxSlots) === "0";
+                          return (
+                            <span 
+                              key={blockId} 
+                              className={`text-[9px] font-bold px-1 py-0.5 rounded-sm shadow-sm ${isZero ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}
+                              title={`Limit Override: ${groupName} capped at ${maxSlots}`}
+                            >
+                              {groupName}: {maxSlots}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                   {holidayName && (
                     <span 
                       className="text-[8px] sm:text-[9px] font-extrabold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded leading-none truncate max-w-full block mt-0.5 border border-rose-100 uppercase"

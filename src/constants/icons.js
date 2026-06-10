@@ -42,6 +42,7 @@ export const APP_ICONS = {
   analytics: BarChart3,
   phTracker: CalendarCheck,
   admin: Settings,
+  settings: Settings,
   refresh: RefreshCw,
   logout: LogOut,
   user: User,

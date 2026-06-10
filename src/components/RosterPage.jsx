@@ -1935,7 +1935,7 @@ export default function RosterPage({
                             isToday ? 'bg-teal-50/30' : isWeekend ? 'bg-teal-50/20' : 'bg-teal-50/10'
                           }`}>
                             {isEditMode ? (
-                              <textarea
+                              <select
                                 id={`cell-${dayIndex}-${shiftIndex}`}
                                 value={epVal}
                                 onChange={(e) => {
@@ -1946,11 +1946,23 @@ export default function RosterPage({
                                   }));
                                 }}
                                 onKeyDown={(e) => handleKeyDown(e, dateStr, epKey, dayIndex, shiftIndex)}
-                                onPaste={(e) => handlePaste(e, dayIndex, shiftIndex)}
-                                className={`w-full h-full min-h-[3.5rem] px-0.5 sm:px-4 py-1 sm:py-2 text-center text-[10px] sm:text-sm font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 transition-all hover:bg-teal-50/50 focus:bg-white resize-none overflow-hidden ${
+                                className={`w-full h-full min-h-[3.5rem] px-0.5 sm:px-4 py-1 sm:py-2 text-center text-[10px] sm:text-sm font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 transition-all hover:bg-teal-50/50 focus:bg-white overflow-hidden cursor-pointer ${
                                   isWeekend ? 'text-teal-800' : 'text-teal-700'
                                 }`}
-                              />
+                              >
+                                <option value="">-</option>
+                                {emergencyPhysicians.map((ep, idx) => {
+                                  const rawName = typeof ep === 'string' ? ep : ep?.name || '';
+                                  if (!rawName) return null;
+                                  const name = rawName.trim();
+                                  const displayName = name.toLowerCase().startsWith('dr') ? name : `Dr. ${name}`;
+                                  return (
+                                    <option key={idx} value={displayName}>
+                                      {displayName}
+                                    </option>
+                                  );
+                                })}
+                              </select>
                             ) : (
                               <div className="flex flex-col items-center justify-center gap-0.5 sm:gap-1 py-1 sm:py-2">
                                 {epVal ? (

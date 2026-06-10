@@ -1032,21 +1032,27 @@ export default function AdminPanel({
                     const group = limitGroups.find(lg => lg.ID === block.ShiftType);
                     const groupName = group ? group.GroupName : block.ShiftType;
                     return (
-                      <div key={block.ID} className="flex items-center justify-between py-2 text-xs">
-                        <div>
-                          <span className="font-bold text-slate-800">{block.Date}</span>
-                          <span className="ml-2 font-semibold text-slate-500">
-                            Group '{groupName}' cap: {block.MaxSlots}
-                          </span>
+                      <div key={block.ID} className="flex items-center justify-between py-3 px-3 bg-slate-50/50 border border-slate-100 rounded-xl mb-2 hover:bg-slate-50 transition">
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-2 text-sm text-slate-800">
+                            <APP_ICONS.calendar className="w-4 h-4 text-slate-400" />
+                            <span className="font-bold">
+                              {!isNaN(new Date(block.Date)) ? new Date(block.Date).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) : block.Date}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-slate-500 ml-6">
+                            <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 font-semibold shadow-sm">Group: {groupName}</span>
+                            <span className="font-medium">Cap: <strong className={block.MaxSlots == 0 ? "text-rose-500 font-bold" : "text-indigo-600 font-bold"}>{block.MaxSlots}</strong></span>
+                          </div>
                         </div>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteBlock(block.ID)}
-                        className="text-rose-500 font-bold hover:underline"
-                      >
-                        Delete
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteBlock(block.ID)}
+                          className="flex items-center justify-center rounded-lg border border-rose-100 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-500 hover:bg-rose-100 transition"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
