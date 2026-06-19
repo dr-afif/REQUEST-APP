@@ -54,6 +54,11 @@ export default function PublicHolidayTrackerPage({
 
   const [isMemoEditMode, setIsMemoEditMode] = useState(false);
 
+  // Export Modal State
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportMonth, setExportMonth] = useState('');
+  const [exportSelectedRows, setExportSelectedRows] = useState({});
+
   useEffect(() => {
     if (settings.phTrackerOpeningBalances) {
       try {
@@ -219,6 +224,105 @@ export default function PublicHolidayTrackerPage({
   const myUnmatched = useMemo(() => unmatched.filter(u => u.doctorKey === myKey), [unmatched, myKey]);
   const myWarnings = useMemo(() => warnings.filter(w => normalizeForComparison(mapName(w.doctorName)) === myKey), [warnings, myKey]);
 
+  // Export Logic
+  const exportableRecords = useMemo(() => {
+    if (!myCredits) return [];
+    return myCredits.filter(c => c.status === 'USED' && c.matchedGhkaDate);
+  }, [myCredits]);
+
+  const handleOpenExportModal = () => {
+    let initialMonth = '';
+    if (activeMonth && exportableRecords.some(r => r.matchedGhkaDate.startsWith(activeMonth))) {
+      initialMonth = activeMonth;
+    } else if (exportableRecords.length > 0) {
+      const sorted = [...exportableRecords].sort((a, b) => b.matchedGhkaDate.localeCompare(a.matchedGhkaDate));
+      initialMonth = sorted[0].matchedGhkaDate.substring(0, 7);
+    } else {
+      const d = new Date();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      initialMonth = `${d.getFullYear()}-${mm}`;
+    }
+    
+    setExportMonth(initialMonth);
+    setIsExportModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isExportModalOpen) return;
+    
+    const autoSelected = {};
+    exportableRecords.forEach(r => {
+      if (r.matchedGhkaDate && r.matchedGhkaDate.startsWith(exportMonth)) {
+        autoSelected[`${r.doctorKey}_${r.holidayDate}`] = true;
+      }
+    });
+    setExportSelectedRows(autoSelected);
+  }, [exportMonth, isExportModalOpen, exportableRecords]);
+
+  const handleGenerateExport = () => {
+    const selectedRecords = exportableRecords.filter(r => exportSelectedRows[`${r.doctorKey}_${r.holidayDate}`]);
+    if (selectedRecords.length === 0) return;
+
+    const payload = {
+      memoMonth: exportMonth,
+      applicantName: selectedName,
+      applicantStaffId: "",
+      applicantPhone: "",
+      applicantEmail: "",
+      memoDate: new Date().toISOString(),
+      rows: selectedRecords.map(r => {
+        const isCarryForward = r.source === 'opening_balance';
+        return {
+          phDate: isCarryForward ? "" : r.holidayDate,
+          phName: isCarryForward ? "Opening Balance" : r.holidayName,
+          ghkaDate: r.matchedGhkaDate,
+          ghkaDay: new Date(r.matchedGhkaDate).toLocaleDateString('en-US', { weekday: 'long' })
+        };
+      })
+    };
+
+    console.log('GHKA Memo Export Payload:', payload);
+    alert('Memo export data prepared. DOCX generation will be added in the next phase.');
+    setIsExportModalOpen(false);
+  };
+
+  const renderExportRow = (r) => {
+    const key = `${r.doctorKey}_${r.holidayDate}`;
+    const isChecked = !!exportSelectedRows[key];
+    const isCarryForward = r.source === 'opening_balance';
+    const phDateText = isCarryForward ? 'Carry-forward' : new Date(r.holidayDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const phNameText = isCarryForward ? 'Opening Balance GHKA' : r.holidayName;
+    const ghkaDateObj = new Date(r.matchedGhkaDate);
+    const ghkaDateText = ghkaDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const ghkaDayText = ghkaDateObj.toLocaleDateString('en-US', { weekday: 'short' });
+    const memoKey = `${r.doctorKey}_${r.holidayDate}`;
+    const isMemoSubmitted = !!memoStatuses[memoKey];
+
+    return (
+      <label key={key} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition ${isChecked ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+        <input 
+          type="checkbox" 
+          className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+          checked={isChecked}
+          onChange={(e) => setExportSelectedRows(prev => ({...prev, [key]: e.target.checked}))}
+        />
+        <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-bold text-slate-800 truncate">{ghkaDateText} <span className="text-slate-500 font-medium">({ghkaDayText})</span></p>
+            <p className="text-[10px] text-slate-500 truncate">Replaces: {phNameText} ({phDateText})</p>
+          </div>
+          <div>
+            {isMemoSubmitted ? (
+               <span className="inline-block px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">Memo submitted</span>
+            ) : (
+               <span className="inline-block px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-rose-100 text-rose-800 border border-rose-200">Memo not marked</span>
+            )}
+          </div>
+        </div>
+      </label>
+    );
+  };
+
   return (
     <div className="mx-auto px-4 py-8 md:px-8 max-w-6xl animate-fadeIn">
       {/* Page Header */}
@@ -295,13 +399,22 @@ export default function PublicHolidayTrackerPage({
             </div>
           ) : (
             <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
-              <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
                   <APP_ICONS.calendar className="w-4 h-4 text-indigo-500" /> Public Holiday Credits & Replacements
                 </h3>
-                <div className="flex items-center gap-2 sm:hidden">
-                  <span className="text-[10px] text-slate-500">Swipe sideways to view replacement details.</span>
-                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 rounded-full px-2 py-1">← swipe →</span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 sm:hidden">
+                    <span className="text-[10px] text-slate-500">Swipe sideways to view replacement details.</span>
+                    <span className="text-[10px] font-bold text-slate-400 bg-slate-100 rounded-full px-2 py-1">← swipe →</span>
+                  </div>
+                  <button 
+                    onClick={handleOpenExportModal} 
+                    className="text-[11px] font-bold px-3 py-1.5 bg-indigo-600 text-white rounded-lg shadow-sm hover:bg-indigo-700 transition flex items-center gap-1.5"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    Export Monthly Memo
+                  </button>
                 </div>
               </div>
               <div className="p-0 overflow-x-auto no-scrollbar">
@@ -372,6 +485,88 @@ export default function PublicHolidayTrackerPage({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Export Modal */}
+      {!isAdmin && isExportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-slideUp sm:animate-fadeIn">
+            <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                  Export Monthly GHKA Memo
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">Select records to include in your monthly memo.</p>
+              </div>
+              <button onClick={() => setIsExportModalOpen(false)} className="text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full p-2 transition">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1 bg-white">
+              {exportableRecords.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center gap-3">
+                  <APP_ICONS.info className="w-10 h-10 text-slate-300" />
+                  <p className="text-sm font-bold text-slate-500">No used GHKA replacement records are available for memo export yet.</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Select Month</label>
+                    <input 
+                      type="month" 
+                      value={exportMonth}
+                      onChange={(e) => setExportMonth(e.target.value)}
+                      className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 transition font-medium text-slate-700 w-full sm:w-auto"
+                    />
+                  </div>
+                  
+                  {/* Current Month Records */}
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">Records for {exportMonth || 'Selected Month'}</h3>
+                    {exportableRecords.filter(r => r.matchedGhkaDate && r.matchedGhkaDate.startsWith(exportMonth)).length === 0 ? (
+                      <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 text-amber-800 text-xs font-medium">
+                        No GHKA replacement records found for this month. You may select another month or manually include other used records.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {exportableRecords.filter(r => r.matchedGhkaDate && r.matchedGhkaDate.startsWith(exportMonth)).map(renderExportRow)}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Other Records */}
+                  {exportableRecords.filter(r => !(r.matchedGhkaDate && r.matchedGhkaDate.startsWith(exportMonth))).length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">Other Used GHKA Records</h3>
+                      <div className="space-y-2 opacity-80 hover:opacity-100 transition-opacity">
+                        {exportableRecords.filter(r => !(r.matchedGhkaDate && r.matchedGhkaDate.startsWith(exportMonth))).map(renderExportRow)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 flex-shrink-0">
+              <button 
+                onClick={() => setIsExportModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-600 bg-white border border-slate-200 shadow-sm hover:bg-slate-50 transition"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleGenerateExport}
+                disabled={exportableRecords.length === 0 || Object.values(exportSelectedRows).filter(Boolean).length === 0}
+                className="px-5 py-2.5 rounded-xl font-bold text-sm text-white bg-indigo-600 shadow-sm hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                Prepare Export Data
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
