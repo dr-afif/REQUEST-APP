@@ -194,12 +194,13 @@ export default function PublicHolidayTrackerPage({
     }));
   };
 
-  if (!isAdmin) {
+  const isGuest = selectedName?.trim().toLowerCase() === 'guest';
+  if (!selectedName || isGuest) {
     return (
       <div className="mx-auto px-4 py-8 md:px-8 max-w-6xl animate-fadeIn text-center">
-        <h2 className="text-2xl font-bold text-slate-800">Admin Access Required</h2>
+        <h2 className="text-2xl font-bold text-slate-800">Access Denied</h2>
         <p className="mt-2 text-xs text-slate-500">
-          This page contains restricted tracking data. Please log in as an administrator to view this content.
+          This page is not available for guests. Please select a user profile.
         </p>
       </div>
     );
@@ -207,22 +208,178 @@ export default function PublicHolidayTrackerPage({
 
   const year = activeMonth ? activeMonth.split('-')[0] : new Date().getFullYear();
 
+  // User Mode Data
+  const myKey = normalizeForComparison(mapName(selectedName));
+  const mySummary = useMemo(() => summaries.find(s => s.doctorKey === myKey) || {
+    openingBalance: 0, phWorked: 0, ghkaUsed: 0, outstanding: 0, excessGhkaUsed: 0, oldOutstanding: 0
+  }, [summaries, myKey]);
+  const myCredits = useMemo(() => matched.filter(m => m.doctorKey === myKey), [matched, myKey]);
+  const displayCredits = useMemo(() => myCredits.filter(c => c.source !== 'opening_balance'), [myCredits]);
+  const myUsages = useMemo(() => usages.filter(u => u.doctorKey === myKey), [usages, myKey]);
+  const myUnmatched = useMemo(() => unmatched.filter(u => u.doctorKey === myKey), [unmatched, myKey]);
+  const myWarnings = useMemo(() => warnings.filter(w => normalizeForComparison(mapName(w.doctorName)) === myKey), [warnings, myKey]);
+
   return (
     <div className="mx-auto px-4 py-8 md:px-8 max-w-6xl animate-fadeIn">
       {/* Page Header */}
       <div className="mb-4">
         <h1 className="text-3xl font-extrabold flex items-center gap-2">
           <APP_ICONS.phTracker className="w-8 h-8 text-indigo-700" />
-          <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">Public Holiday Tracker</span>
+          <span className="bg-gradient-to-r from-slate-800 to-indigo-900 bg-clip-text text-transparent">
+            {isAdmin ? 'Public Holiday Tracker' : 'My Public Holiday Tracker'}
+          </span>
         </h1>
         <p className="text-sm text-slate-500 mt-2">
-          Read-only tracker for Public Holiday duties and GHKA replacements.
+          {isAdmin 
+            ? 'Read-only tracker for Public Holiday duties and GHKA replacements.' 
+            : 'This tracker is read-only and based on the uploaded master roster.'}
         </p>
       </div>
 
-      {/* Temporary Debug Panel */}
-      {process.env.NODE_ENV === 'development' && totals.totalWorked === 0 && masterRoster.length > 0 && (
-        <div className="mb-8 rounded-3xl border border-indigo-100 bg-indigo-50/50 p-6 shadow-sm overflow-auto text-xs">
+      {!isAdmin && (
+        <div className="flex flex-col gap-8">
+          {/* User Overview Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Opening Balance</p>
+              <p className="text-2xl font-black text-indigo-400 mt-2">{mySummary.openingBalance}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">PH Worked</p>
+              <p className="text-2xl font-black text-indigo-600 mt-2">{mySummary.phWorked}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">GHKA Used</p>
+              <p className="text-2xl font-black text-emerald-600 mt-2">{mySummary.ghkaUsed}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">GHKA AVAILABLE</p>
+              <p className="text-2xl font-black text-amber-500 mt-2">{mySummary.outstanding}</p>
+            </div>
+            {mySummary.excessGhkaUsed > 0 && (
+              <div className="rounded-2xl border border-rose-100 bg-rose-50 p-4 shadow-sm">
+                <p className="text-[10px] font-bold text-rose-500 uppercase tracking-wider">Excess GHKA</p>
+                <p className="text-2xl font-black text-rose-600 mt-2">{mySummary.excessGhkaUsed}</p>
+              </div>
+            )}
+          </div>
+
+          {/* User Warnings */}
+          {myWarnings.length > 0 && (
+            <div className="rounded-3xl border border-rose-100 bg-rose-50/50 p-6 shadow-sm">
+              <h3 className="text-xs font-bold text-rose-800 uppercase tracking-wider flex items-center gap-2 mb-4">
+                <APP_ICONS.warning className="w-4 h-4" /> Personal Warnings
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {myWarnings.map((w, idx) => (
+                  <div key={idx} className="bg-white rounded-xl border border-rose-100 p-3 shadow-sm flex items-start gap-3">
+                    <div className={`mt-0.5 rounded-full p-1 ${w.severity === 'high' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-semibold text-slate-700">{w.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Empty State */}
+          {displayCredits.length === 0 ? (
+            <div className="flex flex-col items-center justify-center text-slate-400 p-8 text-center gap-3 bg-white rounded-3xl border border-slate-100 shadow-sm">
+              <APP_ICONS.info className="w-8 h-8 text-slate-300" />
+              <p className="text-sm font-bold">No public holiday credit records found for your roster yet.</p>
+            </div>
+          ) : (
+            <div className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden flex flex-col">
+              <div className="p-5 border-b border-slate-100 bg-slate-50 flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                  <APP_ICONS.calendar className="w-4 h-4 text-indigo-500" /> Public Holiday Credits & Replacements
+                </h3>
+                <div className="flex items-center gap-2 sm:hidden">
+                  <span className="text-[10px] text-slate-500">Swipe sideways to view replacement details.</span>
+                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 rounded-full px-2 py-1">← swipe →</span>
+                </div>
+              </div>
+              <div className="p-0 overflow-x-auto no-scrollbar">
+                <table className="w-full text-left text-xs whitespace-nowrap min-w-[600px]">
+                  <thead className="bg-white shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                    <tr className="border-b border-slate-100">
+                      <th colSpan="2" className="py-2 px-4 font-bold text-center border-r border-slate-100 bg-indigo-50/30 text-indigo-800 uppercase tracking-wider">Public Holiday</th>
+                      <th colSpan="3" className="py-2 px-4 font-bold text-center bg-emerald-50/30 text-emerald-800 uppercase tracking-wider">Replacement Day</th>
+                    </tr>
+                    <tr className="text-[10px] text-slate-400 uppercase tracking-wider border-b border-slate-100 bg-slate-50">
+                      <th className="py-2 px-4 font-bold border-r border-slate-100 w-[15%]">Date</th>
+                      <th className="py-2 px-4 font-bold border-r border-slate-100 w-[30%]">PH Name</th>
+                      <th className="py-2 px-4 font-bold border-r border-slate-100 w-[15%]">Date</th>
+                      <th className="py-2 px-4 font-bold border-r border-slate-100 w-[15%]">Day</th>
+                      <th className="py-2 px-4 font-bold w-[25%]">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {displayCredits.map((c, idx) => {
+                      const isUsed = c.status === 'USED';
+                      const isCarryForward = c.source === 'opening_balance';
+                      const memoKey = `${c.doctorKey}_${c.holidayDate}`;
+                      const isMemoSubmitted = !!memoStatuses[memoKey];
+
+                      const phDateText = isCarryForward ? '—' : (c.holidayDate ? new Date(c.holidayDate).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—');
+                      const phNameText = isCarryForward ? 'Carry-forward GHKA credit' : c.holidayName;
+
+                      let repDateText = '-';
+                      let repDayText = '-';
+                      
+                      let badgeBg = '';
+                      let statusText = '-';
+
+                      if (isUsed && c.matchedGhkaDate) {
+                        const d = new Date(c.matchedGhkaDate);
+                        repDateText = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                        repDayText = d.toLocaleDateString('en-US', { weekday: 'long' });
+                        
+                        if (isMemoSubmitted) {
+                          badgeBg = 'bg-emerald-100 text-emerald-800';
+                          statusText = 'Used (Memo submitted)';
+                        } else {
+                          badgeBg = 'bg-rose-100 text-rose-800';
+                          statusText = 'Used (Memo not marked)';
+                        }
+                      }
+
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50 transition">
+                          <td className="py-3 px-4 font-medium text-slate-600 border-r border-slate-100">{phDateText}</td>
+                          <td className="py-3 px-4 font-bold text-slate-700 border-r border-slate-100 truncate max-w-[200px]" title={phNameText}>{phNameText}</td>
+                          <td className="py-3 px-4 font-medium text-slate-600 border-r border-slate-100">{repDateText}</td>
+                          <td className="py-3 px-4 font-medium text-slate-600 border-r border-slate-100">{repDayText}</td>
+                          <td className="py-3 px-4">
+                            {statusText === '-' ? (
+                              <span className="text-slate-400 font-bold px-2 py-1">-</span>
+                            ) : (
+                              <span className={`inline-block px-2 py-1 rounded-md text-[10px] font-bold truncate max-w-[150px] ${badgeBg}`} title={statusText}>
+                                {statusText}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {isAdmin && (
+        <>
+          {/* Temporary Debug Panel */}
+          {process.env.NODE_ENV === 'development' && totals.totalWorked === 0 && masterRoster.length > 0 && (
+            <div className="mb-8 rounded-3xl border border-indigo-100 bg-indigo-50/50 p-6 shadow-sm overflow-auto text-xs">
           <h3 className="font-bold text-indigo-800 mb-2">DEBUG INFO: Zero Credits Detected</h3>
           <ul className="list-disc pl-5 space-y-1 text-slate-700 font-mono">
             <li>masterRoster length: {masterRoster.length}</li>
@@ -544,6 +701,8 @@ export default function PublicHolidayTrackerPage({
         </div>
 
       </div>
+        </>
+      )}
     </div>
   );
 }

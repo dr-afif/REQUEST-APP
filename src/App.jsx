@@ -164,7 +164,14 @@ export default function App() {
 
   // Automatic navigation guard for admin page access control
   useEffect(() => {
-    if ((currentPage === 'admin' || currentPage === 'summary' || currentPage === 'ph-tracker') && selectedName?.trim().toLowerCase() !== 'admin') {
+    const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+    const isGuest = selectedName?.trim().toLowerCase() === 'guest';
+    const isNormalUser = selectedName && !isAdmin && !isGuest;
+
+    if ((currentPage === 'admin' || currentPage === 'summary') && !isAdmin) {
+      setCurrentPage('dashboard');
+    }
+    if (currentPage === 'ph-tracker' && !isAdmin && !isNormalUser) {
       setCurrentPage('dashboard');
     }
   }, [currentPage, selectedName]);
@@ -1050,7 +1057,7 @@ export default function App() {
           </div>
         )}
 
-        {currentPage === 'ph-tracker' && selectedName?.trim().toLowerCase() === 'admin' && (
+        {currentPage === 'ph-tracker' && selectedName && selectedName.trim().toLowerCase() !== 'guest' && (
           <div className="animate-fadeIn">
             <PublicHolidayTrackerPage
               selectedName={selectedName}

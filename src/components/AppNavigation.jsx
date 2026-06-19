@@ -31,11 +31,9 @@ export default function AppNavigation({
     { id: 'roster', label: 'Full Roster', icon: APP_ICONS.roster },
     { id: 'requests', label: 'Request Panel', icon: APP_ICONS.requests },
     { id: 'updates', label: 'Updates', icon: APP_ICONS.updates },
-    ...(isAdmin ? [
-      { id: 'summary', label: 'Summary', icon: APP_ICONS.analytics },
-      { id: 'ph-tracker', label: 'PH Tracker', icon: APP_ICONS.phTracker },
-      { id: 'admin', label: 'Admin Panel', icon: APP_ICONS.admin }
-    ] : []),
+    ...(isAdmin ? [{ id: 'summary', label: 'Summary', icon: APP_ICONS.analytics }] : []),
+    ...((isAdmin || (!isGuest && selectedName)) ? [{ id: 'ph-tracker', label: 'PH Tracker', icon: APP_ICONS.phTracker }] : []),
+    ...(isAdmin ? [{ id: 'admin', label: 'Admin Panel', icon: APP_ICONS.admin }] : []),
   ];
 
   return (
