@@ -503,8 +503,8 @@ export default function PublicHolidayTrackerPage({
 
       {/* Export Modal */}
       {!isAdmin && isExportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-slideUp sm:animate-fadeIn">
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center bg-slate-900/60 p-4 sm:p-6 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[85dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-slideUp sm:animate-fadeIn">
             <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
