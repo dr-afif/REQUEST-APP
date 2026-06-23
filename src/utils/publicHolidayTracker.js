@@ -54,7 +54,12 @@ export const classifyPublicHolidayShift = (shift) => {
     };
   }
   
-  const cleanShiftRaw = shift.replace(/\s*\([SX]\)$/i, '').trim();
+  const cleanShiftRaw = shift
+    .replace(/\(s\)/i, '')
+    .replace(/-s/i, '')
+    .replace(/\(x\)/i, '')
+    .replace(/-x/i, '')
+    .trim();
   const s = cleanShiftRaw.toUpperCase();
   let normalizedShift = s;
   
@@ -134,7 +139,14 @@ export const getGhkaUsage = (masterRoster, names) => {
 
     if (!nameSet.has(entry.doctorKey)) return;
 
-    const s = entry.shiftRaw.toUpperCase().trim();
+    const s = entry.shiftRaw
+      .replace(/\(s\)/i, '')
+      .replace(/-s/i, '')
+      .replace(/\(x\)/i, '')
+      .replace(/-x/i, '')
+      .trim()
+      .toUpperCase();
+      
     if (s === 'GHKA') {
       usages.push({
         doctorName: entry.doctorName,
