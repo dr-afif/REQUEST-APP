@@ -402,13 +402,13 @@ export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRos
   const today = new Date();
   const currentMonthLimit = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
-  // 1. Initialize all holidays for the active year up to the current month
+  // 1. Initialize all holidays for the active year
   const activeKeys = Array.isArray(HOLIDAYS) 
     ? HOLIDAYS.filter(h => {
         const d = h.date || h.Date || h.holidayDate;
-        return d && d.startsWith(activeYear) && d.substring(0, 7) <= currentMonthLimit;
+        return d && d.startsWith(activeYear);
       }).map(h => ({ date: h.date || h.Date || h.holidayDate, name: h.name || h.Name || h.holidayName }))
-    : Object.keys(HOLIDAYS).filter(d => d.startsWith(activeYear) && d.substring(0, 7) <= currentMonthLimit).map(d => ({ date: d, name: HOLIDAYS[d] }));
+    : Object.keys(HOLIDAYS).filter(d => d.startsWith(activeYear)).map(d => ({ date: d, name: HOLIDAYS[d] }));
 
   activeKeys.forEach(({ date, name }) => {
     holidaysMap[date] = {
@@ -424,6 +424,9 @@ export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRos
   masterRoster.forEach(row => {
     const entry = normalizeRosterEntry(row);
     if (!entry) return;
+    
+    // Ignore master roster shifts for future unfinalized months
+    if (entry.dateStr.substring(0, 7) > currentMonthLimit) return;
 
     if (holidaysMap[entry.dateStr] && nameSet.has(entry.doctorKey)) {
       const classification = classifyPublicHolidayShift(entry.shiftRaw);
