@@ -30,6 +30,7 @@ export default function AnalyticsPage({
   const [activeMonth, setActiveMonth] = useState(rosterMonth);
   const [showLeaveDetails, setShowLeaveDetails] = useState(false);
   const [showAmPmBalance, setShowAmPmBalance] = useState(true);
+  const [ytdShiftFilter, setYtdShiftFilter] = useState('NIGHT');
 
   useEffect(() => {
     if (rosterMonth) {
@@ -1111,6 +1112,69 @@ export default function AnalyticsPage({
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* 📊 YTD Individual Shift Breakdown */}
+      <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm mb-8 text-left">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 mb-4 gap-4">
+          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+            <APP_ICONS.activity className="w-4 h-4" /> YTD Individual Shift Breakdown
+          </h3>
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Select Shift:</label>
+            <select
+              value={ytdShiftFilter}
+              onChange={(e) => setYtdShiftFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 cursor-pointer"
+            >
+              <option value="ACTIVE_SHIFTS">Total Active Duties</option>
+              <option value="TOTAL_LEAVE">Total Leave Days</option>
+              {dynamicShiftColumns.map(col => (
+                <option key={col} value={col}>{col}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {(!ytdStats || !ytdStats.perMemberYtdStats || ytdStats.perMemberYtdStats.length === 0) ? (
+          <div className="py-12 text-center text-slate-400 italic text-xs">
+            No YTD roster records available.
+          </div>
+        ) : (
+          <div className="overflow-x-auto max-h-[400px] custom-scrollbar rounded-xl border border-slate-100">
+            <table className="min-w-full text-left text-xs">
+              <thead className="sticky top-0 bg-slate-50 border-b border-slate-100 shadow-sm z-10">
+                <tr>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-[10px]">Name</th>
+                  <th className="px-4 py-3 font-extrabold text-slate-500 uppercase tracking-wider text-[10px] text-right">
+                    {ytdShiftFilter === 'ACTIVE_SHIFTS' ? 'Total Active' : 
+                     ytdShiftFilter === 'TOTAL_LEAVE' ? 'Total Leave' : 
+                     ytdShiftFilter} (YTD)
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {(() => {
+                  const items = ytdStats.perMemberYtdStats.map(member => {
+                    let val = 0;
+                    if (ytdShiftFilter === 'ACTIVE_SHIFTS') val = member.activeShifts || 0;
+                    else if (ytdShiftFilter === 'TOTAL_LEAVE') val = member.leaveDays || 0;
+                    else val = member.shiftTallies?.[ytdShiftFilter] || 0;
+                    return { name: member.name, val };
+                  });
+                  items.sort((a, b) => b.val - a.val);
+
+                  return items.map((item, idx) => (
+                    <tr key={item.name} className="hover:bg-slate-50/60 transition">
+                      <td className="px-4 py-2.5 font-bold text-slate-700 uppercase">{item.name}</td>
+                      <td className="px-4 py-2.5 font-black text-slate-900 text-right">{item.val > 0 ? item.val : <span className="text-slate-300">-</span>}</td>
+                    </tr>
+                  ));
+                })()}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* ⚖️ Fairness Scoring Panel & Standing Cards */}

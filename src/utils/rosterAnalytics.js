@@ -382,7 +382,8 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
       weekendShifts: 0,
       publicHolidayShifts: 0,
       leaveDays: 0,
-      weekendLeaves: 0
+      weekendLeaves: 0,
+      shiftTallies: {},
     };
   });
 
@@ -449,6 +450,11 @@ export const calculateYearToDateStats = (monthlyRosterData, names = [], teamMemb
         monthlyStats[mo].weekendLeaves++;
       }
     }
+
+    if (!doctorStats[nameKey].shiftTallies[shiftType]) {
+      doctorStats[nameKey].shiftTallies[shiftType] = 0;
+    }
+    doctorStats[nameKey].shiftTallies[shiftType]++;
   });
 
   if (activeMonthsWithData.size === 0) {
