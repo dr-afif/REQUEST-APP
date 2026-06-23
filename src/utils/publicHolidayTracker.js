@@ -399,13 +399,16 @@ export const buildTrackerMatrix = (matchedRecords, names, activeMonth, masterRos
   const holidaysMap = {}; // Key: YYYY-MM-DD
   
   const activeYear = activeMonth ? activeMonth.split('-')[0] : String(new Date().getFullYear());
-  // 1. Initialize all holidays for the active year
+  const today = new Date();
+  const currentMonthLimit = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+
+  // 1. Initialize all holidays for the active year up to the current month
   const activeKeys = Array.isArray(HOLIDAYS) 
     ? HOLIDAYS.filter(h => {
         const d = h.date || h.Date || h.holidayDate;
-        return d && d.startsWith(activeYear);
+        return d && d.startsWith(activeYear) && d.substring(0, 7) <= currentMonthLimit;
       }).map(h => ({ date: h.date || h.Date || h.holidayDate, name: h.name || h.Name || h.holidayName }))
-    : Object.keys(HOLIDAYS).filter(d => d.startsWith(activeYear)).map(d => ({ date: d, name: HOLIDAYS[d] }));
+    : Object.keys(HOLIDAYS).filter(d => d.startsWith(activeYear) && d.substring(0, 7) <= currentMonthLimit).map(d => ({ date: d, name: HOLIDAYS[d] }));
 
   activeKeys.forEach(({ date, name }) => {
     holidaysMap[date] = {
