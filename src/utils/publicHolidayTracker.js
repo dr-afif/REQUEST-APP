@@ -95,11 +95,16 @@ export const getPublicHolidayCredits = (masterRoster, names) => {
   const credits = [];
   const nameSet = new Set(names.map(n => normalizeForComparison(mapName(n))));
 
+  const today = new Date();
+  const currentMonthLimit = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+
   masterRoster.forEach(row => {
     const entry = normalizeRosterEntry(row);
     if (!entry) return;
 
     if (!nameSet.has(entry.doctorKey)) return;
+
+    if (entry.dateStr.substring(0, 7) > currentMonthLimit) return;
 
     // Check if date is a public holiday
     const holidayName = getHolidayNameByDate(entry.dateStr);
@@ -133,11 +138,16 @@ export const getGhkaUsage = (masterRoster, names) => {
   const usages = [];
   const nameSet = new Set(names.map(n => normalizeForComparison(mapName(n))));
 
+  const today = new Date();
+  const currentMonthLimit = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+
   masterRoster.forEach(row => {
     const entry = normalizeRosterEntry(row);
     if (!entry) return;
 
     if (!nameSet.has(entry.doctorKey)) return;
+
+    if (entry.dateStr.substring(0, 7) > currentMonthLimit) return;
 
     const s = entry.shiftRaw
       .replace(/\(s\)/i, '')
