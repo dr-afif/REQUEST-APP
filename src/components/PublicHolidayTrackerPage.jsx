@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   getPublicHolidayCredits,
   getGhkaUsage,
@@ -502,7 +503,7 @@ export default function PublicHolidayTrackerPage({
       )}
 
       {/* Export Modal */}
-      {!isAdmin && isExportModalOpen && (
+      {!isAdmin && isExportModalOpen && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 p-4 sm:p-6 backdrop-blur-sm animate-fadeIn">
           <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[85dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-slideUp sm:animate-fadeIn">
             <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
@@ -629,7 +630,8 @@ export default function PublicHolidayTrackerPage({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {isAdmin && (
