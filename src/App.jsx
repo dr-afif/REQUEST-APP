@@ -57,13 +57,15 @@ const normalizeDirectoryMembers = (rawMembers) => {
     ? rawMembers
         .map((entry) => {
           if (typeof entry === 'string') {
-            return { name: entry.trim(), fullName: '', phone: '', active: true };
+            return { name: entry.trim(), fullName: '', phone: '', staffId: '', email: '', active: true };
           }
           const rawActive = entry?.active ?? entry?.Active;
           return {
             name: String(entry?.name || entry?.MemberName || '').trim(),
             fullName: String(entry?.fullName || entry?.FullName || '').trim(),
             phone: String(entry?.phone || entry?.Phone || '').trim(),
+            staffId: String(entry?.staffId || entry?.StaffId || '').trim(),
+            email: String(entry?.email || entry?.Email || '').trim(),
             active: rawActive === undefined || rawActive === null || rawActive === ''
               ? true
               : !['false', 'inactive', 'no', '0'].includes(String(rawActive).trim().toLowerCase()),
@@ -1066,6 +1068,7 @@ export default function App() {
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
               settings={settings}
               onUpdateSetting={handleUpdateSetting}
+              teamMembers={[...teamMembers, ...emergencyPhysicians]}
             />
           </div>
         )}

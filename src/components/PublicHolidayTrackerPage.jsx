@@ -7,8 +7,9 @@ import {
   buildWarnings,
   buildTrackerMatrix
 } from '../utils/publicHolidayTracker';
+import { generateGhkaMemoDocx } from '../utils/ghkaMemoExport';
 import { normalizeForComparison } from '../utils/normalise';
-import { mapName } from '../utils/adapters';
+import { mapName, formatNameForMemo, resolveTeamMemberProfile } from '../utils/adapters';
 import { APP_ICONS } from '../constants/icons';
 
 export default function PublicHolidayTrackerPage({
@@ -17,7 +18,8 @@ export default function PublicHolidayTrackerPage({
   masterRoster = [],
   rosterMonth = '',
   settings = {},
-  onUpdateSetting = () => {}
+  onUpdateSetting = () => {},
+  teamMembers = []
 }) {
   const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
 
@@ -58,6 +60,7 @@ export default function PublicHolidayTrackerPage({
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportMonth, setExportMonth] = useState('');
   const [exportSelectedRows, setExportSelectedRows] = useState({});
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
     if (settings.phTrackerOpeningBalances) {
@@ -259,16 +262,20 @@ export default function PublicHolidayTrackerPage({
     setExportSelectedRows(autoSelected);
   }, [exportMonth, isExportModalOpen, exportableRecords]);
 
-  const handleGenerateExport = () => {
+  const handleGenerateExport = async () => {
     const selectedRecords = exportableRecords.filter(r => exportSelectedRows[`${r.doctorKey}_${r.holidayDate}`]);
     if (selectedRecords.length === 0) return;
 
+    // Find the profile for the selected applicant
+    const selectedProfile = resolveTeamMemberProfile(selectedName, teamMembers);
+    const formattedMemoName = formatNameForMemo(selectedProfile.fullName || selectedProfile.name);
+
     const payload = {
       memoMonth: exportMonth,
-      applicantName: selectedName,
-      applicantStaffId: "",
-      applicantPhone: "",
-      applicantEmail: "",
+      applicantName: formattedMemoName,
+      applicantStaffId: selectedProfile.staffId || "",
+      applicantPhone: selectedProfile.phone || "",
+      applicantEmail: selectedProfile.email || "",
       memoDate: new Date().toISOString(),
       rows: selectedRecords.map(r => {
         const isCarryForward = r.source === 'opening_balance';
@@ -281,9 +288,15 @@ export default function PublicHolidayTrackerPage({
       })
     };
 
-    console.log('GHKA Memo Export Payload:', payload);
-    alert('Memo export data prepared. DOCX generation will be added in the next phase.');
-    setIsExportModalOpen(false);
+    setIsExporting(true);
+    try {
+      await generateGhkaMemoDocx(payload);
+      setIsExportModalOpen(false);
+    } catch (error) {
+      alert(`Failed to generate DOCX memo: ${error.message}`);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const renderExportRow = (r) => {
@@ -513,6 +526,46 @@ export default function PublicHolidayTrackerPage({
                 </div>
               ) : (
                 <div className="space-y-6">
+                  {/* Applicant Details */}
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
+                    <h3 className="text-xs font-bold text-indigo-800 uppercase tracking-wider mb-3">Applicant Details</h3>
+                    
+                    {(() => {
+                      const selectedProfile = resolveTeamMemberProfile(selectedName, teamMembers);
+                      const formattedMemoName = formatNameForMemo(selectedProfile.fullName || selectedProfile.name);
+                      
+                      const missingFields = !selectedProfile.staffId || !selectedProfile.phone || !selectedProfile.email;
+
+                      return (
+                        <>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-3">
+                            <div>
+                              <div className="text-[10px] text-indigo-400 font-bold uppercase">Name</div>
+                              <div className="text-sm font-semibold text-indigo-900">{formattedMemoName}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-indigo-400 font-bold uppercase">Staff ID</div>
+                              <div className="text-sm font-semibold text-indigo-900">{selectedProfile.staffId || '-'}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-indigo-400 font-bold uppercase">Phone</div>
+                              <div className="text-sm font-semibold text-indigo-900">{selectedProfile.phone || '-'}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-indigo-400 font-bold uppercase">Email</div>
+                              <div className="text-sm font-semibold text-indigo-900 truncate" title={selectedProfile.email}>{selectedProfile.email || '-'}</div>
+                            </div>
+                          </div>
+                          {missingFields && (
+                            <div className="text-[11px] text-amber-700 bg-amber-100/50 p-2 rounded-lg border border-amber-200/50 mt-2">
+                              <strong>Note:</strong> Some applicant details are missing. The memo can still be generated, but the missing fields will be blank. Update your profile in the Admin Panel to auto-fill them.
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Select Month</label>
                     <input 
@@ -559,11 +612,20 @@ export default function PublicHolidayTrackerPage({
               </button>
               <button 
                 onClick={handleGenerateExport}
-                disabled={exportableRecords.length === 0 || Object.values(exportSelectedRows).filter(Boolean).length === 0}
+                disabled={exportableRecords.length === 0 || Object.values(exportSelectedRows).filter(Boolean).length === 0 || isExporting}
                 className="px-5 py-2.5 rounded-xl font-bold text-sm text-white bg-indigo-600 shadow-sm hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                Prepare Export Data
+                {isExporting ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    Generate Memo DOCX
+                  </>
+                )}
               </button>
             </div>
           </div>

@@ -88,7 +88,7 @@ export default function AdminPanel({
   // Team members states
   const [localTeamMembers, setLocalTeamMembers] = useState(() => {
     if (teamMembers && teamMembers.length > 0) return teamMembers;
-    return names.map(n => ({ name: n, fullName: '', phone: '', active: true }));
+    return names.map(n => ({ name: n, fullName: '', phone: '', staffId: '', email: '', active: true }));
   });
   const [localEmergencyPhysicians, setLocalEmergencyPhysicians] = useState(() => emergencyPhysicians || []);
   const [isSavingTeamMembers, setIsSavingTeamMembers] = useState(false);
@@ -103,6 +103,8 @@ export default function AdminPanel({
   const [memberModalName, setMemberModalName] = useState('');
   const [memberModalFullName, setMemberModalFullName] = useState('');
   const [memberModalPhone, setMemberModalPhone] = useState('');
+  const [memberModalStaffId, setMemberModalStaffId] = useState('');
+  const [memberModalEmail, setMemberModalEmail] = useState('');
   const [memberModalActive, setMemberModalActive] = useState(true);
 
   // Keep localTeamMembers in sync with teamMembers/names prop when it changes
@@ -110,7 +112,7 @@ export default function AdminPanel({
     if (teamMembers && teamMembers.length > 0) {
       setLocalTeamMembers(teamMembers);
     } else {
-      setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+      setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', staffId: '', email: '', active: true })));
     }
   }, [teamMembers, names]);
 
@@ -137,6 +139,8 @@ export default function AdminPanel({
     setMemberModalName('');
     setMemberModalFullName('');
     setMemberModalPhone('');
+    setMemberModalStaffId('');
+    setMemberModalEmail('');
     setMemberModalActive(true);
     setIsMemberModalOpen(true);
   };
@@ -148,6 +152,8 @@ export default function AdminPanel({
     setMemberModalName(member.name);
     setMemberModalFullName(member.fullName || '');
     setMemberModalPhone(member.phone || '');
+    setMemberModalStaffId(member.staffId || '');
+    setMemberModalEmail(member.email || '');
     setMemberModalActive(member.active !== false);
     setIsMemberModalOpen(true);
   };
@@ -157,6 +163,8 @@ export default function AdminPanel({
     const cleanName = memberModalName.trim();
     const cleanFullName = memberModalFullName.trim();
     const cleanPhone = memberModalPhone.trim();
+    const cleanStaffId = memberModalStaffId.trim();
+    const cleanEmail = memberModalEmail.trim();
     if (!cleanName) return;
     const activeMembers = memberModalDirectory === 'ep' ? localEmergencyPhysicians : localTeamMembers;
 
@@ -178,6 +186,8 @@ export default function AdminPanel({
       name: cleanName,
       fullName: cleanFullName,
       phone: cleanPhone,
+      staffId: cleanStaffId,
+      email: cleanEmail,
       active: memberModalDirectory === 'team' ? memberModalActive : true,
     };
     if (memberModalMode === 'add') {
@@ -213,7 +223,7 @@ export default function AdminPanel({
       if (teamMembers && teamMembers.length > 0) {
         setLocalTeamMembers(teamMembers);
       } else {
-        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', staffId: '', email: '', active: true })));
       }
     } finally {
       setIsSavingTeamMembers(false);
@@ -233,7 +243,7 @@ export default function AdminPanel({
       if (teamMembers && teamMembers.length > 0) {
         setLocalTeamMembers(teamMembers);
       } else {
-        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', staffId: '', email: '', active: true })));
       }
     } finally {
       setIsSavingTeamMembers(false);
@@ -252,7 +262,7 @@ export default function AdminPanel({
       if (teamMembers && teamMembers.length > 0) {
         setLocalTeamMembers(teamMembers);
       } else {
-        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', active: true })));
+        setLocalTeamMembers(names.map(n => ({ name: n, fullName: '', phone: '', staffId: '', email: '', active: true })));
       }
     } finally {
       setIsSavingTeamMembers(false);
@@ -1745,6 +1755,35 @@ export default function AdminPanel({
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
                 />
               </div>
+
+              {memberModalDirectory !== 'ep' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                      Staff ID (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={memberModalStaffId}
+                      onChange={(e) => setMemberModalStaffId(e.target.value)}
+                      placeholder="e.g. 12345"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                      Email (Optional)
+                    </label>
+                    <input
+                      type="email"
+                      value={memberModalEmail}
+                      onChange={(e) => setMemberModalEmail(e.target.value)}
+                      placeholder="e.g. name@upm.edu.my"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold outline-none focus:border-indigo-400 focus:bg-white"
+                    />
+                  </div>
+                </div>
+              )}
 
               {memberModalDirectory !== 'ep' && (
                 <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">

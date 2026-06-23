@@ -122,3 +122,53 @@ export function normalizeActivities(rawActivities) {
         .filter((activity) => activity.ID && activity.ID.trim().toLowerCase() !== 'id' && (activity.CustomText || activity.Name))
     : [];
 }
+
+export function formatNameForMemo(name) {
+  if (!name) return '';
+  let str = String(name).trim();
+  
+  // Remove leading doctor title
+  str = str.replace(/^(DR\.|DR\s|Dr\.|Dr\s)/i, '').trim();
+  
+  // Convert to title case
+  return str.toLowerCase().split(' ').map(word => {
+    // Preserve common particles normally if desired, but simple title case works for 'Bin', 'Binti', 'Md', etc.
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }).join(' ');
+}
+
+export function resolveTeamMemberProfile(selectedName, teamMembers) {
+  const defaultProfile = {
+    name: selectedName,
+    fullName: '',
+    staffId: '',
+    phone: '',
+    email: ''
+  };
+  
+  if (!Array.isArray(teamMembers) || !selectedName) {
+    return defaultProfile;
+  }
+  
+  const targetKey = mapName(selectedName).toLowerCase();
+  
+  const match = teamMembers.find(m => {
+    if (!m) return false;
+    const nameStr = typeof m === 'string' ? m : m.name;
+    return mapName(nameStr).toLowerCase() === targetKey;
+  });
+  
+  if (!match) return defaultProfile;
+  
+  if (typeof match === 'string') {
+    return { ...defaultProfile, name: match };
+  }
+  
+  return {
+    name: match.name || selectedName,
+    fullName: match.fullName || '',
+    staffId: match.staffId || '',
+    phone: match.phone || '',
+    email: match.email || ''
+  };
+}

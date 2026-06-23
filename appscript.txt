@@ -194,6 +194,8 @@ function getDirectoryMembersData(sheetName) {
   let fullNameIndex = headers.indexOf('FullName');
   let phoneIndex = headers.indexOf('Phone');
   let activeIndex = headers.indexOf('Active');
+  let staffIdIndex = headers.indexOf('StaffId');
+  let emailIndex = headers.indexOf('Email');
 
   // Automatically migrate/ensure columns exist in sheet if they are missing from headers
   let changed = false;
@@ -220,6 +222,18 @@ function getDirectoryMembersData(sheetName) {
     activeIndex = colPos - 1;
     changed = true;
   }
+  if (staffIdIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('StaffId');
+    staffIdIndex = colPos - 1;
+    changed = true;
+  }
+  if (emailIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Email');
+    emailIndex = colPos - 1;
+    changed = true;
+  }
 
   // Refetch rows if we changed headers so we have updated data dimensions
   const finalRows = changed ? sheet.getDataRange().getValues() : rows;
@@ -239,15 +253,19 @@ function getDirectoryMembersData(sheetName) {
     if (seen.has(name.toLowerCase())) continue;
     seen.add(name.toLowerCase());
 
-    const fullName = fullNameIndex < finalRows[i].length ? String(finalRows[i][fullNameIndex] || '').trim() : '';
-    const phone = phoneIndex < finalRows[i].length ? String(finalRows[i][phoneIndex] || '').trim() : '';
-    const rawActive = activeIndex < finalRows[i].length ? finalRows[i][activeIndex] : '';
+    const fullName = fullNameIndex < finalRows[i].length && fullNameIndex !== -1 ? String(finalRows[i][fullNameIndex] || '').trim() : '';
+    const phone = phoneIndex < finalRows[i].length && phoneIndex !== -1 ? String(finalRows[i][phoneIndex] || '').trim() : '';
+    const staffId = staffIdIndex < finalRows[i].length && staffIdIndex !== -1 ? String(finalRows[i][staffIdIndex] || '').trim() : '';
+    const email = emailIndex < finalRows[i].length && emailIndex !== -1 ? String(finalRows[i][emailIndex] || '').trim() : '';
+    const rawActive = activeIndex < finalRows[i].length && activeIndex !== -1 ? finalRows[i][activeIndex] : '';
     const activeValue = (rawActive !== undefined && rawActive !== null) ? String(rawActive).trim().toLowerCase() : '';
 
     members.push({
       name: name,
       fullName: fullName,
       phone: phone,
+      staffId: staffId,
+      email: email,
       active: activeValue === '' ? true : !['false', 'inactive', 'no', '0'].includes(activeValue)
     });
   }
@@ -1099,6 +1117,8 @@ function handleUpdateDirectoryMembers(data, sheetName) {
   let fullNameIndex = headers.indexOf('FullName');
   let phoneIndex = headers.indexOf('Phone');
   let activeIndex = headers.indexOf('Active');
+  let staffIdIndex = headers.indexOf('StaffId');
+  let emailIndex = headers.indexOf('Email');
 
   if (nameIndex === -1) {
     sheet.getRange(1, 1).setValue('MemberName');
@@ -1119,6 +1139,16 @@ function handleUpdateDirectoryMembers(data, sheetName) {
     sheet.getRange(1, colPos).setValue('Active');
     activeIndex = colPos - 1;
   }
+  if (staffIdIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('StaffId');
+    staffIdIndex = colPos - 1;
+  }
+  if (emailIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Email');
+    emailIndex = colPos - 1;
+  }
 
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) {
@@ -1134,6 +1164,8 @@ function handleUpdateDirectoryMembers(data, sheetName) {
       let name = '';
       let fullName = '';
       let phone = '';
+      let staffId = '';
+      let email = '';
       let active = true;
 
       if (typeof m === 'string') {
@@ -1142,6 +1174,8 @@ function handleUpdateDirectoryMembers(data, sheetName) {
         name = String(m.name || '').trim();
         fullName = String(m.fullName || '').trim();
         phone = String(m.phone || '').trim();
+        staffId = String(m.staffId || '').trim();
+        email = String(m.email || '').trim();
         active = m.active === undefined || m.active === null ? true : m.active !== false;
       }
 
@@ -1149,12 +1183,14 @@ function handleUpdateDirectoryMembers(data, sheetName) {
         seen.add(name.toLowerCase());
         const row = [];
         row[nameIndex] = name;
-        row[fullNameIndex] = fullName;
-        row[phoneIndex] = phone;
-        row[activeIndex] = active ? 'TRUE' : 'FALSE';
+        if (fullNameIndex !== -1) row[fullNameIndex] = fullName;
+        if (phoneIndex !== -1) row[phoneIndex] = phone;
+        if (staffIdIndex !== -1) row[staffIdIndex] = staffId;
+        if (emailIndex !== -1) row[emailIndex] = email;
+        if (activeIndex !== -1) row[activeIndex] = active ? 'TRUE' : 'FALSE';
         
         // Fill empty indices to avoid array sparsity issues
-        const maxIdx = Math.max(nameIndex, fullNameIndex, phoneIndex, activeIndex);
+        const maxIdx = Math.max(nameIndex, fullNameIndex, phoneIndex, activeIndex, staffIdIndex, emailIndex);
         for (let i = 0; i <= maxIdx; i++) {
           if (row[i] === undefined) {
             row[i] = '';
