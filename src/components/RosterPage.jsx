@@ -84,6 +84,12 @@ const getColumnStyle = (col) => {
         cellColor: 'text-indigo-700',
         cellBg: 'bg-indigo-50/30'
       };
+    case 'EMPTY':
+      return {
+        headerClass: 'bg-slate-100/60 text-slate-500 min-w-[4.5rem]',
+        cellColor: 'text-slate-500',
+        cellBg: 'bg-slate-50/50'
+      };
     default:
       return {
         headerClass: 'bg-slate-100/60 text-slate-700 min-w-[3.8rem]',
@@ -337,7 +343,7 @@ export default function RosterPage({
 
   // Dynamic shift columns for Individual Member Shift Tally
   const memberTallyColumns = useMemo(() => {
-    const core = ['AM', 'PM', 'NIGHT'];
+    const core = ['EMPTY', 'AM', 'PM', 'NIGHT'];
     const others = [];
     dropdownShifts.forEach((s) => {
       if (!s) return;
@@ -1256,7 +1262,13 @@ export default function RosterPage({
           }
         }
 
-        if (!val) return;
+        if (!val) {
+          const entry = memberMap.get(nameKey);
+          if (entry && entry.counts['EMPTY'] !== undefined) {
+            entry.counts['EMPTY'] += 1;
+          }
+          return;
+        }
         const shiftVals = val.split(',').map(s => s.trim()).filter(Boolean);
         shiftVals.forEach(singleVal => {
           const { cleanShift } = parseShiftValue(singleVal);
