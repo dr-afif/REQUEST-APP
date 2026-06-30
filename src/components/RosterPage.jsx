@@ -700,6 +700,7 @@ export default function RosterPage({
         setIsStandbyEditMode(false);
         setIsExtendedEditMode(false);
         setIsExcelTableEditMode(false);
+        setAllowDoubleShift(false);
         setEditedGrid({});
       }
     } else {
@@ -716,6 +717,7 @@ export default function RosterPage({
         setIsStandbyEditMode(false);
         setIsExtendedEditMode(false);
         setIsExcelTableEditMode(false);
+        setAllowDoubleShift(false);
         setEditedGrid({});
       }
     } else {
@@ -733,6 +735,7 @@ export default function RosterPage({
         setIsStandbyEditMode(false);
         setIsExtendedEditMode(false);
         setIsExcelTableEditMode(false);
+        setAllowDoubleShift(false);
         setEditedGrid({});
       }
     } else {
@@ -750,6 +753,7 @@ export default function RosterPage({
         setIsStandbyEditMode(false);
         setIsExtendedEditMode(false);
         setIsExcelTableEditMode(false);
+        setAllowDoubleShift(false);
         setEditedGrid({});
       }
     } else {
