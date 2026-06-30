@@ -120,10 +120,12 @@ const splitRosterNames = (value) => String(value || '')
   .filter(Boolean);
 
 // Helper to clean up any duplicate name assignments on the same day when a standard shift (AM, PM, NIGHT) is modified
-const cleanDayDataForNameOverlap = (dayData, modifiedShiftCol, newValue) => {
+const cleanDayDataForNameOverlap = (dayData, modifiedShiftCol, newValue, allowDoubleShift = false) => {
   const nextDayData = { ...dayData };
   nextDayData[modifiedShiftCol] = newValue;
   
+  if (allowDoubleShift) return nextDayData;
+
   const newNames = newValue
     ? newValue.split(/[\n,]+/).map(n => n.trim()).filter(Boolean)
     : [];
@@ -173,6 +175,7 @@ export default function RosterPage({
   const [isStandbyEditMode, setIsStandbyEditMode] = useState(false);
   const [isExtendedEditMode, setIsExtendedEditMode] = useState(false);
   const [isExcelTableEditMode, setIsExcelTableEditMode] = useState(false);
+  const [allowDoubleShift, setAllowDoubleShift] = useState(false);
   const [editedGrid, setEditedGrid] = useState({});
   const [activeTab, setActiveTab] = useState('calendar'); // 'calendar' or 'table'
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -412,7 +415,12 @@ export default function RosterPage({
       if (!map.has(nameKey)) {
         map.set(nameKey, new Map());
       }
-      map.get(nameKey).set(dateStr, shiftRaw);
+      const existing = map.get(nameKey).get(dateStr);
+      if (existing) {
+        map.get(nameKey).set(dateStr, existing + ',' + shiftRaw);
+      } else {
+        map.get(nameKey).set(dateStr, shiftRaw);
+      }
     });
     return map;
   }, [masterRoster]);
@@ -929,7 +937,7 @@ export default function RosterPage({
         });
       }
       
-      const nextDayData = cleanDayDataForNameOverlap(cleanedDayData, shiftCol, value);
+      const nextDayData = cleanDayDataForNameOverlap(cleanedDayData, shiftCol, value, allowDoubleShift);
       return {
         ...prev,
         [dateStr]: nextDayData
@@ -949,9 +957,9 @@ export default function RosterPage({
       return namesStr.split(/[\n,]+/).some(n => normalizeForComparison(n) === normalizedName);
     };
 
-    // Find which key in dayData contains the doctorName
-    const assignedShift = Object.keys(dayData).find((shiftKey) => checkNameInList(dayData[shiftKey]));
-    return assignedShift || '';
+    // Find all keys in dayData containing the doctorName
+    const assignedShifts = Object.keys(dayData).filter((shiftKey) => checkNameInList(dayData[shiftKey]));
+    return assignedShifts.join(',') || '';
   };
 
   // 1.3 Handle Table View dropdown select shifts change
@@ -980,7 +988,7 @@ export default function RosterPage({
       // 1. Remove doctorName from ALL keys (shifts) in dayData
       const nextDayData = {};
       Object.keys(dayData).forEach((shiftKey) => {
-        nextDayData[shiftKey] = removeNameFromList(dayData[shiftKey]);
+        nextDayData[shiftKey] = allowDoubleShift ? dayData[shiftKey] : removeNameFromList(dayData[shiftKey]);
       });
 
       // 2. Add to new shift if newShift is not empty
@@ -1044,6 +1052,7 @@ export default function RosterPage({
     const rosterTable = rosterDiv.querySelector('table');
     if (!rosterTable) return;
 
+    let lastWidths = [];
     const syncWidths = () => {
       const tallyDiv = tallyScrollRef.current;
       if (!tallyDiv) return;
@@ -1052,16 +1061,31 @@ export default function RosterPage({
       const tallyHeaders = tallyDiv.querySelectorAll('thead th');
 
       const minLength = Math.min(rosterHeaders.length, tallyHeaders.length);
+      
+      let changed = false;
+      const newWidths = [];
       for (let i = 0; i < minLength; i++) {
         const rosterWidth = rosterHeaders[i].getBoundingClientRect().width;
-        tallyHeaders[i].style.width = `${rosterWidth}px`;
-        tallyHeaders[i].style.minWidth = `${rosterWidth}px`;
-        tallyHeaders[i].style.maxWidth = `${rosterWidth}px`;
+        newWidths.push(rosterWidth);
+        if (lastWidths.length === 0 || Math.abs(lastWidths[i] - rosterWidth) > 1) {
+          changed = true;
+        }
+      }
+      
+      if (!changed) return;
+      lastWidths = newWidths;
+
+      for (let i = 0; i < minLength; i++) {
+        tallyHeaders[i].style.width = `${newWidths[i]}px`;
+        tallyHeaders[i].style.minWidth = `${newWidths[i]}px`;
+        tallyHeaders[i].style.maxWidth = `${newWidths[i]}px`;
       }
     };
 
     const observer = new ResizeObserver(() => {
-      syncWidths();
+      window.requestAnimationFrame(() => {
+        syncWidths();
+      });
     });
 
     observer.observe(rosterTable);
@@ -1126,20 +1150,23 @@ export default function RosterPage({
         }
 
         if (val) {
-          const { cleanShift } = parseShiftValue(val);
-          let shiftType = cleanShift.toUpperCase();
-          if (shiftType === 'ON' || shiftType === 'ON1' || shiftType === 'ON2' || shiftType === 'N') {
-            shiftType = 'NIGHT';
-          }
+          const shiftVals = val.split(',').map(s => s.trim()).filter(Boolean);
+          shiftVals.forEach(singleVal => {
+            const { cleanShift } = parseShiftValue(singleVal);
+            let shiftType = cleanShift.toUpperCase();
+            if (shiftType === 'ON' || shiftType === 'ON1' || shiftType === 'ON2' || shiftType === 'N') {
+              shiftType = 'NIGHT';
+            }
 
-          // If inactive, only count active shifts (AM, PM, NIGHT, PN, OH), ignore leave shifts (AL, OFF, etc.)
-          const isActiveShift = ['AM', 'PM', 'NIGHT', 'PN', 'OH'].includes(shiftType);
-          if (isInactive && !isActiveShift) {
-            return;
-          }
+            // If inactive, only count active shifts (AM, PM, NIGHT, PN, OH), ignore leave shifts (AL, OFF, etc.)
+            const isActiveShift = ['AM', 'PM', 'NIGHT', 'PN', 'OH'].includes(shiftType);
+            if (isInactive && !isActiveShift) {
+              return;
+            }
 
-          dayTally.set(shiftType, (dayTally.get(shiftType) || 0) + 1);
-          activeShiftTypes.add(shiftType);
+            dayTally.set(shiftType, (dayTally.get(shiftType) || 0) + 1);
+            activeShiftTypes.add(shiftType);
+          });
         } else {
           if (!isInactive) {
             blankCount++;
@@ -1226,20 +1253,23 @@ export default function RosterPage({
         }
 
         if (!val) return;
-        const { cleanShift } = parseShiftValue(val);
-        const shiftType = normalizeShiftType(cleanShift);
+        const shiftVals = val.split(',').map(s => s.trim()).filter(Boolean);
+        shiftVals.forEach(singleVal => {
+          const { cleanShift } = parseShiftValue(singleVal);
+          const shiftType = normalizeShiftType(cleanShift);
 
-        const entry = memberMap.get(nameKey);
-        if (!entry) return;
+          const entry = memberMap.get(nameKey);
+          if (!entry) return;
 
-        if (entry.counts[shiftType] !== undefined) {
-          entry.counts[shiftType] += 1;
-        }
-        
-        // Total Leaves: everything except AM/PM/NIGHT/PN/OH
-        if (!LEAVE_EXCLUDES.has(shiftType)) {
-          entry.counts.TOTAL_LEAVE += 1;
-        }
+          if (entry.counts[shiftType] !== undefined) {
+            entry.counts[shiftType] += 1;
+          }
+          
+          // Total Leaves: everything except AM/PM/NIGHT/PN/OH
+          if (!LEAVE_EXCLUDES.has(shiftType)) {
+            entry.counts.TOTAL_LEAVE += 1;
+          }
+        });
       });
     });
 
@@ -1329,7 +1359,8 @@ export default function RosterPage({
             nextGrid[dateStr] = cleanDayDataForNameOverlap(
               nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' },
               shiftCol,
-              cleanVal.trim()
+              cleanVal.trim(),
+              allowDoubleShift
             );
           }
         });
@@ -1408,7 +1439,7 @@ export default function RosterPage({
 
           // Remove this doctor from all shift keys on this day
           Object.keys(dayData).forEach((shiftKey) => {
-            nextDayData[shiftKey] = removeNameFromList(dayData[shiftKey]);
+            nextDayData[shiftKey] = allowDoubleShift ? dayData[shiftKey] : removeNameFromList(dayData[shiftKey]);
           });
 
           // Add to new shift if it's a non-empty value
@@ -1721,12 +1752,27 @@ export default function RosterPage({
               </button>
             )}
             {(isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) && (
-              <button
-                onClick={handleSave}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-70"
-              >
-                💾 Save Changes
-              </button>
+              <>
+                {(isEditMode || isExcelTableEditMode) && (
+                  <button
+                    onClick={() => setAllowDoubleShift(!allowDoubleShift)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                      allowDoubleShift 
+                        ? 'bg-rose-50 text-rose-700 border border-rose-300 ring-2 ring-rose-200' 
+                        : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
+                    }`}
+                    title="Allow a person to be assigned to multiple shifts on the same day"
+                  >
+                    {allowDoubleShift ? '🔓 Double Shift Allowed' : '🔒 Prevent Double Booking'}
+                  </button>
+                )}
+                <button
+                  onClick={handleSave}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-70"
+                >
+                  💾 Save Changes
+                </button>
+              </>
             )}
           </div>
         )}
