@@ -38,6 +38,8 @@ import {
   updateSetting,
   updateTeamMembers,
   updateEmergencyPhysicians,
+  upsertPublicHoliday,
+  deletePublicHoliday,
 } from './api';
 import {
   adaptRequestsResponse,
@@ -49,6 +51,7 @@ import {
 } from './utils/adapters';
 import { hasCacheValue, readCache, writeCacheEntries } from './utils/cache';
 import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
+import { applyCustomPublicHolidays, normalizePublicHolidays } from './utils/holidays';
 
 const REFRESH_INTERVAL = 60 * 1000; // 1 minute
 
@@ -130,6 +133,11 @@ export default function App() {
   
   const [teamMembers, setTeamMembers] = useState(() => readCache('resq_cache_teamMembers', []));
   const [emergencyPhysicians, setEmergencyPhysicians] = useState(() => readCache('resq_cache_emergencyPhysicians', []));
+  const [publicHolidays, setPublicHolidays] = useState(() => {
+    const cached = normalizePublicHolidays(readCache('resq_cache_publicHolidays', []));
+    applyCustomPublicHolidays(cached);
+    return cached;
+  });
   const [teamMembersError, setTeamMembersError] = useState('');
   const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(() => !hasCacheValue('resq_cache_teamMembers'));
 
@@ -228,6 +236,7 @@ export default function App() {
       let rawShiftTypes = [];
       let rawLimitGroups = [];
       let rawActivities = [];
+      let rawPublicHolidays = [];
 
       if (Array.isArray(response)) {
         // 🚨 Legacy / Un-deployed Apps Script detected! 
@@ -259,6 +268,7 @@ export default function App() {
         rawShiftTypes = response.shiftTypes || [];
         rawLimitGroups = response.limitGroups || [];
         rawActivities = response.activityHistory || response.activities || [];
+        rawPublicHolidays = response.publicHolidays || [];
         if (response.settings) {
           setSettings(response.settings);
         }
@@ -294,6 +304,11 @@ export default function App() {
       const validActivities = normalizeActivities(rawActivities);
       setActivities(validActivities);
 
+      // Merge Google Sheets-managed holidays over the built-in Selangor calendar.
+      const validPublicHolidays = normalizePublicHolidays(rawPublicHolidays);
+      applyCustomPublicHolidays(validPublicHolidays);
+      setPublicHolidays(validPublicHolidays);
+
       // Keep cache keys stable; existing sessions depend on them for startup.
       try {
         writeCacheEntries([
@@ -305,6 +320,7 @@ export default function App() {
           ['resq_cache_shiftTypes', validShiftTypes],
           ['resq_cache_limitGroups', validLimitGroups],
           ['resq_cache_activities', validActivities],
+          ['resq_cache_publicHolidays', validPublicHolidays],
         ]);
         if (response && typeof response === 'object' && response.settings) {
           writeCacheEntries([['resq_cache_settings', response.settings]]);
@@ -942,6 +958,67 @@ export default function App() {
     })();
   };
 
+  const handleUpsertPublicHoliday = async ({ date, name }) => {
+    const normalizedDate = toIsoDate(date) || date;
+    const cleanName = String(name || '').trim();
+    const previousPublicHolidays = [...publicHolidays];
+    const nextPublicHolidays = normalizePublicHolidays([
+      ...publicHolidays.filter((holiday) => holiday.Date !== normalizedDate),
+      { ID: normalizedDate, Date: normalizedDate, Name: cleanName, Active: true },
+    ]);
+
+    applyCustomPublicHolidays(nextPublicHolidays);
+    setPublicHolidays(nextPublicHolidays);
+    const toastId = addToast('Saving public holiday...', 'info', Infinity);
+
+    try {
+      await upsertPublicHoliday({ date: normalizedDate, name: cleanName });
+      updateToast(toastId, {
+        message: 'Public holiday saved.',
+        type: 'success',
+        duration: 3000,
+      });
+      await loadAllData();
+    } catch (error) {
+      applyCustomPublicHolidays(previousPublicHolidays);
+      setPublicHolidays(previousPublicHolidays);
+      updateToast(toastId, {
+        message: `Failed to save public holiday: ${error.message || 'Network error'}. Reverted.`,
+        type: 'error',
+        duration: 5000,
+      });
+      throw error;
+    }
+  };
+
+  const handleDeletePublicHoliday = async (date) => {
+    const previousPublicHolidays = [...publicHolidays];
+    const nextPublicHolidays = publicHolidays.filter((holiday) => holiday.Date !== date);
+
+    applyCustomPublicHolidays(nextPublicHolidays);
+    setPublicHolidays(nextPublicHolidays);
+    const toastId = addToast('Removing public holiday...', 'info', Infinity);
+
+    try {
+      await deletePublicHoliday(date);
+      updateToast(toastId, {
+        message: 'Public holiday removed.',
+        type: 'success',
+        duration: 3000,
+      });
+      await loadAllData();
+    } catch (error) {
+      applyCustomPublicHolidays(previousPublicHolidays);
+      setPublicHolidays(previousPublicHolidays);
+      updateToast(toastId, {
+        message: `Failed to remove public holiday: ${error.message || 'Network error'}. Reverted.`,
+        type: 'error',
+        duration: 5000,
+      });
+      throw error;
+    }
+  };
+
   const activeRequests = useMemo(() => {
     return requests.filter((request) => request.status?.toLowerCase() === 'active');
   }, [requests]);
@@ -1100,6 +1177,9 @@ export default function App() {
               onUpdateSetting={handleUpdateSetting}
               onUpdateTeamMembers={handleUpdateTeamMembers}
               onUpdateEmergencyPhysicians={handleUpdateEmergencyPhysicians}
+              publicHolidays={publicHolidays}
+              onUpsertPublicHoliday={handleUpsertPublicHoliday}
+              onDeletePublicHoliday={handleDeletePublicHoliday}
             />
           </div>
         )}

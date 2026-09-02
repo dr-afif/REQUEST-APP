@@ -7,6 +7,7 @@ const SHIFT_TYPES_SHEET_NAME = 'ShiftTypes';
 const LIMIT_GROUPS_SHEET_NAME = 'LimitGroups';
 const ACTIVITY_HISTORY_SHEET_NAME = 'ActivityHistory';
 const SETTINGS_SHEET_NAME = 'Settings';
+const PUBLIC_HOLIDAYS_SHEET_NAME = 'PublicHolidays';
 
 const STATUS_ACTIVE = 'Active';
 const STATUS_OLD = 'Old Request';
@@ -43,6 +44,9 @@ function doGet(e) {
     }
     if (action === 'activityhistory') {
       return createJsonResponse(getActivityHistoryData());
+    }
+    if (action === 'publicholidays') {
+      return createJsonResponse(getPublicHolidaysData());
     }
     return getRequestsResponse();
   } catch (error) {
@@ -112,6 +116,12 @@ function doPost(e) {
     if (action === 'updateemergencyphysicians') {
       return handleUpdateEmergencyPhysicians(payload);
     }
+    if (action === 'upsertpublicholiday') {
+      return handleUpsertPublicHoliday(payload);
+    }
+    if (action === 'deletepublicholiday') {
+      return handleDeletePublicHoliday(payload);
+    }
 
     throw new Error('Unknown action: ' + action);
   } catch (error) {
@@ -129,7 +139,8 @@ function getAllDataResponse() {
     shiftTypes: getShiftTypesData(),
     limitGroups: getLimitGroupsData(),
     activityHistory: getActivityHistoryData(),
-    settings: getSettingsData()
+    settings: getSettingsData(),
+    publicHolidays: getPublicHolidaysData()
   });
 }
 
@@ -844,6 +855,121 @@ function handleDeleteLimitGroup(data) {
   }
 
   return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function ensureSpecificHeaders(sheet, headers, requiredHeaders) {
+  const extendedHeaders = [...headers];
+  let modified = false;
+  requiredHeaders.forEach((header) => {
+    if (extendedHeaders.indexOf(header) === -1) {
+      extendedHeaders.push(header);
+      modified = true;
+    }
+  });
+  if (modified) {
+    sheet.getRange(1, 1, 1, extendedHeaders.length).setValues([extendedHeaders]);
+  }
+  return extendedHeaders;
+}
+
+function getPublicHolidaysData() {
+  const sheet = createSheetIfNotExist(PUBLIC_HOLIDAYS_SHEET_NAME, ['ID', 'Date', 'Name', 'Active']);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = ensureSpecificHeaders(sheet, values[0], ['ID', 'Date', 'Name', 'Active']);
+  const displayRows = sheet.getRange(2, 1, values.length - 1, headers.length).getDisplayValues();
+
+  return displayRows.map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    const rawActive = String(record.Active || '').trim().toLowerCase();
+    record.Active = !['false', 'inactive', 'no', '0'].includes(rawActive);
+    return record;
+  }).filter((record) => record.Date && record.Name);
+}
+
+function handleUpsertPublicHoliday(data) {
+  const date = String(data.date || data.Date || '').trim();
+  const name = String(data.name || data.Name || '').trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('Public holiday date must use YYYY-MM-DD format.');
+  }
+  if (!name) {
+    throw new Error('Public holiday name is required.');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = createSheetIfNotExist(PUBLIC_HOLIDAYS_SHEET_NAME, ['ID', 'Date', 'Name', 'Active']);
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], ['ID', 'Date', 'Name', 'Active']);
+    const indexes = buildHeaderIndex(headers);
+    let targetRow = -1;
+
+    for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+      if (String(values[rowIndex][indexes.Date] || '').trim() === date) {
+        targetRow = rowIndex + 1;
+        break;
+      }
+    }
+
+    if (targetRow > 0) {
+      sheet.getRange(targetRow, indexes.Date + 1).setNumberFormat('@').setValue(date);
+      sheet.getRange(targetRow, indexes.Name + 1).setValue(name);
+      sheet.getRange(targetRow, indexes.Active + 1).setValue(true);
+    } else {
+      const row = buildRowFromHeaders(headers, {
+        ID: Date.now(),
+        Date: date,
+        Name: name,
+        Active: true
+      });
+      sheet.appendRow(row);
+      sheet.getRange(sheet.getLastRow(), indexes.Date + 1).setNumberFormat('@').setValue(date);
+    }
+
+    return createJsonResponse({ result: 'success', date, name });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleDeletePublicHoliday(data) {
+  const date = String(data.date || data.Date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('A valid public holiday date is required.');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getSheetByName(PUBLIC_HOLIDAYS_SHEET_NAME);
+    if (!sheet) {
+      throw new Error('Public holiday was not found.');
+    }
+
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], ['ID', 'Date', 'Name', 'Active']);
+    const indexes = buildHeaderIndex(headers);
+
+    for (let rowIndex = values.length - 1; rowIndex >= 1; rowIndex--) {
+      if (String(values[rowIndex][indexes.Date] || '').trim() === date) {
+        sheet.deleteRow(rowIndex + 1);
+        return createJsonResponse({ result: 'success', date });
+      }
+    }
+
+    throw new Error('Public holiday was not found.');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function parseRequestBody(e) {

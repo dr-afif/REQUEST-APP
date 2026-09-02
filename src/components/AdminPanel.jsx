@@ -27,6 +27,9 @@ export default function AdminPanel({
   onUpdateSetting,
   onUpdateTeamMembers,
   onUpdateEmergencyPhysicians,
+  publicHolidays = [],
+  onUpsertPublicHoliday,
+  onDeletePublicHoliday,
 }) {
 
   // Shift block inputs
@@ -84,6 +87,10 @@ export default function AdminPanel({
     return `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
   });
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
+  const [holidayDate, setHolidayDate] = useState('');
+  const [holidayName, setHolidayName] = useState('');
+  const [editingHolidayDate, setEditingHolidayDate] = useState('');
+  const [isSavingHoliday, setIsSavingHoliday] = useState(false);
 
   // Team members states
   const [localTeamMembers, setLocalTeamMembers] = useState(() => {
@@ -532,6 +539,27 @@ export default function AdminPanel({
       alert(err.message || 'Failed to update settings');
     } finally {
       setIsUpdatingSettings(false);
+    }
+  };
+
+  const resetHolidayForm = () => {
+    setHolidayDate('');
+    setHolidayName('');
+    setEditingHolidayDate('');
+  };
+
+  const handleSavePublicHoliday = async (event) => {
+    event.preventDefault();
+    if (!holidayDate || !holidayName.trim() || !onUpsertPublicHoliday) return;
+
+    setIsSavingHoliday(true);
+    try {
+      await onUpsertPublicHoliday({ date: holidayDate, name: holidayName.trim() });
+      resetHolidayForm();
+    } catch (error) {
+      // App-level toast already explains the backend error and rollback.
+    } finally {
+      setIsSavingHoliday(false);
     }
   };
 
@@ -1598,6 +1626,122 @@ export default function AdminPanel({
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* 🔧 Global Portal Settings */}
+      <div className={`${activeAdminPage === 'rules' ? 'mt-8' : 'hidden'} rounded-3xl border border-slate-100 bg-white p-6 shadow-sm`}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-xl font-bold text-slate-800">
+              <APP_ICONS.calendar className="h-6 w-6" /> Public Holidays
+            </h2>
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+              Add announced or replacement holidays that are not in the built-in Selangor calendar. Saved entries apply to the roster, analytics, PDF export, and GHKA tracker.
+            </p>
+          </div>
+          <span className="inline-flex w-fit rounded-full bg-teal-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-teal-700">
+            Google Sheets managed
+          </span>
+        </div>
+
+        <form onSubmit={handleSavePublicHoliday} className="mt-6 grid gap-4 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.6fr)_auto] sm:items-end">
+          <div>
+            <label htmlFor="public-holiday-date" className="block text-xs font-bold uppercase tracking-wider text-slate-500">
+              Holiday date
+            </label>
+            <input
+              id="public-holiday-date"
+              type="date"
+              value={holidayDate}
+              disabled={Boolean(editingHolidayDate)}
+              onChange={(event) => setHolidayDate(event.target.value)}
+              required
+              className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="public-holiday-name" className="block text-xs font-bold uppercase tracking-wider text-slate-500">
+              Holiday name
+            </label>
+            <input
+              id="public-holiday-name"
+              type="text"
+              value={holidayName}
+              onChange={(event) => setHolidayName(event.target.value)}
+              placeholder="e.g. Special Public Holiday"
+              required
+              className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={isSavingHoliday || !holidayDate || !holidayName.trim()}
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-300 disabled:cursor-not-allowed disabled:bg-teal-300"
+          >
+            {isSavingHoliday ? 'Saving...' : editingHolidayDate ? 'Update holiday' : 'Add holiday'}
+          </button>
+        </form>
+
+        {editingHolidayDate && (
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+            <span>Editing the holiday on <strong>{editingHolidayDate}</strong>.</span>
+            <button type="button" onClick={resetHolidayForm} className="min-h-11 px-3 font-bold underline underline-offset-2">
+              Cancel edit
+            </button>
+          </div>
+        )}
+
+        <div className="mt-6 border-t border-slate-100 pt-5">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Admin-added holidays</h3>
+          {publicHolidays.length > 0 ? (
+            <div className="mt-3 divide-y divide-slate-100">
+              {publicHolidays.map((holiday) => (
+                <div key={holiday.Date} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">{holiday.Name}</p>
+                    <p className="mt-0.5 text-xs font-semibold tabular-nums text-slate-500">
+                      {new Date(`${holiday.Date}T00:00:00`).toLocaleDateString('en-MY', {
+                        weekday: 'short', day: '2-digit', month: 'short', year: 'numeric'
+                      })}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHolidayDate(holiday.Date);
+                        setHolidayName(holiday.Name);
+                        setEditingHolidayDate(holiday.Date);
+                      }}
+                      className="min-h-11 flex-1 rounded-xl border border-slate-200 px-4 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-200 sm:flex-none"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!confirm(`Remove ${holiday.Name} on ${holiday.Date}?`)) return;
+                        try {
+                          await onDeletePublicHoliday?.(holiday.Date);
+                          if (editingHolidayDate === holiday.Date) resetHolidayForm();
+                        } catch (error) {
+                          // App-level toast already explains the backend error and rollback.
+                        }
+                      }}
+                      className="min-h-11 flex-1 rounded-xl border border-rose-200 bg-rose-50 px-4 text-xs font-bold text-rose-700 transition hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-200 sm:flex-none"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-xl bg-slate-50 px-3 py-4 text-sm text-slate-500">
+              No additional holidays have been added. The built-in Selangor calendar remains active.
+            </p>
+          )}
         </div>
       </div>
 

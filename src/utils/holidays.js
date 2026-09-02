@@ -1,4 +1,4 @@
-export const HOLIDAYS = {
+const BUILT_IN_HOLIDAYS = {
   // 2025 Selangor Public Holidays
   '2025-01-01': "New Year's Day",
   '2025-01-29': "Chinese New Year",
@@ -44,6 +44,47 @@ export const HOLIDAYS = {
   '2026-11-09': "Deepavali Holiday",
   '2026-12-11': "Sultan of Selangor's Birthday",
   '2026-12-25': "Christmas Day",
+};
+
+// Runtime map used throughout the app. Admin-managed rows from the
+// PublicHolidays sheet are applied on top of the built-in Selangor calendar.
+export const HOLIDAYS = { ...BUILT_IN_HOLIDAYS };
+
+const isActiveHolidayRow = (row) => {
+  const rawActive = row?.Active ?? row?.active;
+  if (rawActive === undefined || rawActive === null || rawActive === '') return true;
+  return !['false', 'inactive', 'no', '0'].includes(String(rawActive).trim().toLowerCase());
+};
+
+export const normalizePublicHolidays = (rows = []) => {
+  if (!Array.isArray(rows)) return [];
+
+  const byDate = new Map();
+  rows.forEach((row) => {
+    const date = String(row?.Date || row?.date || row?.HolidayDate || '').trim();
+    const name = String(row?.Name || row?.name || row?.HolidayName || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !name) return;
+
+    byDate.set(date, {
+      ID: String(row?.ID || row?.id || date),
+      Date: date,
+      Name: name,
+      Active: isActiveHolidayRow(row),
+    });
+  });
+
+  return Array.from(byDate.values()).sort((a, b) => a.Date.localeCompare(b.Date));
+};
+
+export const applyCustomPublicHolidays = (rows = []) => {
+  Object.keys(HOLIDAYS).forEach((date) => delete HOLIDAYS[date]);
+  Object.assign(HOLIDAYS, BUILT_IN_HOLIDAYS);
+
+  normalizePublicHolidays(rows).forEach((holiday) => {
+    if (holiday.Active) HOLIDAYS[holiday.Date] = holiday.Name;
+  });
+
+  return HOLIDAYS;
 };
 
 export const getHolidayName = (dateStr) => {

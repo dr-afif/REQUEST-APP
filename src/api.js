@@ -169,3 +169,11 @@ export async function updateTeamMembers(members) {
 export async function updateEmergencyPhysicians(members) {
   return request({ method: 'POST', body: { action: 'updateemergencyphysicians', members } });
 }
+
+export async function upsertPublicHoliday(payload) {
+  return request({ method: 'POST', body: { action: 'upsertpublicholiday', ...payload } });
+}
+
+export async function deletePublicHoliday(date) {
+  return request({ method: 'POST', body: { action: 'deletepublicholiday', date } });
+}

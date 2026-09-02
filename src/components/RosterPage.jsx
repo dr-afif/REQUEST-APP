@@ -4,6 +4,208 @@ import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 import { mapName } from '../utils/adapters';
 import { openRosterPdfExport } from '../utils/rosterPdfExport';
 import { getHolidayName } from '../utils/holidays';
+import { APP_ICONS } from '../constants/icons';
+
+const formatEmergencyPhysicianName = (entry) => {
+  const rawName = typeof entry === 'string' ? entry : entry?.name || '';
+  const name = rawName.trim();
+  if (!name) return '';
+  return name.toLowerCase().startsWith('dr') ? name : `Dr. ${name}`;
+};
+
+const splitEmergencyPhysicianNames = (value) => String(value || '')
+  .split(/[,\n]+/)
+  .map((name) => name.trim())
+  .filter(Boolean);
+
+function EmergencyPhysicianMultiSelect({
+  id,
+  value,
+  physicians = [],
+  onChange,
+  onNavigateKeyDown,
+  isWeekend,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftNames, setDraftNames] = useState(() => splitEmergencyPhysicianNames(value));
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const options = useMemo(() => physicians
+    .map(formatEmergencyPhysicianName)
+    .filter(Boolean)
+    .filter((name, index, all) => (
+      all.findIndex((candidate) => normalizeForComparison(candidate) === normalizeForComparison(name)) === index
+    )), [physicians]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDraftNames(splitEmergencyPhysicianNames(value));
+      setSearchQuery('');
+    }
+  }, [isOpen, value]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setIsOpen(false);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen]);
+
+  const isSelected = (name) => draftNames.some(
+    (selectedName) => normalizeForComparison(selectedName) === normalizeForComparison(name)
+  );
+
+  const toggleName = (name) => {
+    setDraftNames((current) => (
+      current.some((selectedName) => normalizeForComparison(selectedName) === normalizeForComparison(name))
+        ? current.filter((selectedName) => normalizeForComparison(selectedName) !== normalizeForComparison(name))
+        : [...current, name]
+    ));
+  };
+
+  const visibleOptions = options.filter((name) => (
+    normalizeForComparison(name).includes(normalizeForComparison(searchQuery))
+  ));
+  const selectedNames = splitEmergencyPhysicianNames(value);
+
+  return (
+    <>
+      <button
+        id={id}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        aria-label={`Select emergency physicians. ${selectedNames.length} selected.`}
+        onClick={() => setIsOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setIsOpen(true);
+            return;
+          }
+          onNavigateKeyDown?.(event);
+        }}
+        className={`w-full h-full min-h-[3.5rem] px-1 py-1 text-center text-[9px] sm:text-xs font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 transition-colors hover:bg-teal-50/50 focus:bg-white cursor-pointer ${
+          isWeekend ? 'text-teal-800' : 'text-teal-700'
+        }`}
+      >
+        {selectedNames.length > 0 ? (
+          <span className="flex flex-col items-center gap-0.5">
+            {selectedNames.slice(0, 2).map((name) => <span key={name} className="leading-tight">{name}</span>)}
+            {selectedNames.length > 2 && (
+              <span className="rounded-full bg-teal-100 px-1.5 py-0.5 text-[8px] text-teal-800">
+                +{selectedNames.length - 2} more
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-slate-400">Select EP</span>
+        )}
+      </button>
+
+      {isOpen && createPortal((
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-4 backdrop-blur-sm"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${id}-title`}
+            className="w-full max-w-md rounded-3xl border border-slate-100 bg-white p-5 shadow-2xl"
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h2 id={`${id}-title`} className="text-lg font-bold text-slate-800">Emergency physicians</h2>
+                <p className="mt-1 text-xs text-slate-500">Select one or more names for this roster cell.</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close emergency physician picker"
+                onClick={() => setIsOpen(false)}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              >
+                <APP_ICONS.close className="h-5 w-5" />
+              </button>
+            </div>
+
+            <label htmlFor={`${id}-search`} className="block text-xs font-bold uppercase tracking-wider text-slate-500">
+              Search directory
+            </label>
+            <input
+              id={`${id}-search`}
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search emergency physician"
+              autoFocus
+              className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+            />
+
+            <div className="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
+              {visibleOptions.length > 0 ? visibleOptions.map((name) => (
+                <label
+                  key={name}
+                  className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                    isSelected(name)
+                      ? 'border-teal-300 bg-teal-50 text-teal-900'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected(name)}
+                    onChange={() => toggleName(name)}
+                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                  />
+                  <span>{name}</span>
+                </label>
+              )) : (
+                <p className="rounded-xl bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+                  No emergency physician matches this search.
+                </p>
+              )}
+            </div>
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+              <button
+                type="button"
+                onClick={() => setDraftNames([])}
+                className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50"
+              >
+                Clear selection
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  className="min-h-11 flex-1 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50 sm:flex-none"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(draftNames.join(', '));
+                    setIsOpen(false);
+                  }}
+                  className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-300 sm:flex-none"
+                >
+                  Apply ({draftNames.length})
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ), document.body)}
+    </>
+  );
+}
 
 // Helper to parse standby status and extended shift status from a shift name string
 const parseShiftValue = (rawVal) => {
@@ -1997,34 +2199,19 @@ export default function RosterPage({
                             isToday ? 'bg-teal-50/30' : isWeekend ? 'bg-teal-50/20' : 'bg-teal-50/10'
                           }`}>
                             {isEditMode ? (
-                              <select
+                              <EmergencyPhysicianMultiSelect
                                 id={`cell-${dayIndex}-${shiftIndex}`}
                                 value={epVal}
-                                onChange={(e) => {
-                                  const val = e.target.value;
+                                physicians={emergencyPhysicians}
+                                isWeekend={isWeekend}
+                                onChange={(val) => {
                                   setEditedGrid(prev => ({
                                     ...prev,
                                     [dateStr]: { ...(prev[dateStr] || {}), [epKey]: val }
                                   }));
                                 }}
-                                onKeyDown={(e) => handleKeyDown(e, dateStr, epKey, dayIndex, shiftIndex)}
-                                className={`w-full h-full min-h-[3.5rem] px-0.5 sm:px-4 py-1 sm:py-2 text-center text-[10px] sm:text-sm font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 transition-all hover:bg-teal-50/50 focus:bg-white overflow-hidden cursor-pointer ${
-                                  isWeekend ? 'text-teal-800' : 'text-teal-700'
-                                }`}
-                              >
-                                <option value="">-</option>
-                                {emergencyPhysicians.map((ep, idx) => {
-                                  const rawName = typeof ep === 'string' ? ep : ep?.name || '';
-                                  if (!rawName) return null;
-                                  const name = rawName.trim();
-                                  const displayName = name.toLowerCase().startsWith('dr') ? name : `Dr. ${name}`;
-                                  return (
-                                    <option key={idx} value={displayName}>
-                                      {displayName}
-                                    </option>
-                                  );
-                                })}
-                              </select>
+                                onNavigateKeyDown={(e) => handleKeyDown(e, dateStr, epKey, dayIndex, shiftIndex)}
+                              />
                             ) : (
                               <div className="flex flex-col items-center justify-center gap-0.5 sm:gap-1 py-1 sm:py-2">
                                 {epVal ? (
