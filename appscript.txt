@@ -8,6 +8,7 @@ const LIMIT_GROUPS_SHEET_NAME = 'LimitGroups';
 const ACTIVITY_HISTORY_SHEET_NAME = 'ActivityHistory';
 const SETTINGS_SHEET_NAME = 'Settings';
 const PUBLIC_HOLIDAYS_SHEET_NAME = 'PublicHolidays';
+const LEAVE_APPLICATIONS_SHEET_NAME = 'LeaveApplications';
 
 const STATUS_ACTIVE = 'Active';
 const STATUS_OLD = 'Old Request';
@@ -47,6 +48,9 @@ function doGet(e) {
     }
     if (action === 'publicholidays') {
       return createJsonResponse(getPublicHolidaysData());
+    }
+    if (action === 'leaveapplications') {
+      return createJsonResponse(getLeaveApplicationsData());
     }
     return getRequestsResponse();
   } catch (error) {
@@ -122,6 +126,12 @@ function doPost(e) {
     if (action === 'deletepublicholiday') {
       return handleDeletePublicHoliday(payload);
     }
+    if (action === 'upsertleaveapplication') {
+      return handleUpsertLeaveApplication(payload);
+    }
+    if (action === 'deleteleaveapplication') {
+      return handleDeleteLeaveApplication(payload);
+    }
 
     throw new Error('Unknown action: ' + action);
   } catch (error) {
@@ -140,7 +150,8 @@ function getAllDataResponse() {
     limitGroups: getLimitGroupsData(),
     activityHistory: getActivityHistoryData(),
     settings: getSettingsData(),
-    publicHolidays: getPublicHolidaysData()
+    publicHolidays: getPublicHolidaysData(),
+    leaveApplications: getLeaveApplicationsData()
   });
 }
 
@@ -967,6 +978,128 @@ function handleDeletePublicHoliday(data) {
     }
 
     throw new Error('Public holiday was not found.');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getLeaveApplicationsData() {
+  const requiredHeaders = ['ID', 'MemberName', 'LeaveType', 'StartDate', 'EndDate', 'Days', 'Status', 'SubmittedDate', 'ReferenceNo', 'Notes', 'UpdatedAt'];
+  const sheet = createSheetIfNotExist(LEAVE_APPLICATIONS_SHEET_NAME, requiredHeaders);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = ensureSpecificHeaders(sheet, values[0], requiredHeaders);
+  const displayRows = sheet.getRange(2, 1, values.length - 1, headers.length).getDisplayValues();
+  return displayRows.map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  }).filter((record) => record.ID && record.MemberName && record.LeaveType && record.StartDate);
+}
+
+function handleUpsertLeaveApplication(data) {
+  const requiredHeaders = ['ID', 'MemberName', 'LeaveType', 'StartDate', 'EndDate', 'Days', 'Status', 'SubmittedDate', 'ReferenceNo', 'Notes', 'UpdatedAt'];
+  const id = String(data.id || data.ID || '').trim();
+  const memberName = String(data.memberName || data.MemberName || '').trim();
+  const leaveType = String(data.leaveType || data.LeaveType || '').trim().toUpperCase();
+  const startDate = String(data.startDate || data.StartDate || '').trim();
+  const endDate = String(data.endDate || data.EndDate || startDate).trim();
+  const status = String(data.status || data.Status || 'Pending').trim().toLowerCase() === 'submitted' ? 'Submitted' : 'Pending';
+  let submittedDate = String(data.submittedDate || data.SubmittedDate || '').trim();
+  const referenceNo = String(data.referenceNo || data.ReferenceNo || '').trim();
+  const notes = String(data.notes || data.Notes || '').trim();
+
+  if (!id) throw new Error('Leave tracking ID is required.');
+  if (!memberName) throw new Error('Member name is required.');
+  if (['MC', 'EL', 'AL'].indexOf(leaveType) === -1) throw new Error('Leave type must be MC, EL, or AL.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < startDate) {
+    throw new Error('A valid leave date range is required.');
+  }
+
+  if (status === 'Submitted' && !submittedDate) {
+    submittedDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  if (status === 'Pending') submittedDate = '';
+  if (submittedDate && !/^\d{4}-\d{2}-\d{2}$/.test(submittedDate)) {
+    throw new Error('Submitted date must use YYYY-MM-DD format.');
+  }
+
+  const start = new Date(startDate + 'T00:00:00Z');
+  const end = new Date(endDate + 'T00:00:00Z');
+  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const updatedAt = new Date();
+  const valuesByHeader = {
+    ID: id,
+    MemberName: memberName,
+    LeaveType: leaveType,
+    StartDate: startDate,
+    EndDate: endDate,
+    Days: days,
+    Status: status,
+    SubmittedDate: submittedDate,
+    ReferenceNo: referenceNo,
+    Notes: notes,
+    UpdatedAt: updatedAt
+  };
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = createSheetIfNotExist(LEAVE_APPLICATIONS_SHEET_NAME, requiredHeaders);
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], requiredHeaders);
+    const indexes = buildHeaderIndex(headers);
+    let targetRow = -1;
+
+    for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+      if (String(values[rowIndex][indexes.ID] || '').trim() === id) {
+        targetRow = rowIndex + 1;
+        break;
+      }
+    }
+
+    const row = buildRowFromHeaders(headers, valuesByHeader);
+    if (targetRow > 0) {
+      sheet.getRange(targetRow, 1, 1, headers.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+      targetRow = sheet.getLastRow();
+    }
+    ['ID', 'StartDate', 'EndDate', 'SubmittedDate'].forEach((header) => {
+      sheet.getRange(targetRow, indexes[header] + 1).setNumberFormat('@').setValue(valuesByHeader[header] || '');
+    });
+
+    return createJsonResponse({ result: 'success', record: valuesByHeader });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleDeleteLeaveApplication(data) {
+  const id = String(data.id || data.ID || '').trim();
+  if (!id) throw new Error('Leave tracking ID is required.');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getSheetByName(LEAVE_APPLICATIONS_SHEET_NAME);
+    if (!sheet) throw new Error('Leave tracking record was not found.');
+
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], ['ID']);
+    const indexes = buildHeaderIndex(headers);
+    for (let rowIndex = values.length - 1; rowIndex >= 1; rowIndex--) {
+      if (String(values[rowIndex][indexes.ID] || '').trim() === id) {
+        sheet.deleteRow(rowIndex + 1);
+        return createJsonResponse({ result: 'success', id: id });
+      }
+    }
+    throw new Error('Leave tracking record was not found.');
   } finally {
     lock.releaseLock();
   }

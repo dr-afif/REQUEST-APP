@@ -40,6 +40,8 @@ import {
   updateEmergencyPhysicians,
   upsertPublicHoliday,
   deletePublicHoliday,
+  upsertLeaveApplication,
+  deleteLeaveApplication,
 } from './api';
 import {
   adaptRequestsResponse,
@@ -52,6 +54,7 @@ import {
 import { hasCacheValue, readCache, writeCacheEntries } from './utils/cache';
 import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
 import { applyCustomPublicHolidays, normalizePublicHolidays } from './utils/holidays';
+import { normalizeLeaveApplications } from './utils/leaveTracking';
 
 const REFRESH_INTERVAL = 60 * 1000; // 1 minute
 
@@ -138,6 +141,9 @@ export default function App() {
     applyCustomPublicHolidays(cached);
     return cached;
   });
+  const [leaveApplications, setLeaveApplications] = useState(() => (
+    normalizeLeaveApplications(readCache('resq_cache_leaveApplications', []))
+  ));
   const [teamMembersError, setTeamMembersError] = useState('');
   const [isLoadingTeamMembers, setIsLoadingTeamMembers] = useState(() => !hasCacheValue('resq_cache_teamMembers'));
 
@@ -237,6 +243,8 @@ export default function App() {
       let rawLimitGroups = [];
       let rawActivities = [];
       let rawPublicHolidays = [];
+      // Preserve the last-known records if the currently deployed backend predates this feature.
+      let rawLeaveApplications = readCache('resq_cache_leaveApplications', []);
 
       if (Array.isArray(response)) {
         // 🚨 Legacy / Un-deployed Apps Script detected! 
@@ -269,6 +277,9 @@ export default function App() {
         rawLimitGroups = response.limitGroups || [];
         rawActivities = response.activityHistory || response.activities || [];
         rawPublicHolidays = response.publicHolidays || [];
+        if (Array.isArray(response.leaveApplications)) {
+          rawLeaveApplications = response.leaveApplications;
+        }
         if (response.settings) {
           setSettings(response.settings);
         }
@@ -309,6 +320,10 @@ export default function App() {
       applyCustomPublicHolidays(validPublicHolidays);
       setPublicHolidays(validPublicHolidays);
 
+      // Roster entries remain the source of truth; this sheet stores only form-submission metadata.
+      const validLeaveApplications = normalizeLeaveApplications(rawLeaveApplications);
+      setLeaveApplications(validLeaveApplications);
+
       // Keep cache keys stable; existing sessions depend on them for startup.
       try {
         writeCacheEntries([
@@ -321,6 +336,7 @@ export default function App() {
           ['resq_cache_limitGroups', validLimitGroups],
           ['resq_cache_activities', validActivities],
           ['resq_cache_publicHolidays', validPublicHolidays],
+          ['resq_cache_leaveApplications', validLeaveApplications],
         ]);
         if (response && typeof response === 'object' && response.settings) {
           writeCacheEntries([['resq_cache_settings', response.settings]]);
@@ -1019,6 +1035,61 @@ export default function App() {
     }
   };
 
+  const handleUpsertLeaveApplication = async (payload) => {
+    const normalized = normalizeLeaveApplications([payload])[0];
+    if (!normalized) throw new Error('The leave tracking record is incomplete.');
+
+    const previousLeaveApplications = [...leaveApplications];
+    const nextLeaveApplications = normalizeLeaveApplications([
+      ...leaveApplications.filter((record) => record.ID !== normalized.ID),
+      normalized,
+    ]);
+    setLeaveApplications(nextLeaveApplications);
+    const toastId = addToast('Saving leave form status...', 'info', Infinity);
+
+    try {
+      await upsertLeaveApplication(payload);
+      updateToast(toastId, {
+        message: 'Leave form status saved.',
+        type: 'success',
+        duration: 3000,
+      });
+      await loadAllData();
+    } catch (error) {
+      setLeaveApplications(previousLeaveApplications);
+      updateToast(toastId, {
+        message: `Failed to save leave form status: ${error.message || 'Network error'}. Reverted.`,
+        type: 'error',
+        duration: 5000,
+      });
+      throw error;
+    }
+  };
+
+  const handleDeleteLeaveApplication = async (id) => {
+    const previousLeaveApplications = [...leaveApplications];
+    setLeaveApplications((current) => current.filter((record) => record.ID !== id));
+    const toastId = addToast('Removing leave tracking record...', 'info', Infinity);
+
+    try {
+      await deleteLeaveApplication(id);
+      updateToast(toastId, {
+        message: 'Leave tracking record removed.',
+        type: 'success',
+        duration: 3000,
+      });
+      await loadAllData();
+    } catch (error) {
+      setLeaveApplications(previousLeaveApplications);
+      updateToast(toastId, {
+        message: `Failed to remove leave tracking record: ${error.message || 'Network error'}. Reverted.`,
+        type: 'error',
+        duration: 5000,
+      });
+      throw error;
+    }
+  };
+
   const activeRequests = useMemo(() => {
     return requests.filter((request) => request.status?.toLowerCase() === 'active');
   }, [requests]);
@@ -1132,6 +1203,9 @@ export default function App() {
               shiftTypes={shiftTypes}
               teamMembers={teamMembers}
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
+              leaveApplications={leaveApplications}
+              onUpsertLeaveApplication={handleUpsertLeaveApplication}
+              onDeleteLeaveApplication={handleDeleteLeaveApplication}
             />
           </div>
         )}

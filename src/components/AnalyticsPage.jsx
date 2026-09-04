@@ -7,6 +7,10 @@ import {
   generateHealthInsights,
 } from '../utils/rosterAnalytics';
 import { APP_ICONS } from '../constants/icons';
+import AnalyticsOverview from './AnalyticsOverview';
+import IndividualAnalytics from './IndividualAnalytics';
+import LeaveTracker from './LeaveTracker';
+import { deriveLeaveEpisodes, filterLeaveItemsByPeriod, reconcileLeaveEpisodes } from '../utils/leaveTracking';
 
 export default function AnalyticsPage({
   selectedName,
@@ -16,6 +20,9 @@ export default function AnalyticsPage({
   shiftTypes = [],
   teamMembers = [],
   rosterMonth = '',
+  leaveApplications = [],
+  onUpsertLeaveApplication,
+  onDeleteLeaveApplication,
 }) {
   const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
 
@@ -28,6 +35,7 @@ export default function AnalyticsPage({
   const [fairnessSortConfig, setFairnessSortConfig] = useState({ key: 'fairnessScore', direction: 'desc' });
   const [ytdSortConfig, setYtdSortConfig] = useState({ key: 'activeShifts', direction: 'desc' });
   const [activeMonth, setActiveMonth] = useState(rosterMonth);
+  const [activeView, setActiveView] = useState('overview');
   const [showLeaveDetails, setShowLeaveDetails] = useState(false);
   const [showAmPmBalance, setShowAmPmBalance] = useState(true);
   const [ytdShiftFilter, setYtdShiftFilter] = useState('NIGHT');
@@ -109,6 +117,11 @@ export default function AnalyticsPage({
       equitySignals,
     });
   }, [healthScore, doctorSummaries, coverageIssues, leaveClusters, equitySignals]);
+
+  const activeLeaveItems = useMemo(() => filterLeaveItemsByPeriod(
+    reconcileLeaveEpisodes(deriveLeaveEpisodes(masterRoster), leaveApplications),
+    { mode: 'month', value: activeMonth },
+  ), [masterRoster, leaveApplications, activeMonth]);
 
   // AM vs PM balance per member
   const amPmBalance = useMemo(() => {
@@ -344,7 +357,38 @@ export default function AnalyticsPage({
         </p>
       </div>
 
+      <nav className="mb-6 overflow-x-auto" aria-label="Analytics sections">
+        <div role="tablist" className="inline-flex min-w-full gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm sm:min-w-0">
+          {[
+            { id: 'overview', label: 'Overview', icon: APP_ICONS.dashboard },
+            { id: 'individual', label: 'Individual', icon: APP_ICONS.user },
+            { id: 'leave', label: 'Leave Tracker', icon: APP_ICONS.document },
+            { id: 'advanced', label: 'Advanced', icon: APP_ICONS.analytics },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const selected = activeView === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                onClick={() => {
+                  setActiveView(tab.id);
+                  if (tab.id !== 'advanced') setSelectedDoctor(null);
+                }}
+                aria-selected={selected}
+                className={`flex min-h-11 min-w-max flex-1 items-center justify-center gap-2 rounded-xl px-4 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 ${selected ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+              >
+                <Icon className="h-4 w-4" aria-hidden="true" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
       {/* Sticky Month Navigator */}
+      {(activeView === 'overview' || activeView === 'advanced') && (
       <div className="sticky top-[84px] lg:top-7 z-40 mb-6 -mx-4 md:-mx-8 px-4 md:px-8 py-2 bg-white/80 backdrop-blur-md border-b border-slate-200/60 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest hidden sm:block">Viewing month</span>
@@ -359,7 +403,7 @@ export default function AnalyticsPage({
                   setActiveMonth(prevMonthStr);
                 }
               }}
-              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
+              className="w-11 h-11 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
               title="Previous Month"
             >
               ◀
@@ -373,7 +417,7 @@ export default function AnalyticsPage({
                   setActiveMonth(e.target.value);
                 }
               }}
-              className="border-none bg-transparent text-xs font-bold text-slate-750 focus:ring-0 cursor-pointer outline-none px-1 text-center w-36"
+              className="min-h-11 border-none bg-transparent text-xs font-bold text-slate-750 focus:ring-0 cursor-pointer outline-none px-1 text-center w-36"
             />
 
             <button
@@ -386,7 +430,7 @@ export default function AnalyticsPage({
                   setActiveMonth(nextMonthStr);
                 }
               }}
-              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs"
+              className="w-11 h-11 flex items-center justify-center rounded-xl hover:bg-slate-50 text-slate-600 active:scale-95 transition font-extrabold text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
               title="Next Month"
             >
               ▶
@@ -395,6 +439,36 @@ export default function AnalyticsPage({
           <span className="text-xs font-bold text-slate-700 hidden sm:block">{monthName}</span>
         </div>
       </div>
+      )}
+
+      {activeView === 'overview' && (
+        <AnalyticsOverview
+          healthScore={healthScore}
+          coverageIssues={coverageIssues}
+          leaveItems={activeLeaveItems}
+          overview={overview}
+          monthName={monthName}
+          onNavigateTab={setActiveView}
+        />
+      )}
+
+      {activeView === 'individual' && (
+        <IndividualAnalytics names={names} masterRoster={masterRoster} initialMonth={activeMonth} />
+      )}
+
+      {activeView === 'leave' && (
+        <LeaveTracker
+          masterRoster={masterRoster}
+          leaveApplications={leaveApplications}
+          names={names}
+          activeMonth={activeMonth}
+          onUpsert={onUpsertLeaveApplication}
+          onDelete={onDeleteLeaveApplication}
+        />
+      )}
+
+      {activeView === 'advanced' && (
+      <>
 
       {/* ❤️ Roster Health Intelligence */}
       <div className="mb-8 space-y-5">
@@ -1442,15 +1516,15 @@ export default function AnalyticsPage({
         )}
       </div>
 
-      {/* 📅 Year-to-Date Jan-Jun Section */}
+      {/* 📅 Year-to-Date Section */}
       <div className="rounded-3xl border border-slate-150/70 bg-white p-6 shadow-sm mb-8 text-left">
         <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3 mb-6">
-          <APP_ICONS.calendar className="w-4 h-4" /> Year-to-Date Performance (Jan–Jun)
+          <APP_ICONS.calendar className="w-4 h-4" /> Year-to-Date Performance
         </h3>
 
         {!ytdStats || ytdStats.perMonthTotals.length === 0 ? (
           <div className="py-12 text-center text-slate-400 italic text-xs">
-            No historical roster records available for Jan–Jun of the current year.
+            No historical roster records available for the selected year.
           </div>
         ) : (
           <div>
@@ -1604,9 +1678,11 @@ export default function AnalyticsPage({
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* 👤 Doctor Detail Slide-over / Modal Panel */}
-      {selectedDoctor && (
+      {activeView === 'advanced' && selectedDoctor && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center sm:items-center bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn"
           onClick={() => setSelectedDoctor(null)}

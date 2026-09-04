@@ -177,3 +177,15 @@ export async function upsertPublicHoliday(payload) {
 export async function deletePublicHoliday(date) {
   return request({ method: 'POST', body: { action: 'deletepublicholiday', date } });
 }
+
+export async function fetchLeaveApplications() {
+  return request({ query: { action: 'leaveapplications' } });
+}
+
+export async function upsertLeaveApplication(payload) {
+  return request({ method: 'POST', body: { action: 'upsertleaveapplication', ...payload } });
+}
+
+export async function deleteLeaveApplication(id) {
+  return request({ method: 'POST', body: { action: 'deleteleaveapplication', id } });
+}

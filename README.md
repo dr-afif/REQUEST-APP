@@ -60,6 +60,7 @@ Keep these key names stable because existing browser sessions use them for cache
 - `resq_cache_settings`
 - `resq_cache_teamMembers`
 - `resq_cache_publicHolidays`
+- `resq_cache_leaveApplications`
 
 The fallback defaults are owned in `src/App.jsx`; `src/utils/cache.js` only isolates safe storage access.
 
@@ -71,6 +72,7 @@ The fallback defaults are owned in `src/App.jsx`; `src/utils/cache.js` only isol
 - `fetchAllData()` is the main refresh path. `src/App.jsx` adapts the returned payload through `src/utils/adapters.js`, updates React state, and refreshes the cache.
 - Submit, update, delete, approval, roster, shift block, shift type, limit group, activity, and setting writes all preserve the current Apps Script action names and payload shapes.
 - Public holidays have built-in Selangor defaults. Admin-added or replacement holidays are stored in the Apps Script-managed `PublicHolidays` sheet and merged over those defaults at runtime.
+- MC, EL and AL entries are derived from `MasterRoster`. Administrative form status, submission date, reference number and notes are stored separately in the Apps Script-managed `LeaveApplications` sheet.
 
 ## Testing Commands
 
@@ -106,7 +108,7 @@ The Vite config currently uses `base: '/REQUEST-APP/'`, and `public/sw.js` is sc
 
 ## Backend
 
-The bundled `appscript.txt` contains the Apps Script implementation expected by this frontend. Deploy it as a Web App with execution as the owner and access set to anyone with the link, then paste its URL into `.env.local` before building. The backend creates the `PublicHolidays` sheet automatically after the updated Apps Script is deployed and first loaded.
+The bundled `appscript.txt` contains the Apps Script implementation expected by this frontend. Deploy it as a Web App with execution as the owner and access set to anyone with the link, then paste its URL into `.env.local` before building. The backend creates the `PublicHolidays` and `LeaveApplications` sheets automatically after the updated Apps Script is deployed and first loaded.
 
 ## AI Handoff Notes
 
