@@ -1,0 +1,102 @@
+{
+  "artifactType": "phase-0-local-evidence-manifest-not-workbook-backup",
+  "createdAt": "2026-09-07T01:45:48.554Z",
+  "repoBaseline": {
+    "branch": "main",
+    "head": "a852f0ace8966c8fcbce88166e4dfc3081f5476c",
+    "trackedChangesAtEntry": [],
+    "stagedChangesAtEntry": [],
+    "untrackedAtEntry": [
+      "MAJOR_UPDATE_IMPLEMENTATION_PLAN.md",
+      "MAJOR_UPDATE_SPEC.md",
+      "docs/MAJOR_UPDATE_PHASE_0_READINESS.md"
+    ]
+  },
+  "sourceFilesBeforeContinuation": [
+    {
+      "path": "MAJOR_UPDATE_SPEC.md",
+      "bytes": 59385,
+      "sha256": "D0F435E3AB678671E7F3E99BA40A6309EE301C5BF1106B8D44048CD5C90B523A"
+    },
+    {
+      "path": "MAJOR_UPDATE_IMPLEMENTATION_PLAN.md",
+      "bytes": 66641,
+      "sha256": "84CCEE48AA69349C1823B2D745B933BA92D7FFF6C3A91A00429586DFA2627AD0"
+    },
+    {
+      "path": "docs/MAJOR_UPDATE_PHASE_0_READINESS.md",
+      "bytes": 47950,
+      "sha256": "AD100127A52F5D557630B88299A277A588FF1B10E137DE195181047AD5E5AF43"
+    },
+    {
+      "path": "appscript.txt",
+      "bytes": 47260,
+      "sha256": "82554B83BDE2E9D111C2A3749F9C1E6C1B750AC11138B18F7BE18982BB045538"
+    },
+    {
+      "path": "src/components/RosterPage.jsx",
+      "bytes": 148295,
+      "sha256": "F174DFD4E8FFD81E70D34E42FDBE2E39F2FB17A4647E2D8693A4EA25C9067B2F"
+    },
+    {
+      "path": "src/utils/adapters.js",
+      "bytes": 5718,
+      "sha256": "A5D62BABD026F79CC13F58B10133B384CE6068B50B27F2F0BAA836CDF464312A"
+    },
+    {
+      "path": "src/utils/rosterAnalytics.js",
+      "bytes": 38045,
+      "sha256": "C0374C26BE5FCCBEE21E0A6C4BAEF20B15179FE5311C16600CB8CD347672A370"
+    },
+    {
+      "path": "src/utils/publicHolidayTracker.js",
+      "bytes": 14848,
+      "sha256": "559F912B5FA09C00D8D5108E2DAA381412B96FF683822B454781357C520E97DA"
+    }
+  ],
+  "recordedRemoteEvidence": {
+    "observationDate": "2026-09-04",
+    "requests": 3,
+    "method": "GET",
+    "action": "alldata",
+    "responseCharacters": 950326,
+    "responseSha256": "D993665C57C52195466713B0F64486FAAE5C5FA6B59319356352BFC924900624",
+    "responseFileAvailable": false,
+    "hashIndependentlyReverifiedThisContinuation": false
+  },
+  "thisContinuation": {
+    "additionalEndpointRequests": 0,
+    "remoteWrites": 0,
+    "productionAccess": false,
+    "restoreRun": false,
+    "fixtureCaseCount": 10,
+    "productImplementation": false
+  },
+  "generatedArtifacts": [
+    {
+      "path": "docs/MAJOR_UPDATE_PHASE_0_READINESS.md",
+      "bytes": 65691,
+      "sha256": "9D5EBF86C97379D113BB64155C600F7B2F846861564871324164314EB4A04CAF"
+    },
+    {
+      "path": "docs/phase-0-evidence/representative-cases.json",
+      "bytes": 8460,
+      "sha256": "DF7FA394B36A0EB0691910862BD72DF32BE770775C4D47247921FA6FA7FD96EF"
+    }
+  ],
+  "integrityLimit": "Manifest does not hash itself. These hashes freeze local documentation and synthetic fixtures only; they are not remote workbook, deployment, backup or restore checksums.",
+  "missingEvidence": [
+    "copied-workbook-identity-binding-provenance-copy-time",
+    "physical-workbook-inventory-and-blank-request-cell-purpose",
+    "spreadsheet-and-apps-script-timezones",
+    "immutable-deployment-version-source-manifest",
+    "redacted-script-property-names-and-purposes",
+    "trigger-and-execution-access-inventory",
+    "workbook-backup-checksum-manifest-and-existing-restore-result",
+    "complete-exact-person-alias-crosswalk",
+    "operational-semantic-and-multiple-assignment-decisions",
+    "named-owners-and-dated-sign-off"
+  ],
+  "phase0Passed": false,
+  "ownerSignOff": null
+}

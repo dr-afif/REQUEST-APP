@@ -1,0 +1,309 @@
+{
+  "artifactType": "phase-0-evidence-only",
+  "createdAt": "2026-09-07T01:45:48.554Z",
+  "provenance": {
+    "source": "docs/MAJOR_UPDATE_PHASE_0_READINESS.md",
+    "sourceObservationDate": "2026-09-04",
+    "sourceReportSha256BeforeContinuation": "AD100127A52F5D557630B88299A277A588FF1B10E137DE195181047AD5E5AF43",
+    "basis": "Reconstructed from recorded aggregate observations; not a workbook export or retained API response.",
+    "privacy": "All people, aliases, assignment IDs and case dates are synthetic. No mapping from synthetic people to real people is included. No contacts, staff identifiers, free-text notes or source row IDs are included.",
+    "scope": "Structural examples, not complete legacy months, executable product rules, migration output or operational approvals.",
+    "timezone": {
+      "interpretation": "UTC+08:00",
+      "status": "provisional-recorded-interpretation",
+      "spreadsheetTimezone": null,
+      "appsScriptTimezone": null
+    },
+    "ownerApproved": false
+  },
+  "cases": [
+    {
+      "id": "multiple-worked-assignments",
+      "basis": "observed-shape-with-synthetic-identity-and-date",
+      "rows": [
+        {
+          "id": "fixture-a01",
+          "personId": "fixture-p01",
+          "date": "2030-07-28",
+          "rawShift": "AM"
+        },
+        {
+          "id": "fixture-a02",
+          "personId": "fixture-p01",
+          "date": "2030-07-28",
+          "rawShift": "PM"
+        }
+      ],
+      "disposition": {
+        "preserveRows": 2,
+        "intent": "unresolved",
+        "autoDeduplicate": false
+      }
+    },
+    {
+      "id": "worked-plus-pn",
+      "basis": "observed-shape-with-synthetic-identity-and-date",
+      "rows": [
+        {
+          "id": "fixture-a03",
+          "personId": "fixture-p02",
+          "date": "2030-07-29",
+          "rawShift": "AM"
+        },
+        {
+          "id": "fixture-a04",
+          "personId": "fixture-p02",
+          "date": "2030-07-29",
+          "rawShift": "PN"
+        }
+      ],
+      "disposition": {
+        "preserveRows": 2,
+        "intent": "unresolved",
+        "review": "coexisting-work-and-recovery",
+        "autoReplace": false
+      },
+      "approvedTargetPnSemantics": {
+        "worked": false,
+        "staffing": false,
+        "consecutive": "TRANSPARENT",
+        "policyBQualifier": true,
+        "normalOff": false,
+        "goffOnlyForQualifyingPlannedOffDisplacement": true,
+        "retroactiveRecalculation": false
+      }
+    },
+    {
+      "id": "ep-pair",
+      "basis": "one-synthetic-example-of-recorded-pair-shape",
+      "rows": [
+        {
+          "id": "fixture-a05",
+          "personId": "fixture-p03",
+          "date": "2030-07-15",
+          "rawShift": "EP_OFFICE_HOUR"
+        },
+        {
+          "id": "fixture-a06",
+          "personId": "fixture-p03",
+          "date": "2030-07-15",
+          "rawShift": "EP_ONCALL"
+        }
+      ],
+      "disposition": {
+        "preserveRows": 2,
+        "domainProposal": "EP",
+        "semanticMapping": "pending-owner-confirmation",
+        "autoDeduplicate": false
+      }
+    },
+    {
+      "id": "person-aliases",
+      "basis": "synthetic-analogues-of-recorded-case-title-and-abbreviation-variants",
+      "proposals": [
+        {
+          "personId": "fixture-p03",
+          "domain": "EP",
+          "displayName": "Charlie",
+          "rawAliases": [
+            "Charlie",
+            "DR CHARLIE",
+            "Dr. Charlie"
+          ]
+        },
+        {
+          "personId": "fixture-p04",
+          "domain": "MO",
+          "displayName": "Delta",
+          "rawAliases": [
+            "Delta",
+            "DELTA",
+            "DEL"
+          ]
+        }
+      ],
+      "disposition": {
+        "mappingStatus": "proposal-only",
+        "rewriteSourceNames": false,
+        "genericTitleStripping": false
+      }
+    },
+    {
+      "id": "observed-modifiers",
+      "basis": "exact-recorded-code-spellings-without-person-data",
+      "variants": [
+        {
+          "rawShift": "AMX",
+          "proposedBase": "AM",
+          "modifier": "extended"
+        },
+        {
+          "rawShift": "AM (X)",
+          "proposedBase": "AM",
+          "modifier": "extended"
+        },
+        {
+          "rawShift": "PMX",
+          "proposedBase": "PM",
+          "modifier": "extended"
+        },
+        {
+          "rawShift": "PM (X)",
+          "proposedBase": "PM",
+          "modifier": "extended"
+        },
+        {
+          "rawShift": "AM (S)",
+          "proposedBase": "AM",
+          "modifier": "standby"
+        },
+        {
+          "rawShift": "PM (S)",
+          "proposedBase": "PM",
+          "modifier": "standby"
+        },
+        {
+          "rawShift": "OFF (S)",
+          "proposedBase": "OFF",
+          "modifier": "standby"
+        },
+        {
+          "rawShift": "GOFF (S)",
+          "proposedBase": "GOFF",
+          "modifier": "standby"
+        },
+        {
+          "rawShift": "HKA (S)",
+          "proposedBase": "HKA",
+          "modifier": "standby"
+        },
+        {
+          "rawShift": "GHKA (S)",
+          "proposedBase": "GHKA",
+          "modifier": "standby"
+        },
+        {
+          "rawShift": "COURSE (S)",
+          "proposedBase": "COURSE",
+          "modifier": "standby"
+        }
+      ],
+      "disposition": {
+        "preserveRaw": true,
+        "inheritApprovedBaseSemantics": true,
+        "doNotTreatStandbyAsWorkedAutomatically": true,
+        "rewriteSource": false
+      }
+    },
+    {
+      "id": "unmapped-observed-codes",
+      "basis": "recorded-unmapped-code-inventory",
+      "codes": [
+        {
+          "rawShift": "COURT",
+          "worked": null,
+          "staffing": null,
+          "consecutive": "UNKNOWN",
+          "policyBQualifier": null,
+          "offDisplacementGoff": null
+        },
+        {
+          "rawShift": "EP_OFFICE_HOUR",
+          "worked": null,
+          "staffing": null,
+          "consecutive": "UNKNOWN",
+          "policyBQualifier": null,
+          "offDisplacementGoff": null
+        },
+        {
+          "rawShift": "EP_ONCALL",
+          "worked": null,
+          "staffing": null,
+          "consecutive": "UNKNOWN",
+          "policyBQualifier": null,
+          "offDisplacementGoff": null
+        }
+      ],
+      "disposition": {
+        "preserveRaw": true,
+        "flagForMapping": true,
+        "inferLeaveFromRequestGroup": false,
+        "inferNightFromOncallName": false
+      }
+    },
+    {
+      "id": "synthetic-unknown-and-legacy-aliases",
+      "basis": "supplemental-repository-and-approved-requirement-examples-not-observed-masterroster-rows",
+      "unknownRawShift": "UNMAPPED_TEST",
+      "legacyNightAliases": [
+        "ON",
+        "N",
+        "NIGHT"
+      ],
+      "suffixExamples": [
+        "AM-S",
+        "PM-X"
+      ],
+      "disposition": {
+        "preserveRaw": true,
+        "unknownClassification": "UNKNOWN",
+        "retainDistinctNightSequenceCodes": true
+      }
+    },
+    {
+      "id": "utc-month-boundaries",
+      "basis": "recorded-date-serialization-shape-with-synthetic-years",
+      "values": [
+        {
+          "rawDate": "2030-04-30T16:00:00.000Z",
+          "provisionalLocalDate": "2030-05-01"
+        },
+        {
+          "rawDate": "2030-10-31T16:00:00.000Z",
+          "provisionalLocalDate": "2030-11-01"
+        }
+      ],
+      "disposition": {
+        "offsetMinutes": 480,
+        "spreadsheetTimezoneVerified": false,
+        "appsScriptTimezoneVerified": false
+      }
+    },
+    {
+      "id": "ph-ghka-separate-from-goff",
+      "basis": "recorded-settings-structure-with-synthetic-person-and-balance",
+      "phGhkaOpeningBalances": [
+        {
+          "personId": "fixture-p05",
+          "openingBalance": 2
+        }
+      ],
+      "futureGoffOpeningBalances": null,
+      "historicalRawShifts": [
+        "HKA",
+        "GHKA",
+        "GOFF",
+        "GOFF (S)"
+      ],
+      "disposition": {
+        "copyPhBalanceToGoff": false,
+        "inferHistoricalGoff": false,
+        "goffCommencement": null
+      }
+    },
+    {
+      "id": "blank-request-field",
+      "basis": "recorded-nonpersonal-schema-anomaly",
+      "apiFieldName": "",
+      "nonblankValue": 12.0833333333333,
+      "physicalColumn": null,
+      "conditionalCandidateColumn": "L",
+      "purpose": null,
+      "disposition": {
+        "preserveValue": true,
+        "renameHeader": false,
+        "deleteColumn": false
+      }
+    }
+  ]
+}

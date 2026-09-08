@@ -1,0 +1,345 @@
+{
+  "description": "Synthetic compatibility workbook; known SYU/MO alias and orphan name are contract examples. Duplicate row is an intentional stress supplement, not a claim about production.",
+  "tables": {
+    "Requests": [
+      [
+        "ID",
+        "Timestamp",
+        "Name",
+        "Date",
+        "Day",
+        "Request",
+        "Status",
+        "Comment",
+        "ApprovalStatus",
+        "SwapPartner",
+        "RequestType",
+        "",
+        ""
+      ],
+      [
+        "req-01",
+        "2030-06-01T00:00:00.000Z",
+        "Person A",
+        "2030-07-28",
+        "Sunday",
+        "AM",
+        "Active",
+        "",
+        "Pending Admin",
+        "",
+        "Leave",
+        "",
+        ""
+      ],
+      [
+        "req-02",
+        "2030-06-02T00:00:00.000Z",
+        "Person A",
+        "2030-07-28",
+        "Sunday",
+        "PM",
+        "Active",
+        "",
+        "Pending Admin",
+        "",
+        "Leave",
+        "",
+        ""
+      ],
+      [
+        "req-03",
+        "2030-06-03T00:00:00.000Z",
+        "Amir",
+        "2030-07-29",
+        "Monday",
+        "OFF",
+        "Cancelled",
+        "",
+        "",
+        "",
+        "",
+        "",
+        12.0833333333333
+      ]
+    ],
+    "TeamMembers": [
+      [
+        "MemberName",
+        "FullName",
+        "Phone",
+        "Active",
+        "StaffId",
+        "Email"
+      ],
+      [
+        "Person A",
+        "",
+        "",
+        "TRUE",
+        "",
+        ""
+      ],
+      [
+        "Person B",
+        "",
+        "",
+        "TRUE",
+        "",
+        ""
+      ],
+      [
+        "Syuhada",
+        "",
+        "",
+        "TRUE",
+        "",
+        ""
+      ],
+      [
+        "Former Member",
+        "",
+        "",
+        "FALSE",
+        "",
+        ""
+      ]
+    ],
+    "EmergencyPhysicians": [
+      [
+        "MemberName",
+        "FullName",
+        "Phone",
+        "Active",
+        "StaffId",
+        "Email"
+      ],
+      [
+        "Echo",
+        "",
+        "",
+        "TRUE",
+        "",
+        ""
+      ]
+    ],
+    "MasterRoster": [
+      [
+        "Name",
+        "Date",
+        "Shift"
+      ],
+      [
+        "Person A",
+        "2030-07-28",
+        "AM"
+      ],
+      [
+        "Person A",
+        "2030-07-28",
+        "PM"
+      ],
+      [
+        "Person B",
+        "2030-07-29",
+        "AM"
+      ],
+      [
+        "Person B",
+        "2030-07-29",
+        "PN"
+      ],
+      [
+        "DR ECHO",
+        "2030-07-28",
+        "EP_OFFICE_HOUR"
+      ],
+      [
+        "Dr. Echo",
+        "2030-07-28",
+        "EP_ONCALL"
+      ],
+      [
+        "SYU",
+        "2030-07-30",
+        "OFF (S)"
+      ],
+      [
+        "Syuhada",
+        "2030-07-31",
+        "AMX"
+      ],
+      [
+        "Former Member",
+        "2030-07-01",
+        "COURT"
+      ],
+      [
+        "Person A",
+        "2030-07-20",
+        "UNMAPPED_TEST"
+      ],
+      [
+        "Person B",
+        "2030-06-30T16:00:00.000Z",
+        "N"
+      ],
+      [
+        "Person A",
+        "2030-08-01",
+        "GHKA"
+      ],
+      [
+        "Person A",
+        "2030-07-28",
+        "AM"
+      ]
+    ],
+    "ShiftBlocks": [
+      [
+        "ID",
+        "Date",
+        "ShiftType",
+        "MaxSlots"
+      ],
+      [
+        "block-01",
+        "2030-07-28",
+        "LEAVES",
+        2
+      ]
+    ],
+    "ShiftTypes": [
+      [
+        "ID",
+        "Name",
+        "IsPublic",
+        "GroupID"
+      ],
+      [
+        "type-01",
+        "AM",
+        true,
+        ""
+      ],
+      [
+        "type-02",
+        "COURT",
+        true,
+        "LEAVES"
+      ]
+    ],
+    "LimitGroups": [
+      [
+        "ID",
+        "GroupName",
+        "DefaultLimit"
+      ],
+      [
+        "LEAVES",
+        "Leaves & Offs",
+        3
+      ]
+    ],
+    "ActivityHistory": [
+      [
+        "ID",
+        "Timestamp",
+        "CustomText",
+        "Name",
+        "RequestType",
+        "Request",
+        "SwapPartner",
+        "Date",
+        "ApprovalStatus",
+        "Comment",
+        "Status"
+      ],
+      [
+        "act-01",
+        "2020-01-01T00:00:00.000Z",
+        "",
+        "Person A",
+        "Leave",
+        "AM",
+        "",
+        "2020-01-01",
+        "",
+        "",
+        "Active"
+      ]
+    ],
+    "Settings": [
+      [
+        "Key",
+        "Value"
+      ],
+      [
+        "monthly_request_limit",
+        "15"
+      ],
+      [
+        "monthly_weekend_limit",
+        "2"
+      ],
+      [
+        "weekend_limit_group_id",
+        "LEAVES"
+      ],
+      [
+        "phTrackerOpeningBalances",
+        "{\"person-a\":{\"doctorName\":\"Person A\",\"openingBalance\":2,\"note\":\"\",\"updatedAt\":\"2030-01-01\"}}"
+      ],
+      [
+        "phTrackerMemos",
+        "{\"person-a_2030-07-01\":true}"
+      ],
+      [
+        "memo_2030-07",
+        "Synthetic legacy memo; preserve whitespace  "
+      ]
+    ],
+    "PublicHolidays": [
+      [
+        "ID",
+        "Date",
+        "Name",
+        "Active"
+      ],
+      [
+        "holiday-01",
+        "2030-07-28",
+        "Synthetic Holiday",
+        true
+      ]
+    ],
+    "LeaveApplications": [
+      [
+        "ID",
+        "MemberName",
+        "LeaveType",
+        "StartDate",
+        "EndDate",
+        "Days",
+        "Status",
+        "SubmittedDate",
+        "ReferenceNo",
+        "Notes",
+        "UpdatedAt"
+      ],
+      [
+        "leave-01",
+        "Person B",
+        "MC",
+        "2030-09-04",
+        "2030-09-04",
+        1,
+        "Pending",
+        "",
+        "",
+        "3 & 4 /9/2030",
+        "2030-09-01"
+      ]
+    ]
+  }
+}

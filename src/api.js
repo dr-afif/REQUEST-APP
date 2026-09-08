@@ -189,3 +189,12 @@ export async function upsertLeaveApplication(payload) {
 export async function deleteLeaveApplication(id) {
   return request({ method: 'POST', body: { action: 'deleteleaveapplication', id } });
 }
+
+// Phase 1 diagnostics are opt-in; the legacy application never calls these automatically.
+export async function fetchRosterSchema() {
+  return request({ query: { action: 'rosterv2schema' } });
+}
+
+export async function fetchRosterPeriodShadow(period) {
+  return request({ query: { action: 'rosterv2period', period, mode: 'shadow' } });
+}

@@ -1,0 +1,41 @@
+{
+  "status": "PASSED",
+  "approvedBy": "Application owner (explicit user handoff)",
+  "approvedOn": "2026-09-07",
+  "source": "Owner-provided Phase 1 authorization and Phase 0 closure record",
+  "sourceAttachmentSha256": "90d20667e68a12daeb4ce5fd846683fd465c4695fc74da6ec2a72e67d922150d",
+  "baseline": {
+    "branch": "main",
+    "commit": "a852f0ace8966c8fcbce88166e4dfc3081f5476c",
+    "appsScriptGitBlob": "b9601899509b276742f516dc237d00af40a8b026"
+  },
+  "deployment": {
+    "version": 1,
+    "retrieval": "Official Apps Script API, reported in owner closure",
+    "codeGitBlob": "b9601899509b276742f516dc237d00af40a8b026",
+    "runtime": "V8",
+    "manifestTimezone": "Asia/Singapore",
+    "executeAs": "Deploying user",
+    "access": "Anyone/anonymous"
+  },
+  "operationalTimezone": "Asia/Kuala_Lumpur",
+  "operationalUtcOffset": "+08:00",
+  "workbookEvidence": {
+    "capturedAt": "2026-09-07T16:36:00+08:00",
+    "sha256": "5a80a7ece723e7b4ef4579f72f15109d93b75b18f9bc8f441d63e1008b3cb491",
+    "expectedSheets": 11,
+    "restoreImportTest": "Previously passed, owner-confirmed",
+    "accidentalFormula": {
+      "cell": "Requests!M638",
+      "formula": "=145/12",
+      "businessLogic": false
+    }
+  },
+  "priorReadiness": {
+    "archivePath": "docs/phase-0-evidence/READINESS_PRE_CLOSURE_2026-09-07.md",
+    "sha256": "9d5ebf86c97379d113bb64155c600f7b2f846861564871324164314eb4a04caf",
+    "statusAtThatTime": "OPEN / NOT PASSED"
+  },
+  "evidenceBoundary": "Owner-supplied closure accepted as authorized. No fresh production/workbook/API retrieval or restore in Phase 1; underlying snapshot and deployed-source export were not independently reread.",
+  "phase1Authorization": "Local implementation and tests only; no deployment, production mutation or Phase 2+"
+}
