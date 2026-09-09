@@ -7,12 +7,13 @@
         "dev": "vite",
         "build": "vite build",
         "preview": "vite preview",
-        "test": "npm run test:legacy && npm run test:phase1",
+        "test": "npm run test:legacy && npm run test:phase1 && npm run test:phase2",
         "predeploy": "npm run build",
         "deploy": "gh-pages -d dist",
         "test:legacy": "node src/utils/adapters.test.js && node src/utils/cache.test.js && node src/utils/quota.test.js && node src/utils/holidays.test.js && node src/utils/leaveTracking.test.js",
         "test:phase1": "node scripts/build-appscript.mjs --check && node --test tests/phase1/*.test.mjs",
-        "build:appscript": "node scripts/build-appscript.mjs"
+        "build:appscript": "node scripts/build-appscript.mjs",
+        "test:phase2": "node --test tests/phase2/*.test.mjs"
     },
     "dependencies": {
         "docxtemplater": "^3.69.0",

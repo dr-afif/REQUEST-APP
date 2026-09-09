@@ -41,7 +41,7 @@ function rosterV2Schema_() {
       officialWrites: false, privateNotes: false, automaticEnrollment: false },
     featureDefaults: RosterCompatibility.featureDefaults,
     configuredFeatures: RosterCompatibility.featureSwitches(rosterV2Settings_()),
-    // Deployment alone does not activate any workflow; Phase 1 offers explicit shadow reads only.
+    // Keep the Phase 1 discovery contract stable. Phase 2 draft capability discovery is private.
     effectiveFeatures: RosterCompatibility.featureDefaults,
     legacyUploadPolicy: 'Allowed only while no RosterPeriods enrollment exists',
     schemas: RosterCompatibility.schemaPlan(headers), catalog: RosterCompatibility.catalog,
@@ -125,6 +125,7 @@ function rosterV2RequireAdmin_() {
 
 function rosterV2DispatchGet_(parameters) {
   const action = String(parameters.action || '').toLowerCase();
+  if (['rosterv2draft','rosterv2operation','rosterv2draftschema'].includes(action)) return rosterDraftRoute_(action, parameters);
   if (action === 'rosterv2schema') return createJsonResponse(rosterV2Schema_());
   if (action === 'rosterv2period') return createJsonResponse(rosterV2Period_(parameters));
   // Reserve the namespace: private/unknown v2 reads cannot fall through to legacy Requests.
@@ -132,7 +133,9 @@ function rosterV2DispatchGet_(parameters) {
   throw new Error('Phase 1 does not expose private v2 data or official operations.');
 }
 
-function rosterV2DispatchPost_() {
+function rosterV2DispatchPost_(data) {
+  const action = String(data.action || '').toLowerCase();
+  if (['rosterv2draftpatch','rosterv2draftrecover','rosterv2draftabandon'].includes(action)) return rosterDraftRoute_(action, data);
   rosterV2RequireAdmin_();
   throw new Error('Official v2 writes are disabled in Phase 1.');
 }

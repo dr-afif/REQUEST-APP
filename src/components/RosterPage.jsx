@@ -1,3 +1,4 @@
+import DraftQueuePanel, { draftPanelEnabled } from '../features/roster/components/DraftQueuePanel.jsx';
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
@@ -1827,6 +1828,7 @@ export default function RosterPage({
     <div className={`mx-auto px-2 sm:px-6 py-6 sm:py-8 md:px-8 animate-fadeIn ${
       activeTab === 'table' ? 'w-full max-w-none' : 'max-w-5xl'
     }`}>
+      {selectedName?.trim().toLowerCase() === 'admin' && draftPanelEnabled(settings) && <DraftQueuePanel key={rosterMonth} period={rosterMonth} settings={settings} />}
       {/* 🧭 Header Details */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
