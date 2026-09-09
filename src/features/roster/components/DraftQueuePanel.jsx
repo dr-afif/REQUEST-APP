@@ -2,12 +2,14 @@ import {useEffect,useState} from 'react';
 import {draftRuntime} from '../queue/runtime.js';
 import {createSignals,terminal} from '../queue/state.js';
 import protocol from '../queue/protocol.js';
+import RosterGuidancePanel from './RosterGuidancePanel.jsx';
 
 const labels={QUEUED:'Queued',SENDING:'Saving',AWAITING_STATUS:'Retry scheduled — checking confirmation',RETRY_SCHEDULED:'Retry scheduled',
   FAILED:'Failed',CONFLICT:'Conflict — review required',RECOVERY_REQUIRED:'Recovery required',CONFIRMED:'Saved',REVERTED:'Reverted',NOT_DURABLE:'Not saved on this device'};
 const errorMessages={AUTHORIZATION_REQUIRED:'Administrator identity could not be verified',FEATURE_DISABLED:'Draft saving is disabled',ENTITY_NOT_FOUND:'The period or person has not been set up for draft editing',REVISION_CONFLICT:'Newer changes need review. Refresh the confirmed draft before replacing your proposal',IDEMPOTENCY_MISMATCH:'This save ID has conflicting content and needs review',RECOVERY_REQUIRED:'The save outcome needs reconciliation before another change can be sent',PERMANENT_FAILURE:'This operation cannot be retried unchanged',PERSISTENCE_FAILED:'Changes could not be saved on this device',LOCK_BUSY:'The server is busy; a safe retry will be scheduled'};
 // Opt-in draft editor and persistent save state only. Legacy grid and upload are independent.
 export default function DraftQueuePanel({period,settings,runtimeFactory=draftRuntime}) {
+  const showDraft=protocol.enabled(settings);
   const [queue,setQueue]=useState(null),[,update]=useState(0),[error,setError]=useState(''),[people,setPeople]=useState([]);
   const [personId,setPersonId]=useState(''),[date,setDate]=useState(period+'-01'),[text,setText]=useState(''),[offline,setOffline]=useState(!navigator.onLine);
   const key='draft:'+period;
@@ -19,7 +21,7 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
       q.bus=createSignals(()=>q.reload().catch(()=>{if(live)setError('Local draft storage unavailable.');}));
       await q.start();if(!live)return;setQueue(q);
       const schema=await repository.schema();if(!live)return;if(!schema.ok)throw new Error(schema.error.code);
-      if(!schema.draftWritesEnabled)throw new Error('FEATURE_DISABLED');
+      if(showDraft&&!schema.draftWritesEnabled)throw new Error('FEATURE_DISABLED');
       setPeople(schema.people);setPersonId(schema.people[0]?.PersonId||'');
       await q.refresh(key);if(!live)return;refresh=setInterval(()=>q.refresh(key).catch(e=>{if(live)setError(e.message);}),60000);
     })().catch(e=>{if(live)setError(e.message);});
@@ -36,7 +38,7 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
     const assignments=value===''?[]:value.split('\n').map((rawShift,i)=>({assignmentId:old[i]?.assignmentId||crypto.randomUUID(),rawShift}));
     await queue.enqueue(key,[{personId,date,assignments}]);
   });
-  return <section className="mb-6 rounded-xl border border-slate-300 bg-white p-4" aria-label="V2 draft editor">
+  return <>{showDraft&&<section className="mb-6 rounded-xl border border-slate-300 bg-white p-4" aria-label="V2 draft editor">
     <h2 className="text-lg font-semibold">Private draft — {period}</h2>
     <p className="text-sm">Draft changes are separate from the official roster. This period must already be enrolled.</p>
     <p role="status" aria-live="polite">{offline?'Offline — changes retained locally. ':''}{!queue||view?.baseline.checksum===null?'Loading confirmed draft…':view?.unsafe||view?.error?'Local changes need storage recovery':pending.length?`${pending.length} changes need confirmation`:'All changes saved'}</p>
@@ -55,6 +57,7 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
     <ul>{pending.map(op=><li key={op.operationId} className="my-2 flex flex-wrap gap-2 items-center"><span>{op.entityKey.slice(6)}: {labels[op.status]} {op.lastError?`(${op.lastError})`:''}</span>
       <button className="min-h-11 border rounded px-3" onClick={()=>act(()=>queue.retry(op.entityKey,op.operationId))}>Retry / recover</button>
       <button className="min-h-11 border rounded px-3" onClick={()=>act(()=>queue.revert(op.entityKey,op.operationId))}>Revert local proposal</button></li>)}</ul>
-  </section>;
+  </section>}{queue&&<RosterGuidancePanel period={period} settings={settings} queue={queue} people={people}/>}</>;
 }
 export const draftPanelEnabled=settings=>protocol.enabled(settings);
+export const rosterPanelEnabled=settings=>draftPanelEnabled(settings)||['weekly_off_guidance_enabled','night_safety_guidance_enabled'].some(key=>settings?.[key]===true||settings?.[key]==='true');

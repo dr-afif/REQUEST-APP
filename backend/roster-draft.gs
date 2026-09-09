@@ -23,9 +23,10 @@ function rosterDraftLogs_() {
   const logs = rosterDraftTable_('OperationLog'), ids = new Set();
   const revision = function(value) { return (typeof value === 'number' || typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) && Number.isSafeInteger(Number(value)) && Number(value) >= 0; };
   logs.forEach(function(r) {
+    const meaningValid=r.OperationType === 'DRAFT_PATCH' && typeof r.EntityKey === 'string' && /^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey) ||
+      r.OperationType === 'OFF_POLICY_UPSERT' && r.EntityKey === 'off-policies';
     DraftProtocol.ensure(DraftProtocol.uuid(r.OperationId) && !ids.has(r.OperationId) &&
-      DraftProtocol.uuid(r.ClientId) && DraftProtocol.uuid(r.TabId) && r.OperationType === 'DRAFT_PATCH' &&
-      typeof r.EntityKey === 'string' && /^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey) &&
+      DraftProtocol.uuid(r.ClientId) && DraftProtocol.uuid(r.TabId) && meaningValid &&
       typeof r.PayloadHash === 'string' && /^[0-9a-f]{64}$/.test(r.PayloadHash) && revision(r.ExpectedRevision) &&
       (r.Status === 'FAILED' && r.ResultRevision === '' || revision(r.ResultRevision) && Number(r.ResultRevision) === Number(r.ExpectedRevision)+1) &&
       ['PENDING','CONFIRMED','FAILED','RECOVERY_REQUIRED'].includes(r.Status), 'RECOVERY_REQUIRED');
@@ -72,6 +73,7 @@ function rosterDraftStatus_(id) {
   if (!log) return {ok:true,operationId:id,status:'NOT_FOUND'};
   let result = null;
   if (log.Status === 'CONFIRMED') {
+    if(log.OperationType==='OFF_POLICY_UPSERT')return rosterGuidanceStatus_(id);
     rosterDraftState_(log.EntityKey);const stored = JSON.parse(log.ResultJson);
     result = {ok:true,operationId:stored.operationId,entityKey:stored.entityKey,revision:stored.revision,checksum:stored.checksum,patches:stored.patches};
   }
@@ -115,6 +117,7 @@ function rosterDraftSave_(operation) {
 function rosterDraftRecover_(id) {
   const log = rosterDraftLogs_().find(function(r) { return r.OperationId === id; });
   DraftProtocol.ensure(log,'ENTITY_NOT_FOUND');
+  if(log.OperationType==='OFF_POLICY_UPSERT')return rosterGuidanceRecover_(id);
   if (['CONFIRMED','FAILED'].includes(log.Status)) return rosterDraftStatus_(id);
   const state = rosterDraftState_(log.EntityKey), rows = rosterDraftTable_('RosterDraftPatches').filter(function(r) { return r.OperationId === id; });
   if (!rows.length) {

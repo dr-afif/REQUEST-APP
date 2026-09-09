@@ -1,0 +1,28 @@
+import test,{before,after,afterEach} from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';import fs from 'node:fs';import path from 'node:path';import {fileURLToPath} from 'node:url';
+import puppeteer from 'puppeteer-core';import {build} from 'esbuild';
+const root=fileURLToPath(new URL('../../',import.meta.url));let server,browser,page,origin;
+before(async()=>{const ui=await build({entryPoints:[path.join(root,'tests/phase3/ui-fixture.jsx')],bundle:true,write:false,format:'esm',jsx:'automatic',define:{'import.meta.env':'{}'}});
+ server=http.createServer((req,res)=>{if(req.url==='/ui.js'){res.setHeader('Content-Type','text/javascript');res.end(ui.outputFiles[0].text);}else{res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Local Phase 3 verification</title>');}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;
+ const executable=process.env.PHASE2_BROWSER_PATH||['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/chromium','/usr/bin/google-chrome'].find(candidate=>fs.existsSync(candidate));
+ if(!executable)throw Error('Set PHASE2_BROWSER_PATH to a Chromium browser for required Phase 3 UI tests.');browser=await puppeteer.launch({executablePath:executable,headless:true,args:['--disable-background-networking','--no-first-run']});page=await browser.newPage();await page.goto(origin);await page.evaluate(async()=>{await import('/ui.js');});
+},{timeout:30000});
+after(async()=>{await browser?.close();if(server)await new Promise(resolve=>server.close(resolve));});
+afterEach(async()=>{if(page)await page.evaluate(()=>window.guidanceTest?.close());});
+
+test('guidance panel presents complete weekly results and reviewable stable issues',async()=>{await page.evaluate(()=>mountGuidanceTest());await page.waitForFunction(()=>document.querySelector('table')?.textContent.includes('SHORTFALL'));
+ const text=await page.$eval('body',element=>element.textContent);assert.match(text,/Weekly OFF/);assert.match(text,/Normal OFF requirement is not met operationally/);
+ await page.click('li button');await page.waitForFunction(()=>document.querySelector('li')?.textContent.includes('Reviewed'));await page.evaluate(()=>guidanceTest.close());
+});
+test('missing adjacent periods show provisional sequence context without false completion',async()=>{await page.evaluate(()=>mountGuidanceTest({complete:false,night:true}));await page.waitForFunction(()=>document.body.textContent.includes('INCOMPLETE'));
+ const text=await page.$eval('body',element=>element.textContent);assert.match(text,/INCOMPLETE|Provisional/i);assert.match(text,/2030-07: Adjacent roster context/);assert.doesNotMatch(text,/undefined:/);assert.match(text,/—/);await page.evaluate(()=>guidanceTest.close());
+});
+test('policy editor uses a durable journal operation and all switches default closed',async()=>{await page.evaluate(()=>mountGuidanceTest({writes:true}));await page.waitForSelector('fieldset button');await page.click('fieldset button');await page.waitForFunction(()=>guidanceTest.saved.length===1);
+ const saved=await page.evaluate(()=>guidanceTest.saved[0]);assert.equal(saved.operationType,'OFF_POLICY_UPSERT');assert.equal(saved.entityKey,'off-policies');assert.match(saved.payloadHash,/^[0-9a-f]{64}$/);await page.evaluate(()=>guidanceTest.close());
+ await page.evaluate(()=>mountGuidanceTest({enabled:false}));await new Promise(resolve=>setTimeout(resolve,50));assert.equal(await page.$eval('body',element=>element.textContent.trim()),'');assert.equal(await page.evaluate(()=>guidanceTest.refreshes),0);await page.evaluate(()=>guidanceTest.close());
+});
+test('unenrolled historical periods are not recalculated by Phase 3',async()=>{await page.evaluate(()=>mountGuidanceTest({enrolled:false}));await page.waitForFunction(()=>guidanceTest.refreshes===3);await new Promise(resolve=>setTimeout(resolve,25));assert.equal(await page.$eval('body',element=>element.textContent.trim()),'');await page.evaluate(()=>guidanceTest.close());});
+test('a late policy response from the prior month cannot replace current-month guidance',async()=>{await page.evaluate(()=>mountGuidanceTest({race:true}));await page.waitForFunction(()=>guidanceTest.policyCalls===1);await page.evaluate(()=>guidanceTest.render('2030-08'));await page.waitForFunction(()=>guidanceTest.policyCalls===2&&document.body.textContent.includes('2030-08'));
+ const before=await page.$$eval('tbody tr td:nth-child(2)',cells=>cells.map(cell=>cell.textContent));assert.ok(before.length>0);assert.ok(before.every(value=>value==='B'));await page.evaluate(()=>guidanceTest.releaseFirst());await new Promise(resolve=>setTimeout(resolve,50));const after=await page.$$eval('tbody tr td:nth-child(2)',cells=>cells.map(cell=>cell.textContent));assert.deepEqual(after,before);await page.evaluate(()=>guidanceTest.close());});
