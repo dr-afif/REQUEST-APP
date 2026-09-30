@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import UserSection from './components/UserSection';
 import AppNavigation from './components/AppNavigation';
 import NotificationBanner from './components/NotificationBanner';
@@ -133,6 +133,20 @@ export default function App() {
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [pendingSelectName, setPendingSelectName] = useState('');
   const [refreshError, setRefreshError] = useState('');
+  
+  const inFlightMutationsRef = useRef(0);
+  const pendingSyncTimeoutRef = useRef(null);
+
+  const scheduleSafeSync = (delay = 600) => {
+    if (pendingSyncTimeoutRef.current) {
+      clearTimeout(pendingSyncTimeoutRef.current);
+    }
+    pendingSyncTimeoutRef.current = setTimeout(() => {
+      if (inFlightMutationsRef.current === 0) {
+        loadAllData();
+      }
+    }, delay);
+  };
   
   const [teamMembers, setTeamMembers] = useState(() => readCache('resq_cache_teamMembers', []));
   const [emergencyPhysicians, setEmergencyPhysicians] = useState(() => readCache('resq_cache_emergencyPhysicians', []));
@@ -291,13 +305,51 @@ export default function App() {
       setTeamMembers(dedupedMembers);
       setEmergencyPhysicians(dedupedEmergencyPhysicians);
 
-      // Parse & set Requests
+      // Parse & set Requests, preserving any in-flight optimistic operations
       const adapted = adaptRequestsResponse(rawRequests);
-      setRequests(adapted);
+      setRequests((currentRequests) => {
+        const pendingOptimistic = currentRequests.filter((r) => r.isOptimistic);
+        if (!pendingOptimistic.length) {
+          return adapted;
+        }
 
-      // Set Master Baseline Roster with validation (ensure items are not request fallbacks)
+        const stillPending = [];
+        pendingOptimistic.forEach((optReq) => {
+          const isConfirmed = adapted.some((srvReq) => {
+            if (optReq.id && !String(optReq.id).startsWith('opt_') && String(srvReq.id) === String(optReq.id)) {
+              return true;
+            }
+            if (
+              String(optReq.id).startsWith('opt_') &&
+              srvReq.name?.trim().toLowerCase() === optReq.name?.trim().toLowerCase() &&
+              srvReq.date === optReq.date &&
+              srvReq.request === optReq.request &&
+              srvReq.requestType === optReq.requestType
+            ) {
+              return true;
+            }
+            return false;
+          });
+
+          if (!isConfirmed) {
+            stillPending.push(optReq);
+          }
+        });
+
+        return [...adapted, ...stillPending];
+      });
+
+      // Set Master Baseline Roster with validation, preserving in-flight optimistic edits
       const validMasterRoster = validateMasterRoster(rawMasterRoster);
-      setMasterRoster(validMasterRoster);
+      setMasterRoster((currentRoster) => {
+        const pendingOptimistic = currentRoster.filter((r) => r.isOptimistic);
+        if (!pendingOptimistic.length) {
+          return validMasterRoster;
+        }
+        const confirmedKeys = new Set(validMasterRoster.map((r) => `${r.name || r.Name}_${r.date || r.Date}_${r.shift || r.Shift}`));
+        const stillPending = pendingOptimistic.filter((r) => !confirmedKeys.has(`${r.name || r.Name}_${r.date || r.Date}_${r.shift || r.Shift}`));
+        return [...validMasterRoster, ...stillPending];
+      });
 
       // Set Date caps/limits blocks with validation (ensure items are not request fallbacks)
       const validShiftBlocks = validateShiftBlocks(rawShiftBlocks);
@@ -358,7 +410,9 @@ export default function App() {
     let timeoutId;
 
     const fetchLoop = async () => {
-      await loadAllData();
+      if (inFlightMutationsRef.current === 0) {
+        await loadAllData();
+      }
       timeoutId = window.setTimeout(fetchLoop, REFRESH_INTERVAL);
     };
 
@@ -366,6 +420,9 @@ export default function App() {
 
     return () => {
       window.clearTimeout(timeoutId);
+      if (pendingSyncTimeoutRef.current) {
+        clearTimeout(pendingSyncTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -426,11 +483,12 @@ export default function App() {
       swapPartner: swapPartner || '',
     };
 
-    const previousRequests = [...requests];
     const tempId = id || `opt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    let originalItem = null;
 
     setRequests((prev) => {
       if (id) {
+        originalItem = prev.find((req) => req.id === id);
         return prev.map((req) =>
           req.id === id ? { ...req, ...payload, isOptimistic: true } : req
         );
@@ -450,6 +508,7 @@ export default function App() {
     const actionText = id ? 'Updating' : 'Submitting';
     const toastId = addToast(`🔄 ${actionText} request for ${name}...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         if (id) {
@@ -462,15 +521,23 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Background save failed:', err);
-        setRequests(previousRequests);
+        setRequests((prev) => {
+          if (id) {
+            return originalItem ? prev.map((r) => (r.id === id ? originalItem : r)) : prev;
+          } else {
+            return prev.filter((r) => r.id !== tempId);
+          }
+        });
         updateToast(toastId, {
           message: `❌ Save failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -481,12 +548,15 @@ export default function App() {
       throw new Error('Missing request ID for deletion.');
     }
 
-    const previousRequests = [...requests];
-
-    setRequests((prev) => prev.filter((req) => req.id !== id));
+    let deletedItem = null;
+    setRequests((prev) => {
+      deletedItem = prev.find((req) => req.id === id);
+      return prev.filter((req) => req.id !== id);
+    });
 
     const toastId = addToast(`🔄 Deleting request for ${name || 'member'}...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await deleteRequest(id);
@@ -495,31 +565,40 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Background deletion failed:', err);
-        setRequests(previousRequests);
+        if (deletedItem) {
+          setRequests((prev) => [...prev, deletedItem]);
+        }
         updateToast(toastId, {
           message: `❌ Deletion failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
 
   // Approval changes share the same optimistic refresh/revert pattern.
   const handleUpdateApproval = async (id, approvalStatus) => {
-    const previousRequests = [...requests];
+    let previousStatus = null;
 
     setRequests((prev) =>
-      prev.map((req) =>
-        req.id === id ? { ...req, approvalStatus, isOptimistic: true } : req
-      )
+      prev.map((req) => {
+        if (req.id === id) {
+          previousStatus = req.approvalStatus;
+          return { ...req, approvalStatus, isOptimistic: true };
+        }
+        return req;
+      })
     );
 
     const toastId = addToast(`🔄 Updating approval status...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateRequestApproval(id, approvalStatus);
@@ -528,24 +607,30 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Background approval update failed:', err);
-        setRequests(previousRequests);
+        if (previousStatus !== null) {
+          setRequests((prev) =>
+            prev.map((req) => (req.id === id ? { ...req, approvalStatus: previousStatus, isOptimistic: false } : req))
+          );
+        }
         updateToast(toastId, {
           message: `❌ Approval update failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
 
   // Handle Excel Baseline Uploads
-  const handleUploadBaseline = async (rows) => {
-    const previousMasterRoster = [...masterRoster];
+  const handleUploadBaseline = async (rows, targetMonth) => {
+    let previousMonthRows = [];
     
-    // Optimistically update masterRoster state immediately
+    // Optimistically update masterRoster state preserving other months
     const validatedRows = rows.map((r) => ({
       Name: r.name,
       name: r.name,
@@ -553,30 +638,47 @@ export default function App() {
       date: r.date,
       Shift: r.shift,
       shift: r.shift,
+      isOptimistic: true,
     }));
-    setMasterRoster(validatedRows);
 
-    const toastId = addToast('🔄 Uploading roster baseline to Google Sheets...', 'info', Infinity);
+    setMasterRoster((prev) => {
+      if (targetMonth) {
+        previousMonthRows = prev.filter((r) => r.date?.startsWith(targetMonth));
+        const otherMonths = prev.filter((r) => !r.date?.startsWith(targetMonth));
+        return [...otherMonths, ...validatedRows];
+      }
+      previousMonthRows = [...prev];
+      return validatedRows;
+    });
+
+    const toastId = addToast('🔄 Uploading roster baseline...', 'info', Infinity);
     
+    inFlightMutationsRef.current++;
     (async () => {
       try {
-        await uploadMasterRoster(rows);
+        await uploadMasterRoster(rows, targetMonth);
         updateToast(toastId, {
           message: '✅ Roster baseline uploaded successfully!',
           type: 'success',
           duration: 3000,
         });
-        // Give Google Sheets ~1.5 s to commit the write before reading back
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        await loadAllData();
       } catch (err) {
         console.error('Failed to upload baseline:', err);
-        setMasterRoster(previousMasterRoster);
+        setMasterRoster((prev) => {
+          if (targetMonth) {
+            const otherMonths = prev.filter((r) => !r.date?.startsWith(targetMonth));
+            return [...otherMonths, ...previousMonthRows];
+          }
+          return previousMonthRows;
+        });
         updateToast(toastId, {
           message: `❌ Upload failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 800 : 2000);
       }
     })();
   };
@@ -595,6 +697,7 @@ export default function App() {
     };
     setShiftBlocks((prev) => [...prev, newBlock]);
     const toastId = addToast('🔄 Applying limit block cap...', 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await submitShiftBlock(payload);
       updateToast(toastId, {
@@ -602,7 +705,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftBlocks(previousBlocks);
       updateToast(toastId, {
@@ -610,6 +712,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -618,6 +723,7 @@ export default function App() {
     const previousBlocks = [...shiftBlocks];
     setShiftBlocks((prev) => prev.filter(b => b.ID !== id && b.id !== id));
     const toastId = addToast('🔄 Deleting limit block cap...', 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await deleteShiftBlock(id);
       updateToast(toastId, {
@@ -625,7 +731,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftBlocks(previousBlocks);
       updateToast(toastId, {
@@ -633,6 +738,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -650,6 +758,7 @@ export default function App() {
     };
     setShiftTypes((prev) => [...prev, newShiftType]);
     const toastId = addToast(`🔄 Adding shift type "${payload.name}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await submitShiftType(payload);
       updateToast(toastId, {
@@ -657,7 +766,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -665,6 +773,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -677,6 +788,7 @@ export default function App() {
       )
     );
     const toastId = addToast(`🔄 Updating shift type "${payload.name}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await updateShiftType(id, payload);
       updateToast(toastId, {
@@ -684,7 +796,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -692,6 +803,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -701,6 +815,7 @@ export default function App() {
     const label = shiftType ? shiftType.Name : 'shift type';
     setShiftTypes((prev) => prev.filter(s => s.ID !== id && s.id !== id));
     const toastId = addToast(`🔄 Deleting shift type "${label}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await deleteShiftType(id);
       updateToast(toastId, {
@@ -708,7 +823,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -716,6 +830,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -724,6 +841,7 @@ export default function App() {
     const reordered = ids.map(id => shiftTypes.find(s => s.ID === id || s.id === id)).filter(Boolean);
     setShiftTypes(reordered);
     const toastId = addToast('🔄 Reordering shift types configuration...', 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await reorderShiftTypes(ids);
       updateToast(toastId, {
@@ -731,7 +849,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -739,6 +856,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -755,6 +875,7 @@ export default function App() {
     };
     setLimitGroups((prev) => [...prev, newGroup]);
     const toastId = addToast(`🔄 Adding limit group "${payload.groupName}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await submitLimitGroup(payload);
       updateToast(toastId, {
@@ -762,7 +883,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLimitGroups(previousLimitGroups);
       updateToast(toastId, {
@@ -770,6 +890,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -782,6 +905,7 @@ export default function App() {
       )
     );
     const toastId = addToast(`🔄 Updating limit group "${payload.groupName}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await updateLimitGroup(id, payload);
       updateToast(toastId, {
@@ -789,7 +913,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLimitGroups(previousLimitGroups);
       updateToast(toastId, {
@@ -797,6 +920,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -806,6 +932,7 @@ export default function App() {
     const label = group ? group.GroupName : 'limit group';
     setLimitGroups((prev) => prev.filter(g => g.ID !== id && g.id !== id));
     const toastId = addToast(`🔄 Deleting limit group "${label}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await deleteLimitGroup(id);
       updateToast(toastId, {
@@ -813,7 +940,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLimitGroups(previousLimitGroups);
       updateToast(toastId, {
@@ -821,6 +947,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -838,6 +967,7 @@ export default function App() {
     setActivities((prev) => [newActivity, ...prev]);
     const toastId = addToast(`🔄 Publishing announcement/update...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await submitActivity(payload);
@@ -846,8 +976,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await new Promise((resolve) => setTimeout(resolve, 800));
-        await loadAllData();
       } catch (err) {
         console.error('Background activity addition failed:', err);
         setActivities(previousActivities);
@@ -856,6 +984,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -871,6 +1002,7 @@ export default function App() {
     setActivities((prev) => prev.filter((a) => a.ID !== id));
     const toastId = addToast(`🔄 Deleting announcement/update...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await deleteActivity(id);
@@ -879,8 +1011,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await new Promise((resolve) => setTimeout(resolve, 800));
-        await loadAllData();
       } catch (err) {
         console.error('Background activity deletion failed:', err);
         setActivities(previousActivities);
@@ -889,6 +1019,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -899,6 +1032,7 @@ export default function App() {
 
     const toastId = addToast(`🔄 Updating system settings...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateSetting(key, value);
@@ -907,7 +1041,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Failed to update setting:', err);
         setSettings(previousSettings);
@@ -916,6 +1049,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -926,6 +1062,7 @@ export default function App() {
 
     const toastId = addToast(`🔄 Updating team members list...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateTeamMembers(newNames);
@@ -934,7 +1071,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Failed to update team members:', err);
         setTeamMembers(previousTeamMembers);
@@ -943,6 +1079,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -953,6 +1092,7 @@ export default function App() {
 
     const toastId = addToast(`🔄 Updating emergency physicians list...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateEmergencyPhysicians(newNames);
@@ -961,7 +1101,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Failed to update emergency physicians:', err);
         setEmergencyPhysicians(previousEmergencyPhysicians);
@@ -970,6 +1109,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -987,6 +1129,7 @@ export default function App() {
     setPublicHolidays(nextPublicHolidays);
     const toastId = addToast('Saving public holiday...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await upsertPublicHoliday({ date: normalizedDate, name: cleanName });
       updateToast(toastId, {
@@ -994,7 +1137,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       applyCustomPublicHolidays(previousPublicHolidays);
       setPublicHolidays(previousPublicHolidays);
@@ -1004,6 +1146,9 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -1015,6 +1160,7 @@ export default function App() {
     setPublicHolidays(nextPublicHolidays);
     const toastId = addToast('Removing public holiday...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await deletePublicHoliday(date);
       updateToast(toastId, {
@@ -1022,7 +1168,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       applyCustomPublicHolidays(previousPublicHolidays);
       setPublicHolidays(previousPublicHolidays);
@@ -1032,6 +1177,9 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -1047,6 +1195,7 @@ export default function App() {
     setLeaveApplications(nextLeaveApplications);
     const toastId = addToast('Saving leave form status...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await upsertLeaveApplication(payload);
       updateToast(toastId, {
@@ -1054,7 +1203,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLeaveApplications(previousLeaveApplications);
       updateToast(toastId, {
@@ -1063,6 +1211,9 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -1071,6 +1222,7 @@ export default function App() {
     setLeaveApplications((current) => current.filter((record) => record.ID !== id));
     const toastId = addToast('Removing leave tracking record...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await deleteLeaveApplication(id);
       updateToast(toastId, {
@@ -1078,7 +1230,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLeaveApplications(previousLeaveApplications);
       updateToast(toastId, {
@@ -1087,6 +1238,9 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 

@@ -1728,7 +1728,7 @@ export default function RosterPage({
        return;
     }
     
-    onUploadMasterRoster(flatRows);
+    onUploadMasterRoster(flatRows, rosterMonth);
     setIsEditMode(false);
     setIsStandbyEditMode(false);
     setIsExtendedEditMode(false);

@@ -64,78 +64,63 @@ function doPost(e) {
     const payload = parseRequestBody(e);
     const action = String(payload.action || '').toLowerCase();
 
-    if (action.startsWith('rosterv2')) return rosterV2DispatchPost_(payload);
-    if (action === 'submit') {
-      return handleSubmit(payload);
-    }
-    if (action === 'update') {
-      return handleUpdate(payload);
-    }
-    if (action === 'delete') {
-      return handleDelete(payload);
-    }
-    if (action === 'uploadmasterroster') {
-      return handleUploadMasterRoster(payload);
-    }
-    if (action === 'updaterequestapproval') {
-      return handleUpdateRequestApproval(payload);
-    }
-    if (action === 'addshiftblock') {
-      return handleAddShiftBlock(payload);
-    }
-    if (action === 'deleteshiftblock') {
-      return handleDeleteShiftBlock(payload);
-    }
-    if (action === 'addshifttype') {
-      return handleAddShiftType(payload);
-    }
-    if (action === 'updateshifttype') {
-      return handleUpdateShiftType(payload);
-    }
-    if (action === 'deleteshifttype') {
-      return handleDeleteShiftType(payload);
-    }
-    if (action === 'reordershifttypes') {
-      return handleReorderShiftTypes(payload);
-    }
-    if (action === 'addlimitgroup') {
-      return handleAddLimitGroup(payload);
-    }
-    if (action === 'updatelimitgroup') {
-      return handleUpdateLimitGroup(payload);
-    }
-    if (action === 'deletelimitgroup') {
-      return handleDeleteLimitGroup(payload);
-    }
-    if (action === 'addactivity') {
-      return handleAddActivity(payload);
-    }
-    if (action === 'deleteactivity') {
-      return handleDeleteActivity(payload);
-    }
-    if (action === 'updatesetting') {
-      return handleUpdateSetting(payload);
-    }
-    if (action === 'updateteammembers') {
-      return handleUpdateTeamMembers(payload);
-    }
-    if (action === 'updateemergencyphysicians') {
-      return handleUpdateEmergencyPhysicians(payload);
-    }
-    if (action === 'upsertpublicholiday') {
-      return handleUpsertPublicHoliday(payload);
-    }
-    if (action === 'deletepublicholiday') {
-      return handleDeletePublicHoliday(payload);
-    }
-    if (action === 'upsertleaveapplication') {
-      return handleUpsertLeaveApplication(payload);
-    }
-    if (action === 'deleteleaveapplication') {
-      return handleDeleteLeaveApplication(payload);
+    let response;
+    if (action.startsWith('rosterv2')) {
+      response = rosterV2DispatchPost_(payload);
+    } else if (action === 'submit') {
+      response = handleSubmit(payload);
+    } else if (action === 'update') {
+      response = handleUpdate(payload);
+    } else if (action === 'delete') {
+      response = handleDelete(payload);
+    } else if (action === 'uploadmasterroster') {
+      response = handleUploadMasterRoster(payload);
+    } else if (action === 'updaterequestapproval') {
+      response = handleUpdateRequestApproval(payload);
+    } else if (action === 'addshiftblock') {
+      response = handleAddShiftBlock(payload);
+    } else if (action === 'deleteshiftblock') {
+      response = handleDeleteShiftBlock(payload);
+    } else if (action === 'addshifttype') {
+      response = handleAddShiftType(payload);
+    } else if (action === 'updateshifttype') {
+      response = handleUpdateShiftType(payload);
+    } else if (action === 'deleteshifttype') {
+      response = handleDeleteShiftType(payload);
+    } else if (action === 'reordershifttypes') {
+      response = handleReorderShiftTypes(payload);
+    } else if (action === 'addlimitgroup') {
+      response = handleAddLimitGroup(payload);
+    } else if (action === 'updatelimitgroup') {
+      response = handleUpdateLimitGroup(payload);
+    } else if (action === 'deletelimitgroup') {
+      response = handleDeleteLimitGroup(payload);
+    } else if (action === 'addactivity') {
+      response = handleAddActivity(payload);
+    } else if (action === 'deleteactivity') {
+      response = handleDeleteActivity(payload);
+    } else if (action === 'updatesetting') {
+      response = handleUpdateSetting(payload);
+    } else if (action === 'updateteammembers') {
+      response = handleUpdateTeamMembers(payload);
+    } else if (action === 'updateemergencyphysicians') {
+      response = handleUpdateEmergencyPhysicians(payload);
+    } else if (action === 'upsertpublicholiday') {
+      response = handleUpsertPublicHoliday(payload);
+    } else if (action === 'deletepublicholiday') {
+      response = handleDeletePublicHoliday(payload);
+    } else if (action === 'upsertleaveapplication') {
+      response = handleUpsertLeaveApplication(payload);
+    } else if (action === 'deleteleaveapplication') {
+      response = handleDeleteLeaveApplication(payload);
+    } else {
+      throw new Error('Unknown action: ' + action);
     }
 
-    throw new Error('Unknown action: ' + action);
+    if (typeof SpreadsheetApp.flush === 'function') {
+      SpreadsheetApp.flush();
+    }
+    return response;
   } catch (error) {
     return createJsonResponse({ result: 'error', message: error.message || error.toString() });
   }
@@ -561,22 +546,76 @@ function handleUploadMasterRoster(data) {
   }
 }
 
+function formatCellDate_(val) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    try {
+      if (typeof Utilities !== 'undefined' && typeof Utilities.formatDate === 'function' && typeof Session !== 'undefined') {
+        return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      }
+    } catch (_) {}
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(val).trim();
+}
+
+function getMonthFromValue_(val) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  const str = String(val).trim();
+  if (/^\d{4}-\d{2}/.test(str)) {
+    return str.slice(0, 7);
+  }
+  return '';
+}
+
 function handleLegacyMasterRosterUpload_(data) {
   const sheet = createSheetIfNotExist(MASTER_ROSTER_SHEET_NAME, ['Name', 'Date', 'Shift']);
+  const targetMonth = data.targetMonth ? String(data.targetMonth).trim() : null;
+  const rows = Array.isArray(data.rows) ? data.rows : [];
   
+  const newValues = rows.map(r => [
+    String(r.name || '').trim(),
+    String(r.date || '').trim(),
+    String(r.shift || '').trim()
+  ]);
+
+  let finalValues = [];
   const lastRow = sheet.getLastRow();
-  if (lastRow > 1) {
-    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  const lastCol = Math.max(sheet.getLastColumn(), 3);
+
+  if (targetMonth && lastRow > 1) {
+    const existingValues = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+    const otherMonthRows = existingValues.filter(row => {
+      const rowMonth = getMonthFromValue_(row[1]);
+      return (row[0] || row[1] || row[2]) && rowMonth !== targetMonth;
+    }).map(row => [
+      String(row[0] || '').trim(),
+      formatCellDate_(row[1]),
+      String(row[2] || '').trim()
+    ]);
+    finalValues = otherMonthRows.concat(newValues);
+  } else {
+    finalValues = newValues;
   }
 
-  const rows = data.rows;
-  if (Array.isArray(rows) && rows.length > 0) {
-    const values = rows.map(r => [
-      String(r.name || '').trim(),
-      String(r.date || '').trim(),
-      String(r.shift || '').trim()
-    ]);
-    sheet.getRange(2, 1, values.length, 3).setValues(values);
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+  }
+
+  if (finalValues.length > 0) {
+    sheet.getRange(2, 1, finalValues.length, 3).setValues(finalValues);
+  }
+
+  if (typeof SpreadsheetApp.flush === 'function') {
+    SpreadsheetApp.flush();
   }
 
   return createJsonResponse({ result: 'success', count: rows ? rows.length : 0 });

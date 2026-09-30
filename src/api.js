@@ -105,8 +105,10 @@ export async function fetchAllData() {
   return request({ query: { action: 'alldata' } });
 }
 
-export async function uploadMasterRoster(rows) {
-  return request({ method: 'POST', body: { action: 'uploadmasterroster', rows } });
+export async function uploadMasterRoster(rows, targetMonth) {
+  const payload = { action: 'uploadmasterroster', rows };
+  if (targetMonth) payload.targetMonth = targetMonth;
+  return request({ method: 'POST', body: payload });
 }
 
 export async function updateRequestApproval(id, approvalStatus) {
