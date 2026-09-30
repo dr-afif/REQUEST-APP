@@ -380,6 +380,10 @@ export default function RosterPage({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCommentDetail, setActiveCommentDetail] = useState(null);
   const [adminCommentText, setAdminCommentText] = useState('');
+  const [reassignShift, setReassignShift] = useState('');
+  const [reassignStandby, setReassignStandby] = useState(false);
+  const [reassignExtended, setReassignExtended] = useState(false);
+  const [isReassigning, setIsReassigning] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isStandbyEditMode, setIsStandbyEditMode] = useState(false);
   const [isExtendedEditMode, setIsExtendedEditMode] = useState(false);
@@ -556,6 +560,18 @@ export default function RosterPage({
       }
     });
     return [...core, ...others, 'TOTAL LEAVES'];
+  }, [dropdownShifts]);
+
+  // Quick-tap common shift options for cell pop-up card
+  const quickShiftOptions = useMemo(() => {
+    const defaultList = ['AM', 'PM', 'ON1', 'ON2', 'NIGHT', 'PN', 'OFF', 'GOFF', 'AL', 'MC'];
+    const available = [];
+    defaultList.forEach((s) => {
+      if (dropdownShifts.some((ds) => ds.toUpperCase() === s.toUpperCase()) || ['AM', 'PM', 'OFF'].includes(s)) {
+        if (!available.includes(s)) available.push(s);
+      }
+    });
+    return available;
   }, [dropdownShifts]);
 
   // 1.0.1 Helper to return CSS class names based on shift type value
@@ -1027,6 +1043,77 @@ export default function RosterPage({
       setActiveCommentDetail(null);
     } catch (err) {
       console.error('Failed to delete admin comment:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeCommentDetail) {
+      const parsed = parseShiftValue(activeCommentDetail.val);
+      setReassignShift(parsed.cleanShift || '');
+      setReassignStandby(parsed.isStandby);
+      setReassignExtended(parsed.isExtended);
+      setIsReassigning(false);
+    }
+  }, [activeCommentDetail?.doctorName, activeCommentDetail?.dateStr, activeCommentDetail?.val]);
+
+  const handleDirectShiftReassignment = async (isClearing = false) => {
+    if (!activeCommentDetail || !onUploadMasterRoster) return;
+    const { doctorName, dateStr } = activeCommentDetail;
+    const normalizedTargetName = normalizeForComparison(doctorName);
+    const targetDate = dateStr;
+    
+    setIsReassigning(true);
+
+    let canonicalNewShift = '';
+    if (!isClearing && reassignShift) {
+      canonicalNewShift = reassignShift.trim().toUpperCase();
+      if (reassignStandby) canonicalNewShift += ' (S)';
+      if (reassignExtended) canonicalNewShift += ' (X)';
+    }
+
+    try {
+      const currentMonthRows = [];
+      masterRoster.forEach((row) => {
+        const rawDate = row.Date || row.date;
+        const iso = toIsoDate(rawDate);
+        if (iso && iso.startsWith(rosterMonth)) {
+          const rowName = normalizeForComparison(row.Name || row.name || '');
+          if (rowName === normalizedTargetName && iso === targetDate) {
+            return;
+          }
+          currentMonthRows.push({
+            name: row.Name || row.name,
+            date: iso,
+            shift: row.Shift || row.shift,
+          });
+        }
+      });
+
+      if (canonicalNewShift) {
+        currentMonthRows.push({
+          name: doctorName,
+          date: targetDate,
+          shift: canonicalNewShift,
+        });
+      }
+
+      await onUploadMasterRoster(currentMonthRows, rosterMonth);
+
+      setActiveCommentDetail((prev) => {
+        if (!prev) return null;
+        const reqShift = prev.requestedShift || '';
+        const cleanVal = parseShiftValue(canonicalNewShift).cleanShift;
+        const hasOverride = !!(reqShift && cleanVal && cleanVal.toUpperCase() !== reqShift.toUpperCase());
+        return {
+          ...prev,
+          val: canonicalNewShift,
+          hasOverride,
+        };
+      });
+    } catch (err) {
+      console.error('Direct shift reassignment failed:', err);
+    } finally {
+      setIsReassigning(false);
     }
   };
 
@@ -3031,6 +3118,140 @@ export default function RosterPage({
                   <div className="text-xs text-amber-900 space-y-1">
                     <p>This assignment differs from the request submitted by the doctor.</p>
                     <p className="font-semibold">Requested: <span className="bg-amber-100 px-1.5 py-0.5 rounded font-extrabold">{activeCommentDetail.requestedShift}</span></p>
+                  </div>
+                </div>
+              )}
+
+              {/* Direct Shift Re-assignment (Admin Only) */}
+              {isAdmin && (
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4 animate-fadeIn space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>✏️</span> Re-assign Shift
+                    </h4>
+                    {activeCommentDetail.val && (
+                      <span className="text-[10px] font-semibold text-indigo-600 bg-white/80 border border-indigo-200 px-2 py-0.5 rounded-full">
+                        Current: {parseShiftValue(activeCommentDetail.val).cleanShift || 'OFF'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Quick-Tap Shift Badges */}
+                  <div>
+                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Quick-Tap Common Shifts:
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {quickShiftOptions.map((opt) => {
+                        const isSelected = reassignShift.toUpperCase() === opt.toUpperCase();
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => setReassignShift(opt)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-indigo-600 text-white border-indigo-700 ring-2 ring-indigo-300 shadow-sm scale-105'
+                                : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/60'
+                            }`}
+                          >
+                            {opt}
+                          </button>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReassignShift('');
+                          setReassignStandby(false);
+                          setReassignExtended(false);
+                        }}
+                        className={`px-2 py-1 rounded-lg text-xs font-bold border border-dashed transition-all cursor-pointer ${
+                          !reassignShift
+                            ? 'bg-rose-600 text-white border-rose-700 ring-2 ring-rose-300 shadow-sm'
+                            : 'bg-white text-slate-400 border-slate-300 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50/50'
+                        }`}
+                        title="Clear Shift Assignment"
+                      >
+                        ✕ Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* All Shifts Dropdown */}
+                  <div>
+                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Or Select From All Shifts:
+                    </div>
+                    <select
+                      value={reassignShift}
+                      onChange={(e) => setReassignShift(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs font-bold text-slate-700 shadow-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                    >
+                      <option value="">-- Clear / Unassign (Blank) --</option>
+                      {dropdownShifts.map((shift) => (
+                        <option key={shift} value={shift}>
+                          {shift}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Shift Modifiers: Standby and Extended Shift toggles */}
+                  <div className="flex items-center gap-4 pt-1">
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={reassignStandby}
+                        onChange={(e) => setReassignStandby(e.target.checked)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
+                      />
+                      <span>Standby <strong className="text-amber-600 font-extrabold">(S)</strong></span>
+                    </label>
+
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={reassignExtended}
+                        onChange={(e) => setReassignExtended(e.target.checked)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
+                      />
+                      <span>Extended <strong className="text-blue-600 font-extrabold">(X)</strong></span>
+                    </label>
+                  </div>
+
+                  {/* Action buttons */}
+                  <div className="flex gap-2 pt-2 border-t border-indigo-100/80">
+                    <button
+                      type="button"
+                      disabled={isReassigning}
+                      onClick={() => handleDirectShiftReassignment(false)}
+                      className="flex-1 rounded-xl bg-indigo-600 py-2 px-3 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 active:scale-95 transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      {isReassigning ? (
+                        <>
+                          <span className="animate-spin text-sm">⏳</span>
+                          <span>Updating...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>💾</span>
+                          <span>{reassignShift ? `Assign "${reassignShift}${reassignStandby ? ' (S)' : ''}${reassignExtended ? ' (X)' : ''}"` : 'Clear Assignment'}</span>
+                        </>
+                      )}
+                    </button>
+
+                    {activeCommentDetail.val && (
+                      <button
+                        type="button"
+                        disabled={isReassigning}
+                        onClick={() => handleDirectShiftReassignment(true)}
+                        className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 active:scale-95 transition disabled:opacity-50 cursor-pointer"
+                        title="Remove current shift assignment"
+                      >
+                        Remove Shift
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
