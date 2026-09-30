@@ -19,6 +19,127 @@ const splitEmergencyPhysicianNames = (value) => String(value || '')
   .map((name) => name.trim())
   .filter(Boolean);
 
+function EpPainterToolbar({
+  physicians = [],
+  activeStamp,
+  onSelectStamp,
+  onClearStamp,
+  onBatchFillWeekdays,
+  onBatchFillWeekends,
+}) {
+  const options = useMemo(() => physicians
+    .map(formatEmergencyPhysicianName)
+    .filter(Boolean)
+    .filter((name, index, all) => (
+      all.findIndex((candidate) => normalizeForComparison(candidate) === normalizeForComparison(name)) === index
+    )), [physicians]);
+
+  return (
+    <div className="mb-4 rounded-2xl border border-teal-200 bg-gradient-to-r from-teal-50/95 via-emerald-50/80 to-teal-50/95 p-3 sm:p-4 shadow-sm transition-all animate-fadeIn">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 pb-2.5 mb-2.5 border-b border-teal-200/60">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-teal-600 text-white text-base shadow-xs shrink-0">
+            🎨
+          </span>
+          <div>
+            <h3 className="text-xs sm:text-sm font-bold text-teal-900 flex items-center gap-2 flex-wrap">
+              <span>EP 1-Click Painter</span>
+              {activeStamp ? (
+                <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold ${
+                  activeStamp === '__CLEAR__'
+                    ? 'bg-rose-100 text-rose-700 border border-rose-300'
+                    : 'bg-teal-600 text-white shadow-xs'
+                }`}>
+                  {activeStamp === '__CLEAR__' ? '🧹 Eraser Active' : `Active Stamp: ${activeStamp}`}
+                </span>
+              ) : (
+                <span className="text-[10px] font-semibold text-teal-700/80 bg-teal-100/70 px-2.5 py-0.5 rounded-full">
+                  Click a doctor to start stamping
+                </span>
+              )}
+            </h3>
+            <p className="text-[10px] sm:text-xs text-teal-700/80 mt-0.5">
+              Select a doctor badge below, then click any <strong className="font-semibold text-teal-950">Office Hour</strong> or <strong className="font-semibold text-teal-950">On Call</strong> cell to stamp immediately with 1 click.
+            </p>
+          </div>
+        </div>
+
+        {activeStamp && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={onClearStamp}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-teal-800 bg-white border border-teal-300 rounded-xl hover:bg-teal-50 hover:border-teal-400 transition shadow-2xs cursor-pointer"
+            >
+              <span>✕ Deselect Stamp</span>
+              <kbd className="text-[9px] bg-teal-100 text-teal-800 px-1.5 py-0.5 rounded font-mono">Esc</kbd>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Badges Palette */}
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+        {options.map((name) => {
+          const isActive = activeStamp === name;
+          return (
+            <button
+              key={name}
+              type="button"
+              onClick={() => onSelectStamp(isActive ? null : name)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 active:scale-95 cursor-pointer ${
+                isActive
+                  ? 'bg-teal-600 text-white ring-2 ring-teal-400 ring-offset-1 shadow-sm scale-105'
+                  : 'bg-white text-teal-900 border border-teal-200 hover:bg-teal-100/80 hover:border-teal-300'
+              }`}
+            >
+              <span>{name}</span>
+              {isActive && <span className="text-[10px] font-extrabold">✓</span>}
+            </button>
+          );
+        })}
+
+        {/* Eraser Button */}
+        <button
+          type="button"
+          onClick={() => onSelectStamp(activeStamp === '__CLEAR__' ? null : '__CLEAR__')}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 active:scale-95 cursor-pointer ${
+            activeStamp === '__CLEAR__'
+              ? 'bg-rose-600 text-white ring-2 ring-rose-400 ring-offset-1 shadow-sm scale-105'
+              : 'bg-white text-rose-700 border border-rose-200 hover:bg-rose-50 hover:border-rose-300'
+          }`}
+          title="Click to activate Eraser. Clicking any EP cell will clear it."
+        >
+          <span>🧹 Eraser</span>
+          {activeStamp === '__CLEAR__' && <span className="text-[10px] font-extrabold">✓</span>}
+        </button>
+
+        {/* Quick Batch Tools (Shown when an EP is selected) */}
+        {activeStamp && activeStamp !== '__CLEAR__' && (
+          <div className="flex flex-wrap items-center gap-1.5 pl-2 ml-1 border-l border-teal-300/80">
+            <button
+              type="button"
+              onClick={() => onBatchFillWeekdays(activeStamp)}
+              className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-white text-teal-800 border border-teal-300 hover:bg-teal-50 hover:border-teal-400 transition shadow-2xs flex items-center gap-1 cursor-pointer"
+              title={`Assign ${activeStamp} to all weekdays (Mon-Fri) Office Hour for this month`}
+            >
+              <span>⚡ Fill Weekdays (Office)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onBatchFillWeekends(activeStamp)}
+              className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-white text-teal-800 border border-teal-300 hover:bg-teal-50 hover:border-teal-400 transition shadow-2xs flex items-center gap-1 cursor-pointer"
+              title={`Assign ${activeStamp} to all weekends (Sat-Sun) On Call for this month`}
+            >
+              <span>⚡ Fill Weekends (On Call)</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EmergencyPhysicianMultiSelect({
   id,
   value,
@@ -26,10 +147,16 @@ function EmergencyPhysicianMultiSelect({
   onChange,
   onNavigateKeyDown,
   isWeekend,
+  activeEpStamp = null,
+  yesterdayValue = '',
+  slotLabel = '',
+  dateLabel = '',
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [isMultiMode, setIsMultiMode] = useState(false);
   const [draftNames, setDraftNames] = useState(() => splitEmergencyPhysicianNames(value));
   const [searchQuery, setSearchQuery] = useState('');
+  const [isStampedFlash, setIsStampedFlash] = useState(false);
 
   const options = useMemo(() => physicians
     .map(formatEmergencyPhysicianName)
@@ -42,6 +169,9 @@ function EmergencyPhysicianMultiSelect({
     if (!isOpen) {
       setDraftNames(splitEmergencyPhysicianNames(value));
       setSearchQuery('');
+    } else {
+      const currentList = splitEmergencyPhysicianNames(value);
+      setIsMultiMode(currentList.length > 1);
     }
   }, [isOpen, value]);
 
@@ -66,6 +196,58 @@ function EmergencyPhysicianMultiSelect({
     ));
   };
 
+  const handleDirectSelect = (name) => {
+    onChange(name);
+    setIsOpen(false);
+  };
+
+  const handleApplyMulti = () => {
+    onChange(draftNames.join(', '));
+    setIsOpen(false);
+  };
+
+  const handleClear = () => {
+    onChange('');
+    setIsOpen(false);
+  };
+
+  const handleCopyYesterday = () => {
+    if (yesterdayValue) {
+      onChange(yesterdayValue);
+      setIsOpen(false);
+    }
+  };
+
+  const handleClick = () => {
+    if (activeEpStamp) {
+      if (activeEpStamp === '__CLEAR__') {
+        onChange('');
+      } else {
+        onChange(activeEpStamp);
+      }
+      setIsStampedFlash(true);
+      setTimeout(() => setIsStampedFlash(false), 350);
+      return;
+    }
+    setIsOpen(true);
+  };
+
+  const handleButtonKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      handleClick();
+      return;
+    }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && activeEpStamp) {
+      event.preventDefault();
+      onChange('');
+      setIsStampedFlash(true);
+      setTimeout(() => setIsStampedFlash(false), 350);
+      return;
+    }
+    onNavigateKeyDown?.(event);
+  };
+
   const visibleOptions = options.filter((name) => (
     normalizeForComparison(name).includes(normalizeForComparison(searchQuery))
   ));
@@ -79,22 +261,32 @@ function EmergencyPhysicianMultiSelect({
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-label={`Select emergency physicians. ${selectedNames.length} selected.`}
-        onClick={() => setIsOpen(true)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            setIsOpen(true);
-            return;
-          }
-          onNavigateKeyDown?.(event);
-        }}
-        className={`w-full h-full min-h-[3.5rem] px-1 py-1 text-center text-[9px] sm:text-xs font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 transition-colors hover:bg-teal-50/50 focus:bg-white cursor-pointer ${
+        title={
+          activeEpStamp
+            ? activeEpStamp === '__CLEAR__'
+              ? 'Click to erase EP assignment'
+              : `Click to stamp ${activeEpStamp}`
+            : 'Click to edit EP assignment'
+        }
+        onClick={handleClick}
+        onKeyDown={handleButtonKeyDown}
+        className={`w-full h-full min-h-[3.5rem] px-1 py-1 text-center text-[9px] sm:text-xs font-bold bg-transparent outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500 transition-all ${
+          activeEpStamp
+            ? activeEpStamp === '__CLEAR__'
+              ? 'cursor-crosshair hover:bg-rose-100/70 hover:ring-2 hover:ring-rose-400 hover:ring-inset'
+              : 'cursor-crosshair hover:bg-teal-100/80 hover:ring-2 hover:ring-teal-400 hover:ring-inset'
+            : 'cursor-pointer hover:bg-teal-50/60 focus:bg-white'
+        } ${
+          isStampedFlash ? 'bg-teal-300/80 ring-2 ring-teal-500 scale-105' : ''
+        } ${
           isWeekend ? 'text-teal-800' : 'text-teal-700'
         }`}
       >
         {selectedNames.length > 0 ? (
           <span className="flex flex-col items-center gap-0.5">
-            {selectedNames.slice(0, 2).map((name) => <span key={name} className="leading-tight">{name}</span>)}
+            {selectedNames.slice(0, 2).map((name) => (
+              <span key={name} className="leading-tight truncate max-w-[5.5rem] sm:max-w-none">{name}</span>
+            ))}
             {selectedNames.length > 2 && (
               <span className="rounded-full bg-teal-100 px-1.5 py-0.5 text-[8px] text-teal-800">
                 +{selectedNames.length - 2} more
@@ -102,13 +294,13 @@ function EmergencyPhysicianMultiSelect({
             )}
           </span>
         ) : (
-          <span className="text-slate-400">Select EP</span>
+          <span className="text-slate-400 italic">Select EP</span>
         )}
       </button>
 
       {isOpen && createPortal((
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-900/40 p-4 backdrop-blur-xs animate-fadeIn"
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsOpen(false);
@@ -118,89 +310,169 @@ function EmergencyPhysicianMultiSelect({
             role="dialog"
             aria-modal="true"
             aria-labelledby={`${id}-title`}
-            className="w-full max-w-md rounded-3xl border border-slate-100 bg-white p-5 shadow-2xl"
+            className="w-full max-w-sm rounded-3xl border border-slate-100 bg-white p-5 shadow-2xl animate-scaleUp"
           >
-            <div className="mb-4 flex items-start justify-between gap-4">
+            {/* Context Header */}
+            <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h2 id={`${id}-title`} className="text-lg font-bold text-slate-800">Emergency physicians</h2>
-                <p className="mt-1 text-xs text-slate-500">Select one or more names for this roster cell.</p>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
+                    {slotLabel || 'Emergency Physician'}
+                  </span>
+                  {dateLabel && (
+                    <span className="text-xs font-bold text-slate-500">
+                      {dateLabel}
+                    </span>
+                  )}
+                </div>
+                <h2 id={`${id}-title`} className="mt-1 text-base font-bold text-slate-800">
+                  Assign Physician
+                </h2>
               </div>
               <button
                 type="button"
-                aria-label="Close emergency physician picker"
+                aria-label="Close picker"
                 onClick={() => setIsOpen(false)}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 focus:outline-none cursor-pointer"
               >
-                <APP_ICONS.close className="h-5 w-5" />
+                <APP_ICONS.close className="h-4 w-4" />
               </button>
             </div>
 
-            <label htmlFor={`${id}-search`} className="block text-xs font-bold uppercase tracking-wider text-slate-500">
-              Search directory
-            </label>
-            <input
-              id={`${id}-search`}
-              type="search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search emergency physician"
-              autoFocus
-              className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
-            />
+            {/* Quick Actions (Copy Yesterday / Clear) */}
+            {(yesterdayValue || selectedNames.length > 0) && (
+              <div className="mb-3 flex flex-col gap-1.5 p-2 bg-slate-50 rounded-2xl border border-slate-150">
+                {yesterdayValue && yesterdayValue !== value && (
+                  <button
+                    type="button"
+                    onClick={handleCopyYesterday}
+                    className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-bold text-teal-800 bg-white border border-teal-200 rounded-xl hover:bg-teal-50 hover:border-teal-300 transition shadow-2xs cursor-pointer"
+                  >
+                    <span className="flex items-center gap-1.5 truncate">
+                      <span>📋 Copy Yesterday:</span>
+                      <span className="font-extrabold text-teal-900 truncate">{yesterdayValue}</span>
+                    </span>
+                    <span className="shrink-0 text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.5 rounded-md font-semibold">
+                      1-Tap
+                    </span>
+                  </button>
+                )}
 
-            <div className="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
-              {visibleOptions.length > 0 ? visibleOptions.map((name) => (
-                <label
-                  key={name}
-                  className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                    isSelected(name)
-                      ? 'border-teal-300 bg-teal-50 text-teal-900'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected(name)}
-                    onChange={() => toggleName(name)}
-                    className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
-                  />
-                  <span>{name}</span>
-                </label>
-              )) : (
-                <p className="rounded-xl bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+                {selectedNames.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClear}
+                    className="w-full flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-bold text-rose-600 bg-white border border-rose-200 rounded-xl hover:bg-rose-50 transition cursor-pointer"
+                  >
+                    ✕ Clear Assignment
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Mode Switcher */}
+            <div className="mb-2 flex items-center justify-between px-0.5">
+              <span className="text-[11px] font-bold text-slate-600">
+                {isMultiMode ? 'Multiple Selection Mode' : 'Direct Select (1-Tap)'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsMultiMode(!isMultiMode)}
+                className="text-[11px] font-bold text-teal-700 hover:text-teal-900 underline cursor-pointer"
+              >
+                {isMultiMode ? '← Switch to 1-Tap' : '+ Assign Multiple'}
+              </button>
+            </div>
+
+            {/* Search Input (if > 3 physicians) */}
+            {options.length > 3 && (
+              <input
+                id={`${id}-search`}
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search physician name..."
+                autoFocus
+                className="mb-2.5 h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 outline-none transition focus:border-teal-400 focus:bg-white focus:ring-2 focus:ring-teal-100"
+              />
+            )}
+
+            {/* Doctor Options */}
+            <div className="max-h-60 space-y-1.5 overflow-y-auto pr-0.5">
+              {visibleOptions.length > 0 ? (
+                visibleOptions.map((name) => {
+                  const isCur = selectedNames.some(
+                    (s) => normalizeForComparison(s) === normalizeForComparison(name)
+                  );
+
+                  if (isMultiMode) {
+                    const checked = isSelected(name);
+                    return (
+                      <label
+                        key={name}
+                        className={`flex min-h-10 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 text-xs font-bold transition ${
+                          checked
+                            ? 'border-teal-300 bg-teal-50 text-teal-900'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleName(name)}
+                          className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                        />
+                        <span>{name}</span>
+                      </label>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => handleDirectSelect(name)}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-xs font-bold rounded-xl transition text-left cursor-pointer ${
+                        isCur
+                          ? 'bg-teal-600 text-white shadow-xs'
+                          : 'bg-white text-slate-700 hover:bg-teal-50 hover:text-teal-900 border border-slate-200 hover:border-teal-300'
+                      }`}
+                    >
+                      <span>{name}</span>
+                      {isCur ? (
+                        <span className="text-[10px] font-extrabold bg-teal-700 px-1.5 py-0.5 rounded">✓ Selected</span>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 font-normal">Tap to assign</span>
+                      )}
+                    </button>
+                  );
+                })
+              ) : (
+                <p className="rounded-xl bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">
                   No emergency physician matches this search.
                 </p>
               )}
             </div>
 
-            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-              <button
-                type="button"
-                onClick={() => setDraftNames([])}
-                className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50"
-              >
-                Clear selection
-              </button>
-              <div className="flex gap-2">
+            {/* Multi-mode Apply Buttons */}
+            {isMultiMode && (
+              <div className="mt-4 flex gap-2">
                 <button
                   type="button"
                   onClick={() => setIsOpen(false)}
-                  className="min-h-11 flex-1 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 transition hover:bg-slate-50 sm:flex-none"
+                  className="h-10 flex-1 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 transition hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    onChange(draftNames.join(', '));
-                    setIsOpen(false);
-                  }}
-                  className="min-h-11 flex-1 rounded-xl bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-300 sm:flex-none"
+                  onClick={handleApplyMulti}
+                  className="h-10 flex-1 rounded-xl bg-teal-600 px-3 text-xs font-bold text-white transition hover:bg-teal-700 shadow-sm cursor-pointer"
                 >
                   Apply ({draftNames.length})
                 </button>
               </div>
-            </div>
+            )}
           </div>
         </div>
       ), document.body)}
@@ -391,6 +663,7 @@ export default function RosterPage({
   const [allowDoubleShift, setAllowDoubleShift] = useState(false);
   const [editedGrid, setEditedGrid] = useState({});
   const [activeTab, setActiveTab] = useState('calendar'); // 'calendar' or 'table'
+  const [activeEpStamp, setActiveEpStamp] = useState(null); // EP doctor name, '__CLEAR__', or null
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportSettings, setExportSettings] = useState({
     mainTitle: 'ED HSAAS',
@@ -990,6 +1263,64 @@ export default function RosterPage({
       setIsExcelTableEditMode(true);
       setActiveTab('table');
     }
+  };
+
+  // Reset EP Painter stamp when editing is cancelled, tab changes, or Escape is pressed
+  useEffect(() => {
+    if (!isEditMode || activeTab !== 'calendar') {
+      setActiveEpStamp(null);
+    }
+  }, [isEditMode, activeTab]);
+
+  useEffect(() => {
+    if (!activeEpStamp) return undefined;
+    const handleGlobalKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setActiveEpStamp(null);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [activeEpStamp]);
+
+  const handleBatchFillWeekdays = (doctorName) => {
+    if (!doctorName || doctorName === '__CLEAR__') return;
+    const confirmMsg = `Assign ${doctorName} to all weekdays (Mon-Fri) Office Hour for ${monthLabel}?`;
+    if (!confirm(confirmMsg)) return;
+
+    setEditedGrid((prev) => {
+      const nextGrid = { ...prev };
+      daysInMonthList.forEach(({ dayName, dateStr }) => {
+        const isWknd = dayName === 'SAT' || dayName === 'SUN';
+        if (!isWknd) {
+          nextGrid[dateStr] = {
+            ...(nextGrid[dateStr] || {}),
+            EP_OFFICE_HOUR: doctorName,
+          };
+        }
+      });
+      return nextGrid;
+    });
+  };
+
+  const handleBatchFillWeekends = (doctorName) => {
+    if (!doctorName || doctorName === '__CLEAR__') return;
+    const confirmMsg = `Assign ${doctorName} to all weekends (Sat-Sun) On Call for ${monthLabel}?`;
+    if (!confirm(confirmMsg)) return;
+
+    setEditedGrid((prev) => {
+      const nextGrid = { ...prev };
+      daysInMonthList.forEach(({ dayName, dateStr }) => {
+        const isWknd = dayName === 'SAT' || dayName === 'SUN';
+        if (isWknd) {
+          nextGrid[dateStr] = {
+            ...(nextGrid[dateStr] || {}),
+            EP_ONCALL: doctorName,
+          };
+        }
+      });
+      return nextGrid;
+    });
   };
 
   const handleSaveAdminComment = async () => {
@@ -1823,6 +2154,7 @@ export default function RosterPage({
     setIsStandbyEditMode(false);
     setIsExtendedEditMode(false);
     setIsExcelTableEditMode(false);
+    setActiveEpStamp(null);
     setEditedGrid({});
   };
 
@@ -2127,8 +2459,20 @@ export default function RosterPage({
       )}
 
       {daysInMonthList.length > 0 && activeTab === 'calendar' && (
-        /* 📊 Finalized Monthly Table Card (Calendar View) */
-        <div className={`rounded-3xl border bg-white p-1 shadow-sm overflow-hidden transition-all duration-300 ${isEditMode ? 'border-indigo-300 ring-2 ring-indigo-100' : 'border-slate-150/70'}`}>
+        <>
+          {isEditMode && (
+            <EpPainterToolbar
+              physicians={emergencyPhysicians.length ? emergencyPhysicians : (directoryMap?.ep || [])}
+              activeStamp={activeEpStamp}
+              onSelectStamp={(stamp) => setActiveEpStamp(stamp)}
+              onClearStamp={() => setActiveEpStamp(null)}
+              onBatchFillWeekdays={handleBatchFillWeekdays}
+              onBatchFillWeekends={handleBatchFillWeekends}
+            />
+          )}
+
+          {/* 📊 Finalized Monthly Table Card (Calendar View) */}
+          <div className={`rounded-3xl border bg-white p-1 shadow-sm overflow-hidden transition-all duration-300 ${isEditMode ? 'border-indigo-300 ring-2 ring-indigo-100' : 'border-slate-150/70'}`}>
           <div className="overflow-x-auto">
             <table className="min-w-full border-collapse border border-slate-300 text-center font-sans text-sm">
               <thead>
@@ -2274,7 +2618,7 @@ export default function RosterPage({
                       ))}
 
                       {/* Emergency Physician Cells (Office Hour + On Call) */}
-                      {[['EP_OFFICE_HOUR', 3], ['EP_ONCALL', 4]].map(([epKey, shiftIndex]) => {
+                      {[['EP_OFFICE_HOUR', 3, 'Office Hour'], ['EP_ONCALL', 4, 'On Call']].map(([epKey, shiftIndex, slotLabel]) => {
                         const epVal = isEditMode
                           ? (editedGrid[dateStr]?.[epKey] ?? '')
                           : (() => {
@@ -2286,6 +2630,10 @@ export default function RosterPage({
                               });
                               return raw.map(r => String(r.Name || r.name || '').trim()).filter(Boolean).join(', ');
                             })();
+
+                        const yesterdayDateStr = dayIndex > 0 ? daysInMonthList[dayIndex - 1]?.dateStr : null;
+                        const yesterdayValue = yesterdayDateStr ? (editedGrid[yesterdayDateStr]?.[epKey] ?? '') : '';
+
                         return (
                           <td key={epKey} className={`border border-slate-300 p-0 align-middle h-14 ${
                             isToday ? 'bg-teal-50/30' : isWeekend ? 'bg-teal-50/20' : 'bg-teal-50/10'
@@ -2294,8 +2642,12 @@ export default function RosterPage({
                               <EmergencyPhysicianMultiSelect
                                 id={`cell-${dayIndex}-${shiftIndex}`}
                                 value={epVal}
-                                physicians={emergencyPhysicians}
+                                physicians={emergencyPhysicians.length ? emergencyPhysicians : (directoryMap?.ep || [])}
                                 isWeekend={isWeekend}
+                                activeEpStamp={activeEpStamp}
+                                yesterdayValue={yesterdayValue}
+                                slotLabel={slotLabel}
+                                dateLabel={`${dayNum} (${dayName})`}
                                 onChange={(val) => {
                                   setEditedGrid(prev => ({
                                     ...prev,
@@ -2334,7 +2686,8 @@ export default function RosterPage({
             </table>
           </div>
         </div>
-      )}
+      </>
+    )}
 
       {daysInMonthList.length > 0 && activeTab === 'table' && (
         <>
