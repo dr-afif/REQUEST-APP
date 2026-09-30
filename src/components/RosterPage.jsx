@@ -501,6 +501,13 @@ const parseShiftValue = (rawVal) => {
   return { cleanShift, isStandby, isExtended };
 };
 
+// Helper to identify working shifts (AM, PM, ON1, ON2, PN, plus NIGHT variants)
+const isWorkingShift = (shiftVal) => {
+  if (!shiftVal) return false;
+  const clean = parseShiftValue(shiftVal).cleanShift.toUpperCase().trim();
+  return ['AM', 'PM', 'ON1', 'ON2', 'PN', 'NIGHT', 'ON', 'N'].includes(clean);
+};
+
 const getCanonicalShiftKey = (rawVal) => {
   const { cleanShift, isStandby, isExtended } = parseShiftValue(rawVal);
   if (!cleanShift) return '';
@@ -2445,7 +2452,7 @@ export default function RosterPage({
       {isStandbyEditMode && (
          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 shadow-sm animate-fadeIn">
            <span>
-             <strong className="font-bold">Standby Editing Mode Active:</strong> You can click on any assigned shift or leave cell in the table below to toggle standby status (indicated by the amber <strong className="font-extrabold">S</strong> badge). Your changes will be saved to Google Sheets.
+             <strong className="font-bold">Standby Editing Mode Active:</strong> Click on any assigned shift or leave cell in the table below to toggle standby status (indicated by the amber <strong className="font-extrabold">S</strong> badge). <strong className="text-amber-950 font-bold underline decoration-amber-400">Non-working shifts (OFF, GOFF, Leaves)</strong> are highlighted in soft amber for quick assignment. Working shifts (AM, PM, ON1, ON2, PN) are muted. Your changes will be saved to Google Sheets.
            </span>
          </div>
       )}
@@ -2754,14 +2761,6 @@ export default function RosterPage({
                           const holidayName = getHolidayName(day.dateStr);
                           const isHoliday = !!holidayName;
                           
-                          let cellBg = isToday 
-                            ? 'bg-indigo-50/40' 
-                            : isHoliday
-                            ? 'bg-rose-100/60'
-                            : isWeekendDay 
-                            ? 'bg-slate-100/80' 
-                            : 'bg-white';
-  
                           let val = '';
                           if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
                             val = getEditingShift(day.dateStr, nameMapped);
@@ -2780,11 +2779,35 @@ export default function RosterPage({
                           const hasCustomComment = !!(reqData && (isCustomCommentOnly ? reqData.comment : reqData.customComment?.comment));
                           const customCommentText = reqData ? (isCustomCommentOnly ? reqData.comment : reqData.customComment?.comment || '') : '';
                           const cleanVal = val ? parseShiftValue(val).cleanShift : '';
+                          const isWorking = isWorkingShift(cleanVal);
+                          const isNonWorkingShift = !!cleanVal && !isWorking;
                           const isRequested = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() === reqData.shift.toUpperCase());
                           const hasOverride = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() !== reqData.shift.toUpperCase());
                           const hasIndicator = hasRequestComment || hasCustomComment || hasOverride;
                           const isCellInteractive = (hasIndicator || isAdmin) && !isEditMode && !isStandbyEditMode && !isExtendedEditMode && !isExcelTableEditMode;
-  
+
+                          let cellBg = isToday 
+                            ? 'bg-indigo-50/40' 
+                            : isHoliday
+                            ? 'bg-rose-100/60'
+                            : isWeekendDay 
+                            ? 'bg-slate-100/80' 
+                            : 'bg-white';
+
+                          if (isStandbyEditMode) {
+                            if (isNonWorkingShift) {
+                              cellBg = isToday 
+                                ? 'bg-amber-100/80' 
+                                : isHoliday
+                                ? 'bg-amber-100/60'
+                                : isWeekendDay 
+                                ? 'bg-amber-50/90' 
+                                : 'bg-amber-50/70';
+                            } else if (isWorking) {
+                              cellBg = isToday ? 'bg-indigo-50/20' : 'bg-slate-50/40';
+                            }
+                          }
+
                           let cellTooltip = '';
                           const tooltips = [];
                           if (reqData) {
@@ -2802,9 +2825,9 @@ export default function RosterPage({
                             }
                           }
                           cellTooltip = tooltips.join('\n');
-  
+
                           const selectClass = `w-full text-center text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} rounded-lg border px-1.5 py-1 outline-none transition-all cursor-pointer ${getShiftBadgeClass(val, isRequested)}`;
-  
+
                           return (
                             <td
                               key={day.dateStr}
@@ -2831,23 +2854,37 @@ export default function RosterPage({
                               }}
                               className={`border-b p-1.5 h-10 min-w-[3.8rem] align-middle ${
                                 day.dayName === 'SUN' ? 'border-r-2 border-r-slate-300 border-b-slate-100' : 'border-r border-slate-100'
-                              } ${cellBg} ${isCellInteractive ? 'cursor-pointer hover:bg-indigo-50/30' : ''}`}
+                              } ${cellBg} ${isCellInteractive ? 'cursor-pointer hover:bg-indigo-50/30' : ''} ${
+                                isStandbyEditMode && isNonWorkingShift ? 'ring-1 ring-inset ring-amber-300/70' : ''
+                              }`}
                             >
                               <div className="relative w-full h-full flex items-center justify-center">
                                 {isStandbyEditMode ? (
                                   val ? (
                                     <button
                                       onClick={() => handleToggleStandby(day.dateStr, name)}
-                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} transition-all shadow-sm active:scale-95 ${
+                                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-[10px] sm:text-xs ${isRequested ? 'font-bold' : 'font-normal'} transition-all shadow-sm active:scale-95 cursor-pointer ${
                                         parseShiftValue(val).isStandby
-                                          ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600'
-                                          : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                                          ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 ring-2 ring-amber-400/60 font-bold shadow-md'
+                                          : isNonWorkingShift
+                                          ? 'bg-amber-50/90 hover:bg-amber-100 text-amber-950 border-amber-300 font-semibold hover:border-amber-400 shadow-2xs hover:scale-105'
+                                          : 'bg-white hover:bg-slate-50 text-slate-400 border-slate-200/80 opacity-60 hover:opacity-100'
                                       }`}
-                                      title={parseShiftValue(val).isStandby ? "Click to remove standby" : "Click to set standby"}
+                                      title={
+                                        parseShiftValue(val).isStandby
+                                          ? "Click to remove standby"
+                                          : isNonWorkingShift
+                                          ? `Non-working shift (${cleanVal}): click to assign standby`
+                                          : `Working shift (${cleanVal}) - standby is intended for non-working shifts`
+                                      }
                                     >
                                       <span>{parseShiftValue(val).cleanShift}</span>
                                       <span className={`inline-flex items-center justify-center px-1 rounded-full text-[8px] font-extrabold leading-none min-w-[12px] h-[12px] ${
-                                        parseShiftValue(val).isStandby ? 'bg-white text-amber-600' : 'bg-slate-200 text-slate-600'
+                                        parseShiftValue(val).isStandby
+                                          ? 'bg-white text-amber-600 shadow-2xs'
+                                          : isNonWorkingShift
+                                          ? 'bg-amber-200/90 text-amber-900 border border-amber-300'
+                                          : 'bg-slate-150 text-slate-400'
                                       }`}>
                                         S
                                       </span>
