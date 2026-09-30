@@ -346,8 +346,14 @@ export default function App() {
         if (!pendingOptimistic.length) {
           return validMasterRoster;
         }
-        const confirmedKeys = new Set(validMasterRoster.map((r) => `${r.name || r.Name}_${r.date || r.Date}_${r.shift || r.Shift}`));
-        const stillPending = pendingOptimistic.filter((r) => !confirmedKeys.has(`${r.name || r.Name}_${r.date || r.Date}_${r.shift || r.Shift}`));
+        const getRowKey = (r) => {
+          const name = normalizeForComparison(r.name || r.Name || '');
+          const isoDate = toIsoDate(r.date || r.Date) || String(r.date || r.Date || '').trim();
+          const shift = String(r.shift || r.Shift || '').trim().toUpperCase();
+          return `${name}_${isoDate}_${shift}`;
+        };
+        const confirmedKeys = new Set(validMasterRoster.map(getRowKey));
+        const stillPending = pendingOptimistic.filter((r) => !confirmedKeys.has(getRowKey(r)));
         return [...validMasterRoster, ...stillPending];
       });
 
@@ -643,8 +649,12 @@ export default function App() {
 
     setMasterRoster((prev) => {
       if (targetMonth) {
-        previousMonthRows = prev.filter((r) => r.date?.startsWith(targetMonth));
-        const otherMonths = prev.filter((r) => !r.date?.startsWith(targetMonth));
+        const isMonthMatch = (r) => {
+          const iso = toIsoDate(r.date || r.Date);
+          return iso ? iso.startsWith(targetMonth) : String(r.date || r.Date || '').startsWith(targetMonth);
+        };
+        previousMonthRows = prev.filter(isMonthMatch);
+        const otherMonths = prev.filter((r) => !isMonthMatch(r));
         return [...otherMonths, ...validatedRows];
       }
       previousMonthRows = [...prev];
@@ -666,7 +676,11 @@ export default function App() {
         console.error('Failed to upload baseline:', err);
         setMasterRoster((prev) => {
           if (targetMonth) {
-            const otherMonths = prev.filter((r) => !r.date?.startsWith(targetMonth));
+            const isMonthMatch = (r) => {
+              const iso = toIsoDate(r.date || r.Date);
+              return iso ? iso.startsWith(targetMonth) : String(r.date || r.Date || '').startsWith(targetMonth);
+            };
+            const otherMonths = prev.filter((r) => !isMonthMatch(r));
             return [...otherMonths, ...previousMonthRows];
           }
           return previousMonthRows;

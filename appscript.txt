@@ -559,19 +559,29 @@ function formatCellDate_(val) {
     const d = String(val.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
-  return String(val).trim();
+  const str = String(val).trim();
+  if (str.includes('T')) {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      try {
+        if (typeof Utilities !== 'undefined' && typeof Utilities.formatDate === 'function' && typeof Session !== 'undefined') {
+          return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        }
+      } catch (_) {}
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  }
+  return str;
 }
 
 function getMonthFromValue_(val) {
   if (!val) return '';
-  if (val instanceof Date) {
-    const y = val.getFullYear();
-    const m = String(val.getMonth() + 1).padStart(2, '0');
-    return `${y}-${m}`;
-  }
-  const str = String(val).trim();
-  if (/^\d{4}-\d{2}/.test(str)) {
-    return str.slice(0, 7);
+  const formatted = formatCellDate_(val);
+  if (/^\d{4}-\d{2}/.test(formatted)) {
+    return formatted.slice(0, 7);
   }
   return '';
 }

@@ -626,7 +626,10 @@ export default function RosterPage({
       }
       const existing = map.get(nameKey).get(dateStr);
       if (existing) {
-        map.get(nameKey).set(dateStr, existing + ',' + shiftRaw);
+        const existingTokens = existing.split(',').map((s) => s.trim().toUpperCase());
+        if (!existingTokens.includes(shiftRaw)) {
+          map.get(nameKey).set(dateStr, existing + ',' + shiftRaw);
+        }
       } else {
         map.get(nameKey).set(dateStr, shiftRaw);
       }
