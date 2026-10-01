@@ -127,6 +127,7 @@ function rosterV2DispatchGet_(parameters) {
   const action = String(parameters.action || '').toLowerCase();
   if (['rosterv2draft','rosterv2operation','rosterv2draftschema'].includes(action)) return rosterDraftRoute_(action, parameters);
   if (['rosterv2offpolicies','rosterv2guidanceschema'].includes(action)) return rosterGuidanceRoute_(action, parameters);
+  if (['rosterv2lifecycleschema','rosterv2periodlifecycle'].includes(action)) return rosterLifecycleRoute_(action, parameters);
   if (action === 'rosterv2schema') return createJsonResponse(rosterV2Schema_());
   if (action === 'rosterv2period') return createJsonResponse(rosterV2Period_(parameters));
   // Reserve the namespace: private/unknown v2 reads cannot fall through to legacy Requests.
@@ -138,6 +139,7 @@ function rosterV2DispatchPost_(data) {
   const action = String(data.action || '').toLowerCase();
   if (['rosterv2draftpatch','rosterv2draftrecover','rosterv2draftabandon'].includes(action)) return rosterDraftRoute_(action, data);
   if (['rosterv2offpolicy','rosterv2offpolicyrecover'].includes(action)) return rosterGuidanceRoute_(action, data);
+  if (['rosterv2publish','rosterv2close','rosterv2reopen','rosterv2lifecyclerecover'].includes(action)) return rosterLifecycleRoute_(action, data);
   rosterV2RequireAdmin_();
   throw new Error('Official v2 writes are disabled in Phase 1.');
 }
@@ -148,12 +150,72 @@ function rosterV2GuardSetting_(key) {
   throw new Error('V2 configuration writes are disabled in Phase 1.');
 }
 
-function rosterV2GuardLegacyUpload_() {
+function rosterV2GuardLegacyUpload_(data) {
+  const settings = rosterV2Settings_();
+  if (settings.legacy_upload_enabled === 'false') {
+    throw new Error('Legacy roster upload is disabled.');
+  }
+
   const table = rosterV2ReadTable_('RosterPeriods');
-  // The old upload clears ALL months. Any enrollment (even malformed) must protect
-  // the whole sheet; checking submitted dates alone would allow omitted months to vanish.
-  if (table.rows.some(function(row) { return row.some(function(v) { return v !== '' && v !== null; }); })) {
+  if (!table.exists || !table.rows.some(function(row) { return row.some(function(v) { return v !== '' && v !== null; }); })) {
+    return; // No RosterPeriods table or no rows -> all periods are legacy
+  }
+
+  const periodIdIdx = table.headers.indexOf('PeriodId');
+  const stateIdx = table.headers.indexOf('State');
+  const statusIdx = table.headers.indexOf('Status');
+  const schemaVerIdx = table.headers.indexOf('SchemaVersion');
+
+  const protectedPeriods = new Set();
+  table.rows.forEach(function(row) {
+    if (!row || !row.some(function(v) { return v !== '' && v !== null; })) return;
+    const pid = periodIdIdx >= 0 ? String(row[periodIdIdx] || '').trim() : '';
+    if (!pid) {
+      protectedPeriods.add('__ANY__');
+      return;
+    }
+
+    const state = stateIdx >= 0 ? String(row[stateIdx] || '').trim().toUpperCase() : '';
+    const status = statusIdx >= 0 ? String(row[statusIdx] || '').trim().toUpperCase() : '';
+    const schemaVer = schemaVerIdx >= 0 ? Number(row[schemaVerIdx]) : 0;
+
+    const isProtected = (schemaVer >= 2) || (status === 'ENROLLED') ||
+      ['DRAFT', 'PUBLISHED', 'CLOSED', 'AMENDED'].includes(state) ||
+      (schemaVerIdx >= 0 && statusIdx === -1 && stateIdx === -1);
+
+    if (isProtected) {
+      protectedPeriods.add(pid);
+    }
+  });
+
+  if (protectedPeriods.size === 0) return;
+
+  const isMonthScoped = data && typeof data === 'object' && Boolean(data.targetMonth);
+
+  if (!isMonthScoped) {
+    // Full roster upload without targetMonth clears the entire sheet.
+    // If any enrollment exists, block the full upload to protect enrolled months.
     throw new Error('Legacy full-roster upload is blocked because RosterPeriods contains enrollment data.');
   }
-  if (rosterV2Settings_().legacy_upload_enabled === 'false') throw new Error('Legacy roster upload is disabled.');
+
+  // Month-scoped upload: identify touched periods
+  const targetMonth = String(data.targetMonth).trim().slice(0, 7);
+  const touchedPeriods = new Set();
+  if (/^\d{4}-\d{2}$/.test(targetMonth)) touchedPeriods.add(targetMonth);
+
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  rows.forEach(function(r) {
+    const dateStr = typeof r === 'object' && r ? (r.date || r.Date || (Array.isArray(r) ? r[1] : '')) : '';
+    const m = typeof dateStr === 'string' && /^\d{4}-\d{2}/.test(dateStr) ? dateStr.slice(0, 7) : '';
+    if (m) touchedPeriods.add(m);
+  });
+
+  const blocked = [];
+  touchedPeriods.forEach(function(p) {
+    if (protectedPeriods.has(p) || protectedPeriods.has('__ANY__')) blocked.push(p);
+  });
+
+  if (blocked.length > 0) {
+    throw new Error('Legacy roster upload is blocked because RosterPeriods contains enrollment data for protected period(s): ' + blocked.join(', '));
+  }
 }

@@ -539,7 +539,7 @@ function handleUploadMasterRoster(data) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    rosterV2GuardLegacyUpload_();
+    rosterV2GuardLegacyUpload_(data);
     return handleLegacyMasterRosterUpload_(data);
   } finally {
     lock.releaseLock();
@@ -1935,6 +1935,7 @@ function rosterV2DispatchGet_(parameters) {
   const action = String(parameters.action || '').toLowerCase();
   if (['rosterv2draft','rosterv2operation','rosterv2draftschema'].includes(action)) return rosterDraftRoute_(action, parameters);
   if (['rosterv2offpolicies','rosterv2guidanceschema'].includes(action)) return rosterGuidanceRoute_(action, parameters);
+  if (['rosterv2lifecycleschema','rosterv2periodlifecycle'].includes(action)) return rosterLifecycleRoute_(action, parameters);
   if (action === 'rosterv2schema') return createJsonResponse(rosterV2Schema_());
   if (action === 'rosterv2period') return createJsonResponse(rosterV2Period_(parameters));
   // Reserve the namespace: private/unknown v2 reads cannot fall through to legacy Requests.
@@ -1946,6 +1947,7 @@ function rosterV2DispatchPost_(data) {
   const action = String(data.action || '').toLowerCase();
   if (['rosterv2draftpatch','rosterv2draftrecover','rosterv2draftabandon'].includes(action)) return rosterDraftRoute_(action, data);
   if (['rosterv2offpolicy','rosterv2offpolicyrecover'].includes(action)) return rosterGuidanceRoute_(action, data);
+  if (['rosterv2publish','rosterv2close','rosterv2reopen','rosterv2lifecyclerecover'].includes(action)) return rosterLifecycleRoute_(action, data);
   rosterV2RequireAdmin_();
   throw new Error('Official v2 writes are disabled in Phase 1.');
 }
@@ -1956,14 +1958,74 @@ function rosterV2GuardSetting_(key) {
   throw new Error('V2 configuration writes are disabled in Phase 1.');
 }
 
-function rosterV2GuardLegacyUpload_() {
+function rosterV2GuardLegacyUpload_(data) {
+  const settings = rosterV2Settings_();
+  if (settings.legacy_upload_enabled === 'false') {
+    throw new Error('Legacy roster upload is disabled.');
+  }
+
   const table = rosterV2ReadTable_('RosterPeriods');
-  // The old upload clears ALL months. Any enrollment (even malformed) must protect
-  // the whole sheet; checking submitted dates alone would allow omitted months to vanish.
-  if (table.rows.some(function(row) { return row.some(function(v) { return v !== '' && v !== null; }); })) {
+  if (!table.exists || !table.rows.some(function(row) { return row.some(function(v) { return v !== '' && v !== null; }); })) {
+    return; // No RosterPeriods table or no rows -> all periods are legacy
+  }
+
+  const periodIdIdx = table.headers.indexOf('PeriodId');
+  const stateIdx = table.headers.indexOf('State');
+  const statusIdx = table.headers.indexOf('Status');
+  const schemaVerIdx = table.headers.indexOf('SchemaVersion');
+
+  const protectedPeriods = new Set();
+  table.rows.forEach(function(row) {
+    if (!row || !row.some(function(v) { return v !== '' && v !== null; })) return;
+    const pid = periodIdIdx >= 0 ? String(row[periodIdIdx] || '').trim() : '';
+    if (!pid) {
+      protectedPeriods.add('__ANY__');
+      return;
+    }
+
+    const state = stateIdx >= 0 ? String(row[stateIdx] || '').trim().toUpperCase() : '';
+    const status = statusIdx >= 0 ? String(row[statusIdx] || '').trim().toUpperCase() : '';
+    const schemaVer = schemaVerIdx >= 0 ? Number(row[schemaVerIdx]) : 0;
+
+    const isProtected = (schemaVer >= 2) || (status === 'ENROLLED') ||
+      ['DRAFT', 'PUBLISHED', 'CLOSED', 'AMENDED'].includes(state) ||
+      (schemaVerIdx >= 0 && statusIdx === -1 && stateIdx === -1);
+
+    if (isProtected) {
+      protectedPeriods.add(pid);
+    }
+  });
+
+  if (protectedPeriods.size === 0) return;
+
+  const isMonthScoped = data && typeof data === 'object' && Boolean(data.targetMonth);
+
+  if (!isMonthScoped) {
+    // Full roster upload without targetMonth clears the entire sheet.
+    // If any enrollment exists, block the full upload to protect enrolled months.
     throw new Error('Legacy full-roster upload is blocked because RosterPeriods contains enrollment data.');
   }
-  if (rosterV2Settings_().legacy_upload_enabled === 'false') throw new Error('Legacy roster upload is disabled.');
+
+  // Month-scoped upload: identify touched periods
+  const targetMonth = String(data.targetMonth).trim().slice(0, 7);
+  const touchedPeriods = new Set();
+  if (/^\d{4}-\d{2}$/.test(targetMonth)) touchedPeriods.add(targetMonth);
+
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  rows.forEach(function(r) {
+    const dateStr = typeof r === 'object' && r ? (r.date || r.Date || (Array.isArray(r) ? r[1] : '')) : '';
+    const m = typeof dateStr === 'string' && /^\d{4}-\d{2}/.test(dateStr) ? dateStr.slice(0, 7) : '';
+    if (m) touchedPeriods.add(m);
+  });
+
+  const blocked = [];
+  touchedPeriods.forEach(function(p) {
+    if (protectedPeriods.has(p) || protectedPeriods.has('__ANY__')) blocked.push(p);
+  });
+
+  if (blocked.length > 0) {
+    throw new Error('Legacy roster upload is blocked because RosterPeriods contains enrollment data for protected period(s): ' + blocked.join(', '));
+  }
 }
 
 // Shared transport and patch contract; no I/O or future lifecycle rules.
@@ -2139,6 +2201,683 @@ const RosterGuidance = (() => {
     selectPolicy,evaluateWeek,evaluateConsecutive,evaluateNightSafety,evaluateSequences,policyRuleJson,acknowledgeIssue,policyOperation,policyWritesEnabled});
 })();
 
+// Pure Phase 4 lifecycle contract. No I/O, no UI, no backend handlers.
+const RosterLifecycle = (() => {
+  const freeze = value => {
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach(freeze);
+      Object.freeze(value);
+    }
+    return value;
+  };
+
+  const LIFECYCLE_STATES = freeze({
+    DRAFT: 'DRAFT',
+    PUBLISHED: 'PUBLISHED',
+    AMENDED: 'AMENDED', // Recognized for forward compatibility; reserved for Phase 5
+    CLOSED: 'CLOSED'
+  });
+
+  const LIFECYCLE_OPERATIONS = freeze({
+    PUBLISH: 'ROSTER_PUBLISH',
+    CLOSE: 'ROSTER_CLOSE',
+    REOPEN: 'ROSTER_REOPEN'
+  });
+
+  const LIFECYCLE_ERRORS = freeze({
+    INVALID_LIFECYCLE_STATE: 'INVALID_LIFECYCLE_STATE',
+    INVALID_LIFECYCLE_TRANSITION: 'INVALID_LIFECYCLE_TRANSITION',
+    AMENDED_RESERVED_PHASE5: 'AMENDED_RESERVED_PHASE5',
+    RECONCILIATION_FAILED: 'RECONCILIATION_FAILED',
+    REOPEN_REASON_REQUIRED: 'REOPEN_REASON_REQUIRED',
+    IMMUTABLE_SNAPSHOT_VIOLATION: 'IMMUTABLE_SNAPSHOT_VIOLATION',
+    INVALID_PERIOD_ASSIGNMENT: 'INVALID_PERIOD_ASSIGNMENT',
+    PROJECTION_MISMATCH: 'PROJECTION_MISMATCH',
+    INVALID_OPERATOR: 'INVALID_OPERATOR',
+    VALIDATION_FAILED: 'VALIDATION_FAILED'
+  });
+
+  const ROSTER_LIFECYCLE_SCHEMAS = RosterCompatibility.lifecycleSchemas || freeze({
+    RosterPeriods: [
+      'PeriodId', 'State', 'Revision', 'DraftRevision', 'PlannedSnapshotId',
+      'PublishedAt', 'PublishedBy', 'ClosedAt', 'ClosedBy',
+      'ProjectionChecksum', 'SchemaVersion', 'LastOperationId', 'UpdatedAt'
+    ],
+    RosterAssignments: [
+      'AssignmentId', 'PeriodId', 'Layer', 'SnapshotId',
+      'PersonId', 'PersonNameSnapshot', 'Date', 'DutyDomain',
+      'ShiftCode', 'ModifiersJson', 'DraftRevision', 'Source',
+      'OperationId', 'CreatedAt', 'CreatedBy'
+    ],
+    RosterEvents: [
+      'EventId', 'LineId', 'EventType', 'OperationId', 'PeriodId',
+      'BaseRevision', 'ResultRevision', 'PersonId', 'LinkedPersonIdsJson',
+      'Date', 'DutyDomain', 'PlannedAssignmentJson', 'BeforeCurrentJson',
+      'AfterCurrentJson', 'PublicReasonCode', 'AdminNote', 'ShortageAccepted',
+      'ShortageReason', 'GoffTransactionIdsJson', 'ReversesEventId',
+      'CreatedAt', 'CreatedBy'
+    ],
+    WeeklyOffSnapshots: [
+      'WeekSnapshotId', 'WeekStart', 'WeekEnd', 'PolicyLockedByPeriodId',
+      'PublishedPeriodIdsJson', 'PublishedDateMask', 'EvaluationState',
+      'PlannedSnapshotIdsJson', 'PlannedWeekChecksum', 'PersonId',
+      'PersonNameSnapshot', 'PolicyId', 'PolicyCode', 'RuleVersion',
+      'HasQualifyingPlannedNight', 'RequiredOffCount', 'AssignedOffCountAtPublish',
+      'Revision', 'OperationId', 'CreatedAt', 'CompletedAt'
+    ]
+  });
+
+  const fail = (code, message) => {
+    const err = new Error(message || code);
+    err.code = code;
+    return err;
+  };
+
+  const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  const genUuid = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid() : '00000000-0000-4000-8000-000000000000');
+
+  // Deterministic UUID-shaped assignment identifier derived from semantic identity tuple.
+  // Formatted with RFC 4122 layout (setting version 4 and variant 8) to satisfy UUID validators,
+  // but explicitly documented as a deterministic assignment identifier, not a random UUID v4.
+  function deterministicAssignmentId(operationId, personId, date, dutyDomainOrIndex, shiftCode, rawShiftOrOccurrence, occurrenceOrDigest, maybeDigest) {
+    let seed;
+    let digest = maybeDigest;
+    if (typeof shiftCode === 'undefined' || typeof dutyDomainOrIndex === 'number') {
+      // Legacy signature: (operationId, personId, date, index, digestFn)
+      seed = `${operationId}:${personId}:${date}:${dutyDomainOrIndex}`;
+      digest = shiftCode;
+    } else if (typeof occurrenceOrDigest === 'function' || (typeof maybeDigest === 'undefined' && typeof occurrenceOrDigest === 'undefined')) {
+      // Signature: (operationId, personId, date, dutyDomain, shiftCode, occurrence, digestFn)
+      const occurrence = typeof rawShiftOrOccurrence === 'number' ? rawShiftOrOccurrence : 0;
+      seed = `${operationId}:${personId}:${date}:${dutyDomainOrIndex}:${shiftCode}:${occurrence}`;
+      digest = typeof occurrenceOrDigest === 'function' ? occurrenceOrDigest : maybeDigest;
+    } else {
+      // Signature: (operationId, personId, date, dutyDomain, shiftCode, rawShift, occurrence, digestFn)
+      const raw = rawShiftOrOccurrence == null ? '' : String(rawShiftOrOccurrence);
+      const occurrence = typeof occurrenceOrDigest === 'number' ? occurrenceOrDigest : 0;
+      seed = `${operationId}:${personId}:${date}:${dutyDomainOrIndex}:${shiftCode}:${raw}:${occurrence}`;
+      digest = maybeDigest;
+    }
+    if (typeof digest === 'function') {
+      const h = digest(seed);
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    }
+    let h1 = 0x811c9dc5, h2 = 0x811c9dc5, h3 = 0x811c9dc5, h4 = 0x811c9dc5;
+    for (let i = 0; i < seed.length; i++) {
+      const c = seed.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 0x01000193);
+      h2 = Math.imul(h2 ^ (c >> 2), 0x01000193);
+      h3 = Math.imul(h3 ^ (c << 2), 0x01000193);
+      h4 = Math.imul(h4 ^ (c + i), 0x01000193);
+    }
+    const hex = (h1 >>> 0).toString(16).padStart(8, '0') +
+      (h2 >>> 0).toString(16).padStart(8, '0') +
+      (h3 >>> 0).toString(16).padStart(8, '0') +
+      (h4 >>> 0).toString(16).padStart(8, '0');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  }
+
+  function canTransition(fromState, toState) {
+    if (fromState === LIFECYCLE_STATES.DRAFT && toState === LIFECYCLE_STATES.PUBLISHED) return true;
+    if (fromState === LIFECYCLE_STATES.PUBLISHED && toState === LIFECYCLE_STATES.CLOSED) return true;
+    if (fromState === LIFECYCLE_STATES.CLOSED && toState === LIFECYCLE_STATES.PUBLISHED) return true;
+    return false;
+  }
+
+  function validateTransition(fromState, toState, context = {}) {
+    if (toState === LIFECYCLE_STATES.AMENDED || fromState === LIFECYCLE_STATES.AMENDED) {
+      throw fail(LIFECYCLE_ERRORS.AMENDED_RESERVED_PHASE5, 'AMENDED state is reserved for Phase 5; Phase 4 operational lifecycle is DRAFT -> PUBLISHED -> CLOSED -> PUBLISHED');
+    }
+
+    if (!canTransition(fromState, toState)) {
+      throw fail(LIFECYCLE_ERRORS.INVALID_LIFECYCLE_TRANSITION, `Cannot transition lifecycle from ${fromState} to ${toState}`);
+    }
+
+    const actor = String(context.actor || '').trim();
+    if (!actor) {
+      throw fail(LIFECYCLE_ERRORS.INVALID_OPERATOR, 'Lifecycle transition requires an authenticated actor');
+    }
+
+    if (fromState === LIFECYCLE_STATES.DRAFT && toState === LIFECYCLE_STATES.PUBLISHED) {
+      const plannedSnapshotId = String(context.plannedSnapshotId || '').trim();
+      if (!plannedSnapshotId) {
+        throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'Publish transition requires a plannedSnapshotId');
+      }
+      return { valid: true, fromState, nextState: LIFECYCLE_STATES.PUBLISHED, nextRevision: 1 };
+    }
+
+    if (fromState === LIFECYCLE_STATES.PUBLISHED && toState === LIFECYCLE_STATES.CLOSED) {
+      if (context.isManual === false) {
+        throw fail(LIFECYCLE_ERRORS.INVALID_LIFECYCLE_TRANSITION, 'Closing must be explicitly manual; automatic closing is prohibited');
+      }
+      if (context.reconciliation) {
+        if (context.reconciliation.pendingOperationsCount > 0) {
+          throw fail(LIFECYCLE_ERRORS.RECONCILIATION_FAILED, `Cannot close period: ${context.reconciliation.pendingOperationsCount} pending operations remain in the journal`);
+        }
+        if (context.reconciliation.ok === false) {
+          throw fail(LIFECYCLE_ERRORS.RECONCILIATION_FAILED, context.reconciliation.error || 'Period reconciliation check failed');
+        }
+      }
+      const curRev = Number(context.currentRevision) || 1;
+      return { valid: true, fromState, nextState: LIFECYCLE_STATES.CLOSED, nextRevision: curRev + 1 };
+    }
+
+    if (fromState === LIFECYCLE_STATES.CLOSED && toState === LIFECYCLE_STATES.PUBLISHED) {
+      if (context.isManual === false) {
+        throw fail(LIFECYCLE_ERRORS.INVALID_LIFECYCLE_TRANSITION, 'Reopening must be explicitly manual');
+      }
+      const reason = String(context.reason || '').trim();
+      if (!reason) {
+        throw fail(LIFECYCLE_ERRORS.REOPEN_REASON_REQUIRED, 'Reopen requires a non-empty reason string');
+      }
+      const curRev = Number(context.currentRevision) || 1;
+      return { valid: true, fromState, nextState: LIFECYCLE_STATES.PUBLISHED, nextRevision: curRev + 1, reason };
+    }
+
+    throw fail(LIFECYCLE_ERRORS.INVALID_LIFECYCLE_TRANSITION, `Unsupported transition from ${fromState} to ${toState}`);
+  }
+
+  function normalizeDraftCells(draftCells) {
+    const normalized = new Map();
+    if (!draftCells) return normalized;
+
+    function addCellItem(personId, date, item) {
+      if (!personId || !date) return;
+      const key = `${personId}/${date}`;
+      if (!normalized.has(key)) normalized.set(key, []);
+      normalized.get(key).push(item);
+    }
+
+    if (Array.isArray(draftCells)) {
+      draftCells.forEach(entry => {
+        if (!entry) return;
+        if (Array.isArray(entry) && entry.length >= 2) {
+          const [cellKey, items] = entry;
+          const parts = String(cellKey).split('/');
+          if (parts.length === 2) {
+            const arr = Array.isArray(items) ? items : [items];
+            arr.forEach(it => addCellItem(parts[0], parts[1], it));
+          }
+        } else if (typeof entry === 'object') {
+          if (entry.cellKey) {
+            const parts = String(entry.cellKey).split('/');
+            if (parts.length === 2) {
+              const items = entry.assignments || entry.rawAssignments || entry.items || entry;
+              const arr = Array.isArray(items) ? items : [items];
+              arr.forEach(it => addCellItem(parts[0], parts[1], it));
+            }
+          } else {
+            const personId = entry.PersonId || entry.personId;
+            const date = entry.Date || entry.date;
+            if (personId && date) {
+              addCellItem(personId, date, entry);
+            }
+          }
+        }
+      });
+    } else if (draftCells instanceof Map) {
+      for (const [cellKey, value] of draftCells.entries()) {
+        const parts = String(cellKey).split('/');
+        if (parts.length === 2) {
+          const arr = Array.isArray(value) ? value : [value];
+          arr.forEach(it => addCellItem(parts[0], parts[1], it));
+        }
+      }
+    } else if (typeof draftCells === 'object') {
+      for (const [cellKey, value] of Object.entries(draftCells)) {
+        const parts = String(cellKey).split('/');
+        if (parts.length === 2) {
+          const arr = Array.isArray(value) ? value : [value];
+          arr.forEach(it => addCellItem(parts[0], parts[1], it));
+        }
+      }
+    }
+
+    return normalized;
+  }
+
+  function generatePlannedSnapshot({
+    periodId,
+    draftCells = {},
+    people = [],
+    operationId,
+    actor,
+    timestamp = new Date().toISOString(),
+    snapshotId,
+    snapshotUuid,
+    digestFn
+  }) {
+    RosterCompatibility.validatePeriod(periodId);
+    if (!operationId || !isUuid(operationId)) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'OperationId must be a valid UUID');
+    }
+    const cleanActor = String(actor || '').trim();
+    if (!cleanActor) {
+      throw fail(LIFECYCLE_ERRORS.INVALID_OPERATOR, 'Actor is required');
+    }
+
+    const peopleMap = new Map();
+    people.forEach(p => {
+      if (p.PersonId) peopleMap.set(p.PersonId, p);
+    });
+
+    // Deterministic snapshot ID based on operationId when not explicitly provided
+    const plannedSnapshotId = snapshotId || (`snapshot:${periodId}:${snapshotUuid || operationId}`);
+    const assignments = [];
+
+    const normalizedCells = normalizeDraftCells(draftCells);
+    const sortedCellKeys = Array.from(normalizedCells.keys()).sort();
+
+    for (const cellKey of sortedCellKeys) {
+      const items = normalizedCells.get(cellKey) || [];
+      const [personId, date] = cellKey.split('/');
+
+      if (!RosterCompatibility.localDate(date) || date.slice(0, 7) !== periodId) {
+        throw fail(LIFECYCLE_ERRORS.INVALID_PERIOD_ASSIGNMENT, `Date ${date} is outside the target period ${periodId}`);
+      }
+
+      const person = peopleMap.get(personId);
+      if (!person) {
+        throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, `PersonId ${personId} not found in registered people`);
+      }
+
+      const dutyDomain = person.DirectoryType || 'MO';
+
+      // Step A: Parse items into normalized objects
+      const parsedItems = items.map(item => {
+        const rawShift = typeof item === 'string' ? item : (item.rawShift || item.ShiftCode || item.shiftCode || '');
+        const resolved = RosterCompatibility.resolveShift(rawShift, dutyDomain);
+        const explicitId = (typeof item === 'object' && (item.assignmentId || item.AssignmentId) && isUuid(item.assignmentId || item.AssignmentId))
+          ? (item.assignmentId || item.AssignmentId)
+          : null;
+        return { rawShift, resolved, explicitId };
+      });
+
+      // Step B: Sort items canonically before assigning fallback IDs to eliminate raw input array ordering dependency
+      parsedItems.sort((a, b) => {
+        if (a.explicitId && b.explicitId) return a.explicitId.localeCompare(b.explicitId);
+        if (a.explicitId) return -1;
+        if (b.explicitId) return 1;
+        const codeCmp = a.resolved.baseCode.localeCompare(b.resolved.baseCode);
+        if (codeCmp !== 0) return codeCmp;
+        return String(a.rawShift).localeCompare(String(b.rawShift));
+      });
+
+      // Step C: Assign IDs with occurrence discriminator computed in canonical order
+      const occurrenceCounters = new Map();
+
+      parsedItems.forEach(item => {
+        const { rawShift, resolved, explicitId } = item;
+        const semanticKey = `${dutyDomain}:${resolved.baseCode}:${rawShift}`;
+        const occurrence = occurrenceCounters.get(semanticKey) || 0;
+        occurrenceCounters.set(semanticKey, occurrence + 1);
+
+        const assignmentId = explicitId ||
+          deterministicAssignmentId(operationId, personId, date, dutyDomain, resolved.baseCode, rawShift, occurrence, digestFn);
+
+        assignments.push({
+          AssignmentId: assignmentId,
+          PeriodId: periodId,
+          Layer: 'PLANNED',
+          SnapshotId: plannedSnapshotId,
+          PersonId: person.PersonId,
+          PersonNameSnapshot: person.CurrentDisplayName || person.MemberName || '',
+          Date: date,
+          DutyDomain: dutyDomain,
+          ShiftCode: resolved.baseCode,
+          ModifiersJson: JSON.stringify(resolved.modifiers || { extended: false, standby: false }),
+          DraftRevision: 0,
+          Source: 'NEW',
+          OperationId: operationId,
+          CreatedAt: timestamp,
+          CreatedBy: cleanActor,
+          _rawShift: rawShift
+        });
+      });
+    }
+
+    assignments.sort((a, b) =>
+      a.Date.localeCompare(b.Date) ||
+      a.PersonNameSnapshot.localeCompare(b.PersonNameSnapshot) ||
+      a.ShiftCode.localeCompare(b.ShiftCode) ||
+      a.AssignmentId.localeCompare(b.AssignmentId)
+    );
+
+    return {
+      plannedSnapshotId,
+      assignments: assignments.map(({ _rawShift, ...row }) => row),
+      _assignmentsWithRaw: assignments
+    };
+  }
+
+  function formatRawShift(shiftCode, modifiers) {
+    if (!modifiers) return shiftCode;
+    const mods = typeof modifiers === 'string' ? JSON.parse(modifiers) : modifiers;
+    let s = shiftCode;
+    if (mods.standby) s += '(S)';
+    if (mods.extended) s += '(X)';
+    return s;
+  }
+
+  function generateMasterRosterProjection(assignments = []) {
+    const rows = assignments.map(a => {
+      const name = a.PersonNameSnapshot || a.Name || '';
+      const date = a.Date;
+      const shift = a._rawShift || formatRawShift(a.ShiftCode, a.ModifiersJson);
+      return { Name: name, Date: date, Shift: shift };
+    });
+
+    rows.sort((a, b) =>
+      a.Date.localeCompare(b.Date) ||
+      a.Name.localeCompare(b.Name) ||
+      a.Shift.localeCompare(b.Shift)
+    );
+
+    return rows;
+  }
+
+  function computeProjectionChecksum(projectedRows = [], digestFn) {
+    if (typeof digestFn !== 'function') {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'digestFn is required to compute projection checksum');
+    }
+    const transportRows = RosterCompatibility.legacyTransportRows(projectedRows);
+    const canonical = RosterCompatibility.canonicalJson(transportRows);
+    return digestFn(canonical);
+  }
+
+  function mergeMasterRosterProjection(existingMasterRosterRows = [], periodId, projectedRows = []) {
+    RosterCompatibility.validatePeriod(periodId);
+    const preserved = [];
+    let replacedCount = 0;
+
+    for (const row of existingMasterRosterRows) {
+      const d = RosterCompatibility.localDate(row.Date);
+      if (d && d.slice(0, 7) === periodId) {
+        replacedCount++;
+      } else {
+        preserved.push(row);
+      }
+    }
+
+    const mergedRows = [...preserved, ...projectedRows];
+    return {
+      mergedRows,
+      preservedCount: preserved.length,
+      replacedCount,
+      addedCount: projectedRows.length
+    };
+  }
+
+  function aggregateWeeklyOffSnapshots({
+    periodId,
+    plannedAssignments = [],
+    people = [],
+    existingWeekSnapshots = [],
+    adjacentPlannedAssignments = [],
+    policies = [],
+    operationId,
+    actor,
+    timestamp = new Date().toISOString(),
+    digestFn
+  }) {
+    RosterCompatibility.validatePeriod(periodId);
+    const weeks = RosterGuidance.weeksForPeriod(periodId);
+    const moPeople = people.filter(p => (p.DirectoryType || 'MO') === 'MO');
+    const existingMap = new Map();
+    existingWeekSnapshots.forEach(snap => {
+      existingMap.set(`${snap.PersonId}:${snap.WeekStart}`, snap);
+    });
+
+    const allAssignments = [...plannedAssignments, ...adjacentPlannedAssignments];
+    const assignmentsByPersonDate = new Map();
+    allAssignments.forEach(a => {
+      const key = `${a.PersonId}:${a.Date}`;
+      if (!assignmentsByPersonDate.has(key)) assignmentsByPersonDate.set(key, []);
+      assignmentsByPersonDate.get(key).push(a.ShiftCode || a.Shift);
+    });
+
+    const results = [];
+
+    for (const person of moPeople) {
+      for (const weekStart of weeks) {
+        const weekDates = RosterGuidance.weekDates(weekStart);
+        const weekEnd = weekDates[6];
+        const periodMask = weekDates.map(d => d.slice(0, 7) === periodId);
+        const key = `${person.PersonId}:${weekStart}`;
+        const existing = existingMap.get(key);
+
+        let snapshotId;
+        let policy;
+        let policyLockedBy;
+        let publishedPeriods;
+        let publishedMask;
+        let plannedSnapshotIds;
+        let rev = 0;
+
+        if (!existing) {
+          policy = RosterGuidance.selectPolicy(policies, weekStart);
+          policyLockedBy = periodId;
+          publishedPeriods = [periodId];
+          publishedMask = periodMask;
+          snapshotId = genUuid();
+          const pSnapshotId = plannedAssignments.find(a => a.PersonId === person.PersonId)?.SnapshotId || `snapshot:${periodId}:unknown`;
+          plannedSnapshotIds = [pSnapshotId];
+        } else {
+          policy = {
+            policyId: existing.PolicyId,
+            policyCode: existing.PolicyCode,
+            ruleVersion: Number(existing.RuleVersion) || 1
+          };
+          policyLockedBy = existing.PolicyLockedByPeriodId;
+          const prevPeriods = JSON.parse(existing.PublishedPeriodIdsJson || '[]');
+          publishedPeriods = prevPeriods.includes(periodId) ? prevPeriods : [...prevPeriods, periodId];
+          const prevMask = JSON.parse(existing.PublishedDateMask || '[]');
+          publishedMask = prevMask.map((val, idx) => val || periodMask[idx]);
+          snapshotId = existing.WeekSnapshotId;
+          const prevSnapshots = JSON.parse(existing.PlannedSnapshotIdsJson || '[]');
+          const pSnapshotId = plannedAssignments.find(a => a.PersonId === person.PersonId)?.SnapshotId;
+          plannedSnapshotIds = (pSnapshotId && !prevSnapshots.includes(pSnapshotId))
+            ? [...prevSnapshots, pSnapshotId]
+            : prevSnapshots;
+          rev = (Number(existing.Revision) || 0) + 1;
+        }
+
+        const isComplete = publishedMask.every(Boolean);
+
+        let evalState = 'PROVISIONAL';
+        let qualNight = null;
+        let reqOff = null;
+        let assignedOff = null;
+        let weekChecksum = null;
+        let completedAt = '';
+
+        if (isComplete) {
+          evalState = 'COMPLETE';
+          const plannedByDate = {};
+          weekDates.forEach(d => {
+            plannedByDate[d] = assignmentsByPersonDate.get(`${person.PersonId}:${d}`) || [];
+          });
+
+          const evalResult = RosterGuidance.evaluateWeek({
+            weekStart,
+            personId: person.PersonId,
+            plannedByDate,
+            availablePlannedDates: weekDates,
+            policies,
+            lockedPolicy: {
+              PolicyId: policy.policyId,
+              PolicyCode: policy.policyCode,
+              EffectiveMonday: weekStart,
+              RuleVersion: policy.ruleVersion,
+              RuleJson: RosterGuidance.policyRuleJson(policy.policyCode),
+              Active: true
+            }
+          });
+
+          qualNight = evalResult.qualifyingPlannedNight;
+          reqOff = evalResult.requiredOff;
+          assignedOff = evalResult.plannedAssignedOff;
+          completedAt = timestamp;
+
+          if (typeof digestFn === 'function') {
+            const weekShifts = weekDates.map(d => ({
+              date: d,
+              shifts: plannedByDate[d]
+            }));
+            weekChecksum = digestFn(RosterCompatibility.canonicalJson(weekShifts));
+          }
+        }
+
+        results.push({
+          WeekSnapshotId: snapshotId,
+          WeekStart: weekStart,
+          WeekEnd: weekEnd,
+          PolicyLockedByPeriodId: policyLockedBy,
+          PublishedPeriodIdsJson: JSON.stringify(publishedPeriods),
+          PublishedDateMask: JSON.stringify(publishedMask),
+          EvaluationState: evalState,
+          PlannedSnapshotIdsJson: JSON.stringify(plannedSnapshotIds),
+          PlannedWeekChecksum: weekChecksum || '',
+          PersonId: person.PersonId,
+          PersonNameSnapshot: person.CurrentDisplayName || person.MemberName || '',
+          PolicyId: policy.policyId,
+          PolicyCode: policy.policyCode,
+          RuleVersion: policy.ruleVersion,
+          HasQualifyingPlannedNight: qualNight,
+          RequiredOffCount: reqOff,
+          AssignedOffCountAtPublish: assignedOff,
+          Revision: rev,
+          OperationId: operationId,
+          CreatedAt: existing?.CreatedAt || timestamp,
+          CompletedAt: completedAt
+        });
+      }
+    }
+
+    return results;
+  }
+
+  function createInitialPeriodRecord({ periodId, schemaVersion = 2, enrolledBy = 'admin', timestamp = new Date().toISOString() }) {
+    RosterCompatibility.validatePeriod(periodId);
+    return {
+      PeriodId: periodId,
+      State: LIFECYCLE_STATES.DRAFT,
+      Revision: 0,
+      DraftRevision: 0,
+      PlannedSnapshotId: '',
+      PublishedAt: '',
+      PublishedBy: '',
+      ClosedAt: '',
+      ClosedBy: '',
+      ProjectionChecksum: '',
+      SchemaVersion: schemaVersion,
+      LastOperationId: '',
+      UpdatedAt: timestamp
+    };
+  }
+
+  function publishPeriodRecord({ periodRecord, plannedSnapshotId, projectionChecksum, actor, timestamp = new Date().toISOString(), operationId }) {
+    validateTransition(periodRecord.State, LIFECYCLE_STATES.PUBLISHED, { actor, plannedSnapshotId });
+    return {
+      ...periodRecord,
+      State: LIFECYCLE_STATES.PUBLISHED,
+      Revision: 1,
+      PlannedSnapshotId: plannedSnapshotId,
+      PublishedAt: timestamp,
+      PublishedBy: actor,
+      ProjectionChecksum: projectionChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    };
+  }
+
+  function closePeriodRecord({ periodRecord, actor, timestamp = new Date().toISOString(), operationId, isManual = true, reconciliation }) {
+    validateTransition(periodRecord.State, LIFECYCLE_STATES.CLOSED, { actor, isManual, reconciliation, currentRevision: periodRecord.Revision });
+    return {
+      ...periodRecord,
+      State: LIFECYCLE_STATES.CLOSED,
+      Revision: (Number(periodRecord.Revision) || 1) + 1,
+      ClosedAt: timestamp,
+      ClosedBy: actor,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    };
+  }
+
+  function reopenPeriodRecord({ periodRecord, reason, actor, timestamp = new Date().toISOString(), operationId, isManual = true }) {
+    validateTransition(periodRecord.State, LIFECYCLE_STATES.PUBLISHED, { actor, reason, isManual, currentRevision: periodRecord.Revision });
+    return {
+      ...periodRecord,
+      State: LIFECYCLE_STATES.PUBLISHED,
+      Revision: (Number(periodRecord.Revision) || 1) + 1,
+      ClosedAt: '',
+      ClosedBy: '',
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    };
+  }
+
+  function createLifecycleEvent({
+    eventType,
+    periodId,
+    baseRevision,
+    resultRevision,
+    operationId,
+    actor,
+    reason = '',
+    timestamp = new Date().toISOString()
+  }) {
+    if (!['PUBLISH', 'CLOSE', 'REOPEN'].includes(eventType)) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, `Unsupported eventType: ${eventType}`);
+    }
+    return {
+      EventId: genUuid(),
+      LineId: genUuid(),
+      EventType: eventType,
+      OperationId: operationId,
+      PeriodId: periodId,
+      BaseRevision: baseRevision,
+      ResultRevision: resultRevision,
+      PersonId: '',
+      LinkedPersonIdsJson: '[]',
+      Date: '',
+      DutyDomain: '',
+      PlannedAssignmentJson: '[]',
+      BeforeCurrentJson: '[]',
+      AfterCurrentJson: '[]',
+      PublicReasonCode: eventType,
+      AdminNote: reason || '',
+      ShortageAccepted: false,
+      ShortageReason: '',
+      GoffTransactionIdsJson: '[]',
+      ReversesEventId: '',
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
+  }
+
+  return freeze({
+    LIFECYCLE_STATES,
+    LIFECYCLE_OPERATIONS,
+    LIFECYCLE_ERRORS,
+    ROSTER_LIFECYCLE_SCHEMAS,
+    deterministicAssignmentId,
+    canTransition,
+    validateTransition,
+    generatePlannedSnapshot,
+    formatRawShift,
+    generateMasterRosterProjection,
+    computeProjectionChecksum,
+    mergeMasterRosterProjection,
+    aggregateWeeklyOffSnapshots,
+    createInitialPeriodRecord,
+    publishPeriodRecord,
+    closePeriodRecord,
+    reopenPeriodRecord,
+    createLifecycleEvent
+  });
+})();
+
 // Private Phase 2 draft-only journal. No MasterRoster writes or automatic setup.
 const ROSTER_DRAFT_SCHEMAS = {
   OperationLog: ['OperationId','ClientId','TabId','OperationType','EntityKey','ExpectedRevision','ResultRevision','PayloadHash','Status','ResultJson','ErrorCode','CreatedAt','CompletedAt'],
@@ -2164,8 +2903,9 @@ function rosterDraftLogs_() {
   const logs = rosterDraftTable_('OperationLog'), ids = new Set();
   const revision = function(value) { return (typeof value === 'number' || typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) && Number.isSafeInteger(Number(value)) && Number(value) >= 0; };
   logs.forEach(function(r) {
-    const meaningValid=r.OperationType === 'DRAFT_PATCH' && typeof r.EntityKey === 'string' && /^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey) ||
-      r.OperationType === 'OFF_POLICY_UPSERT' && r.EntityKey === 'off-policies';
+    const meaningValid = (r.OperationType === 'DRAFT_PATCH' && typeof r.EntityKey === 'string' && /^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey)) ||
+      (r.OperationType === 'OFF_POLICY_UPSERT' && r.EntityKey === 'off-policies') ||
+      (['PERIOD_PUBLISH', 'PERIOD_CLOSE', 'PERIOD_REOPEN'].includes(r.OperationType) && typeof r.EntityKey === 'string' && /^period:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey));
     DraftProtocol.ensure(DraftProtocol.uuid(r.OperationId) && !ids.has(r.OperationId) &&
       DraftProtocol.uuid(r.ClientId) && DraftProtocol.uuid(r.TabId) && meaningValid &&
       typeof r.PayloadHash === 'string' && /^[0-9a-f]{64}$/.test(r.PayloadHash) && revision(r.ExpectedRevision) &&
@@ -2215,6 +2955,7 @@ function rosterDraftStatus_(id) {
   let result = null;
   if (log.Status === 'CONFIRMED') {
     if(log.OperationType==='OFF_POLICY_UPSERT')return rosterGuidanceStatus_(id);
+    if(['PERIOD_PUBLISH','PERIOD_CLOSE','PERIOD_REOPEN'].includes(log.OperationType))return rosterLifecycleStatus_(id);
     rosterDraftState_(log.EntityKey);const stored = JSON.parse(log.ResultJson);
     result = {ok:true,operationId:stored.operationId,entityKey:stored.entityKey,revision:stored.revision,checksum:stored.checksum,patches:stored.patches};
   }
@@ -2259,6 +3000,7 @@ function rosterDraftRecover_(id) {
   const log = rosterDraftLogs_().find(function(r) { return r.OperationId === id; });
   DraftProtocol.ensure(log,'ENTITY_NOT_FOUND');
   if(log.OperationType==='OFF_POLICY_UPSERT')return rosterGuidanceRecover_(id);
+  if(['PERIOD_PUBLISH','PERIOD_CLOSE','PERIOD_REOPEN'].includes(log.OperationType))return rosterLifecycleRecover_(id);
   if (['CONFIRMED','FAILED'].includes(log.Status)) return rosterDraftStatus_(id);
   const state = rosterDraftState_(log.EntityKey), rows = rosterDraftTable_('RosterDraftPatches').filter(function(r) { return r.OperationId === id; });
   if (!rows.length) {
@@ -2423,5 +3165,1067 @@ function rosterGuidanceRoute_(action,data) {
   }catch(error){const code=DraftProtocol.errors.includes(error.code)?error.code:'RECOVERY_REQUIRED';return createJsonResponse({ok:false,error:{code:code,
     retryable:['LOCK_BUSY','TRANSIENT_BACKEND'].includes(code),details:error.details||{},message:code}});
   }finally{if(acquired)lock.releaseLock();}
+}
+
+// Apps Script Phase 4 Roster Lifecycle Backend Engine
+// Operates under ScriptLock, enforces deterministic planned snapshots, immutable published periods,
+// month-scoped MasterRoster projections with persisted readback checksum verification, and idempotent journal recovery.
+
+function rosterLifecycleSchemas_() {
+  return RosterLifecycle.ROSTER_LIFECYCLE_SCHEMAS;
+}
+
+function rosterLifecycleEnsureSchema_(sheetName) {
+  const schemas = rosterLifecycleSchemas_();
+  const targetHeaders = schemas[sheetName];
+  if (!targetHeaders) throw new Error('Unknown lifecycle schema: ' + sheetName);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.getRange(1, 1, 1, targetHeaders.length).setValues([targetHeaders]);
+    SpreadsheetApp.flush();
+    return sheet;
+  }
+
+  const dataRange = sheet.getDataRange();
+  const values = dataRange.getValues();
+  const currentHeaders = values[0] || [];
+
+  const isMatch = currentHeaders.length === targetHeaders.length &&
+    currentHeaders.every(function(h, i) { return h === targetHeaders[i]; });
+  if (isMatch) return sheet;
+
+  // Dynamic additive & idempotent upgrade
+  const rows = values.slice(1);
+  const headerMap = {};
+  currentHeaders.forEach(function(h, i) { if (h) headerMap[h] = i; });
+
+  const upgradedRows = rows.map(function(row) {
+    return targetHeaders.map(function(header) {
+      if (headerMap[header] !== undefined) return row[headerMap[header]];
+      if (sheetName === 'RosterPeriods') {
+        if (header === 'State') return 'DRAFT';
+        if (header === 'Revision') return 0;
+        if (header === 'DraftRevision') return 0;
+        if (header === 'SchemaVersion') return headerMap['SchemaVersion'] !== undefined ? row[headerMap['SchemaVersion']] : 2;
+        if (header === 'UpdatedAt') return headerMap['EnrolledAt'] !== undefined ? row[headerMap['EnrolledAt']] : '';
+      }
+      return '';
+    });
+  });
+
+  sheet.getDataRange().clearContent();
+  const allValues = [targetHeaders].concat(upgradedRows);
+  sheet.getRange(1, 1, allValues.length, targetHeaders.length).setValues(allValues);
+  SpreadsheetApp.flush();
+  return sheet;
+}
+
+function rosterLifecycleEnsureAllSchemas_() {
+  ['RosterPeriods', 'RosterAssignments', 'RosterEvents', 'WeeklyOffSnapshots'].forEach(function(name) {
+    rosterLifecycleEnsureSchema_(name);
+  });
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss.getSheetByName('OperationLog')) {
+    const logSheet = ss.insertSheet('OperationLog');
+    logSheet.getRange(1, 1, 1, ROSTER_DRAFT_SCHEMAS.OperationLog.length).setValues([ROSTER_DRAFT_SCHEMAS.OperationLog]);
+    SpreadsheetApp.flush();
+  }
+}
+
+function rosterLifecycleGetRecords_(sheetName) {
+  rosterLifecycleEnsureSchema_(sheetName);
+  const table = rosterV2ReadTable_(sheetName);
+  if (!table.exists) return [];
+  return table.rows.map(function(row, index) {
+    const record = {};
+    table.headers.forEach(function(header, colIdx) {
+      record[header] = row[colIdx];
+    });
+    record._row = index + 2;
+    return record;
+  }).filter(function(record) {
+    return table.headers.some(function(header) {
+      return record[header] !== '' && record[header] !== null && record[header] !== undefined;
+    });
+  });
+}
+
+function rosterLifecycleWriteRow_(sheetName, record, row) {
+  rosterLifecycleEnsureSchema_(sheetName);
+  const targetHeaders = rosterLifecycleSchemas_()[sheetName] || (ROSTER_DRAFT_SCHEMAS[sheetName]);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  const values = targetHeaders.map(function(h) {
+    return record[h] === undefined ? '' : record[h];
+  });
+  const targetRow = row || (sheet.getLastRow() + 1);
+  sheet.getRange(targetRow, 1, 1, values.length).setValues([values]);
+  SpreadsheetApp.flush();
+}
+
+function rosterLifecycleAppendRows_(sheetName, records) {
+  if (!records || records.length === 0) return;
+  rosterLifecycleEnsureSchema_(sheetName);
+  const targetHeaders = rosterLifecycleSchemas_()[sheetName];
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  const matrix = records.map(function(record) {
+    return targetHeaders.map(function(h) {
+      return record[h] === undefined ? '' : record[h];
+    });
+  });
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, 1, matrix.length, targetHeaders.length).setValues(matrix);
+  SpreadsheetApp.flush();
+}
+
+function rosterLifecycleFindPeriod_(periodId) {
+  const records = rosterLifecycleGetRecords_('RosterPeriods');
+  return records.find(function(r) { return r.PeriodId === periodId; }) || null;
+}
+
+function rosterLifecycleFindPeriodByOperation_(operationId) {
+  const records = rosterLifecycleGetRecords_('RosterPeriods');
+  return records.find(function(r) { return r.LastOperationId === operationId; }) || null;
+}
+
+function rosterLifecycleFindAssignmentsByPeriod_(periodId) {
+  const records = rosterLifecycleGetRecords_('RosterAssignments');
+  return records.filter(function(r) { return r.PeriodId === periodId; });
+}
+
+function rosterLifecycleFindAssignmentsBySnapshot_(snapshotId) {
+  const records = rosterLifecycleGetRecords_('RosterAssignments');
+  return records.filter(function(r) { return r.SnapshotId === snapshotId; });
+}
+
+function rosterLifecycleFindAssignmentById_(assignmentId) {
+  const records = rosterLifecycleGetRecords_('RosterAssignments');
+  return records.find(function(r) { return r.AssignmentId === assignmentId; }) || null;
+}
+
+function rosterLifecycleFindAssignmentsByOperation_(operationId) {
+  const records = rosterLifecycleGetRecords_('RosterAssignments');
+  return records.filter(function(r) { return r.OperationId === operationId; });
+}
+
+function rosterLifecycleFindEventsByPeriod_(periodId) {
+  const records = rosterLifecycleGetRecords_('RosterEvents');
+  return records.filter(function(r) { return r.PeriodId === periodId; });
+}
+
+function rosterLifecycleFindEventById_(eventId) {
+  const records = rosterLifecycleGetRecords_('RosterEvents');
+  return records.find(function(r) { return r.EventId === eventId; }) || null;
+}
+
+function rosterLifecycleFindEventsByOperation_(operationId) {
+  const records = rosterLifecycleGetRecords_('RosterEvents');
+  return records.filter(function(r) { return r.OperationId === operationId; });
+}
+
+function rosterLifecycleFindWeeklyOffSnapshotsByPeriod_(periodId) {
+  const records = rosterLifecycleGetRecords_('WeeklyOffSnapshots');
+  return records.filter(function(r) {
+    if (r.PolicyLockedByPeriodId === periodId) return true;
+    try {
+      const periods = JSON.parse(r.PublishedPeriodIdsJson || '[]');
+      return Array.isArray(periods) && periods.includes(periodId);
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+function rosterLifecycleFindOperationLog_(operationId) {
+  const table = rosterV2ReadTable_('OperationLog');
+  if (!table.exists) return null;
+  const opIdIdx = table.headers.indexOf('OperationId');
+  if (opIdIdx === -1) return null;
+  for (let i = 0; i < table.rows.length; i++) {
+    const row = table.rows[i];
+    if (row[opIdIdx] === operationId) {
+      const record = { _row: i + 2 };
+      table.headers.forEach(function(h, idx) { record[h] = row[idx]; });
+      return record;
+    }
+  }
+  return null;
+}
+
+function rosterLifecycleWriteLog_(logRecord) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('OperationLog');
+  const headers = ROSTER_DRAFT_SCHEMAS.OperationLog;
+  const values = headers.map(function(h) { return logRecord[h] === undefined ? '' : logRecord[h]; });
+  if (logRecord._row) {
+    sheet.getRange(logRecord._row, 1, 1, values.length).setValues([values]);
+  } else {
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, values.length).setValues([values]);
+  }
+  SpreadsheetApp.flush();
+}
+
+function rosterLifecyclePublish_(data, actor) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
+  const operationId = String(data.operationId || '').trim();
+  if (!DraftProtocol.uuid(operationId)) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Valid operationId UUID is required' });
+  }
+
+  const clientId = String(data.clientId || operationId);
+  const tabId = String(data.tabId || operationId);
+  const entityKey = 'period:' + periodId;
+  const expectedRevision = Number(data.expectedRevision !== undefined ? data.expectedRevision : (data.payload && data.payload.expectedRevision !== undefined ? data.payload.expectedRevision : 0));
+  const draftCells = (data.payload && data.payload.draftCells) ? data.payload.draftCells : (data.draftCells || {});
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  const meaning = {
+    operationId: operationId,
+    clientId: clientId,
+    tabId: tabId,
+    operationType: 'PERIOD_PUBLISH',
+    entityKey: entityKey,
+    expectedRevision: expectedRevision,
+    payload: {
+      periodId: periodId,
+      draftCells: draftCells,
+      adminNote: data.adminNote || (data.payload && data.payload.adminNote) || ''
+    }
+  };
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(meaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' is not enrolled' });
+  }
+
+  const currentState = String(periodRecord.State || 'DRAFT').toUpperCase();
+  if (currentState === 'PUBLISHED') {
+    if (periodRecord.LastOperationId !== operationId) {
+      throw DraftProtocol.fail('SNAPSHOT_IMMUTABLE', { message: 'Period ' + periodId + ' is already PUBLISHED and cannot be re-published' });
+    }
+    let result = null;
+    if (existingLog && existingLog.ResultJson) {
+      try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
+    }
+    if (!result) {
+      const snapAssignments = rosterLifecycleFindAssignmentsBySnapshot_(periodRecord.PlannedSnapshotId);
+      result = {
+        ok: true,
+        operationId: operationId,
+        periodId: periodId,
+        state: 'PUBLISHED',
+        revision: Number(periodRecord.Revision),
+        plannedSnapshotId: periodRecord.PlannedSnapshotId,
+        assignmentCount: snapAssignments.length,
+        projectionChecksum: periodRecord.ProjectionChecksum,
+        publishedAt: periodRecord.PublishedAt,
+        publishedBy: periodRecord.PublishedBy
+      };
+    }
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = Number(periodRecord.Revision);
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = periodRecord.PublishedAt || timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  } else if (currentState !== 'DRAFT') {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot be published' });
+  }
+
+  const currentRevision = Number(periodRecord.Revision || 0);
+  if (expectedRevision !== currentRevision) {
+    throw DraftProtocol.fail('REVISION_CONFLICT', {
+      entityKey: entityKey,
+      currentRevision: currentRevision,
+      expectedRevision: expectedRevision
+    });
+  }
+
+  // Check conflicting in-flight operations
+  const allLogs = rosterDraftReadTable_('OperationLog');
+  if (allLogs.exists) {
+    const eKeyIdx = allLogs.headers.indexOf('EntityKey');
+    const statusIdx = allLogs.headers.indexOf('Status');
+    const opIdIdx = allLogs.headers.indexOf('OperationId');
+    for (let i = 0; i < allLogs.rows.length; i++) {
+      const row = allLogs.rows[i];
+      if (row[eKeyIdx] === entityKey && row[opIdIdx] !== operationId && ['PENDING', 'RECOVERY_REQUIRED'].includes(row[statusIdx])) {
+        throw DraftProtocol.fail('RECOVERY_REQUIRED', { message: 'Conflicting in-flight operation exists on ' + entityKey });
+      }
+    }
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'PERIOD_PUBLISH',
+      EntityKey: entityKey,
+      ExpectedRevision: expectedRevision,
+      ResultRevision: expectedRevision + 1,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  // Generate Deterministic Planned Snapshot
+  const peopleRecords = rosterV2Records_(rosterV2ReadTable_('RosterPeople'), ['PersonId', 'DirectoryType', 'CurrentDisplayName', 'LegacyNamesJson', 'Active']);
+  let snapshotResult;
+  try {
+    snapshotResult = RosterLifecycle.generatePlannedSnapshot({
+      periodId: periodId,
+      draftCells: draftCells,
+      people: peopleRecords,
+      operationId: operationId,
+      actor: actor,
+      timestamp: timestamp,
+      digestFn: rosterV2Digest_
+    });
+  } catch (err) {
+    existingLog.Status = 'FAILED';
+    existingLog.ResultRevision = '';
+    existingLog.ErrorCode = err.code || 'VALIDATION_FAILED';
+    existingLog.CompletedAt = timestamp;
+    rosterLifecycleWriteLog_(existingLog);
+    throw DraftProtocol.fail(existingLog.ErrorCode, { message: err.message });
+  }
+
+  // Persist Planned Assignments Idempotently
+  const existingAssignments = rosterLifecycleFindAssignmentsBySnapshot_(snapshotResult.plannedSnapshotId);
+  const existingIds = new Set(existingAssignments.map(function(a) { return a.AssignmentId; }));
+  const assignmentsToAppend = snapshotResult.assignments.filter(function(a) {
+    return !existingIds.has(a.AssignmentId);
+  });
+  if (assignmentsToAppend.length > 0) {
+    rosterLifecycleAppendRows_('RosterAssignments', assignmentsToAppend);
+  }
+
+  // Persist WeeklyOffSnapshots Idempotently
+  const policiesTable = rosterV2ReadTable_('OffPolicies');
+  const policies = policiesTable.exists ? rosterV2Records_(policiesTable, RosterGuidance.OFF_POLICY_HEADERS) : [];
+  const existingWeeks = rosterLifecycleGetRecords_('WeeklyOffSnapshots');
+  const adjacentPlanned = rosterLifecycleGetRecords_('RosterAssignments').filter(function(a) {
+    return a.PeriodId !== periodId && a.Layer === 'PLANNED';
+  });
+
+  const weekSnapshots = RosterLifecycle.aggregateWeeklyOffSnapshots({
+    periodId: periodId,
+    plannedAssignments: snapshotResult.assignments,
+    people: peopleRecords,
+    existingWeekSnapshots: existingWeeks,
+    adjacentPlannedAssignments: adjacentPlanned,
+    policies: policies,
+    operationId: operationId,
+    timestamp: timestamp,
+    digestFn: rosterV2Digest_
+  });
+
+  const currentWeekRecords = rosterLifecycleGetRecords_('WeeklyOffSnapshots');
+  weekSnapshots.forEach(function(ws) {
+    const existing = currentWeekRecords.find(function(r) {
+      return r.WeekSnapshotId === ws.WeekSnapshotId && r.PersonId === ws.PersonId;
+    });
+    if (existing) {
+      if (Number(ws.Revision) >= Number(existing.Revision)) {
+        rosterLifecycleWriteRow_('WeeklyOffSnapshots', ws, existing._row);
+      }
+    } else {
+      rosterLifecycleWriteRow_('WeeklyOffSnapshots', ws);
+    }
+  });
+
+  // Prepare and Write Month-Scoped MasterRoster Projection
+  const projectedRows = RosterLifecycle.generateMasterRosterProjection(snapshotResult.assignments);
+  const masterTable = rosterV2ReadTable_('MasterRoster');
+  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let masterSheet = ss.getSheetByName('MasterRoster');
+  if (!masterSheet) {
+    masterSheet = ss.insertSheet('MasterRoster');
+  }
+  masterSheet.getDataRange().clearContent();
+  const masterMatrix = [['Name', 'Date', 'Shift']].concat(
+    mergeResult.mergedRows.map(function(r) { return [r.Name || '', r.Date || '', r.Shift || '']; })
+  );
+  masterSheet.getRange(1, 1, masterMatrix.length, 3).setValues(masterMatrix);
+  SpreadsheetApp.flush();
+
+  // Read Back Persisted Projection and Verify Checksum
+  const readbackTable = rosterV2ReadTable_('MasterRoster');
+  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+  const targetMonthPersistedRows = readbackRows.filter(function(r) {
+    const d = RosterCompatibility.localDate(r.Date);
+    return d && d.slice(0, 7) === periodId;
+  });
+
+  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+  if (actualChecksum !== expectedChecksum) {
+    existingLog.Status = 'RECOVERY_REQUIRED';
+    existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+    rosterLifecycleWriteLog_(existingLog);
+    throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
+      actual: actualChecksum,
+      expected: expectedChecksum
+    });
+  }
+
+  // Persist PUBLISH Event Idempotently
+  const existingEvents = rosterLifecycleFindEventsByOperation_(operationId);
+  if (existingEvents.length === 0) {
+    const publishEvent = RosterLifecycle.createLifecycleEvent({
+      periodId: periodId,
+      eventType: 'PUBLISH',
+      operationId: operationId,
+      actor: actor,
+      baseRevision: expectedRevision,
+      resultRevision: expectedRevision + 1,
+      reason: data.adminNote || 'Period published',
+      timestamp: timestamp
+    });
+    rosterLifecycleAppendRows_('RosterEvents', [publishEvent]);
+  }
+
+  // Update RosterPeriods to PUBLISHED
+  const updatedPeriod = Object.assign({}, periodRecord, {
+    State: 'PUBLISHED',
+    Revision: expectedRevision + 1,
+    DraftRevision: expectedRevision + 1,
+    PlannedSnapshotId: snapshotResult.plannedSnapshotId,
+    PublishedAt: timestamp,
+    PublishedBy: actor,
+    ProjectionChecksum: actualChecksum,
+    SchemaVersion: 2,
+    LastOperationId: operationId,
+    UpdatedAt: timestamp
+  });
+  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+  // Confirm Operation
+  const confirmedResult = {
+    ok: true,
+    operationId: operationId,
+    periodId: periodId,
+    state: 'PUBLISHED',
+    revision: expectedRevision + 1,
+    plannedSnapshotId: snapshotResult.plannedSnapshotId,
+    assignmentCount: snapshotResult.assignments.length,
+    projectionChecksum: actualChecksum,
+    publishedAt: timestamp,
+    publishedBy: actor
+  };
+
+  existingLog.Status = 'CONFIRMED';
+  existingLog.ResultRevision = expectedRevision + 1;
+  existingLog.ResultJson = JSON.stringify(confirmedResult);
+  existingLog.CompletedAt = new Date().toISOString();
+  existingLog.ErrorCode = '';
+  rosterLifecycleWriteLog_(existingLog);
+
+  return confirmedResult;
+}
+
+function rosterLifecycleClose_(data, actor) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
+  const operationId = String(data.operationId || '').trim();
+  if (!DraftProtocol.uuid(operationId)) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Valid operationId UUID is required' });
+  }
+
+  const clientId = String(data.clientId || operationId);
+  const tabId = String(data.tabId || operationId);
+  const entityKey = 'period:' + periodId;
+  const expectedRevision = Number(data.expectedRevision !== undefined ? data.expectedRevision : (data.payload && data.payload.expectedRevision !== undefined ? data.payload.expectedRevision : 0));
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  const meaning = {
+    operationId: operationId,
+    clientId: clientId,
+    tabId: tabId,
+    operationType: 'PERIOD_CLOSE',
+    entityKey: entityKey,
+    expectedRevision: expectedRevision,
+    payload: {
+      periodId: periodId,
+      adminNote: data.adminNote || (data.payload && data.payload.adminNote) || ''
+    }
+  };
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(meaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found' });
+  }
+
+  const currentState = String(periodRecord.State || '').toUpperCase();
+  if (currentState === 'CLOSED') {
+    if (periodRecord.LastOperationId === operationId) {
+      let result = null;
+      if (existingLog && existingLog.ResultJson) {
+        try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
+      }
+      if (!result) {
+        result = {
+          ok: true,
+          operationId: operationId,
+          periodId: periodId,
+          state: 'CLOSED',
+          revision: Number(periodRecord.Revision),
+          closedAt: periodRecord.ClosedAt,
+          closedBy: periodRecord.ClosedBy
+        };
+      }
+      if (existingLog) {
+        existingLog.Status = 'CONFIRMED';
+        existingLog.ResultRevision = Number(periodRecord.Revision);
+        existingLog.ResultJson = JSON.stringify(result);
+        existingLog.CompletedAt = periodRecord.ClosedAt || timestamp;
+        existingLog.ErrorCode = '';
+        rosterLifecycleWriteLog_(existingLog);
+      }
+      return result;
+    }
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' is already CLOSED' });
+  }
+  if (currentState !== 'PUBLISHED') {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot be closed' });
+  }
+
+  const currentRevision = Number(periodRecord.Revision || 0);
+  if (expectedRevision !== currentRevision) {
+    throw DraftProtocol.fail('REVISION_CONFLICT', {
+      entityKey: entityKey,
+      currentRevision: currentRevision,
+      expectedRevision: expectedRevision
+    });
+  }
+
+  let pendingCount = 0;
+  let failedCount = 0;
+  const allLogs = rosterDraftReadTable_('OperationLog');
+  if (allLogs.exists) {
+    const eKeyIdx = allLogs.headers.indexOf('EntityKey');
+    const statusIdx = allLogs.headers.indexOf('Status');
+    const opIdIdx = allLogs.headers.indexOf('OperationId');
+    for (let i = 0; i < allLogs.rows.length; i++) {
+      const row = allLogs.rows[i];
+      if (row[eKeyIdx] === entityKey && row[opIdIdx] !== operationId) {
+        if (row[statusIdx] === 'PENDING') pendingCount++;
+        if (['RECOVERY_REQUIRED', 'FAILED'].includes(row[statusIdx])) failedCount++;
+      }
+    }
+  }
+
+  try {
+    RosterLifecycle.validateTransition(currentState, 'CLOSED', {
+      actor: actor,
+      isManual: true,
+      currentRevision: currentRevision,
+      reconciliation: {
+        ok: pendingCount === 0 && failedCount === 0,
+        pendingOperationsCount: pendingCount,
+        error: pendingCount > 0
+          ? `Cannot close period: ${pendingCount} pending operations remain in the journal`
+          : (failedCount > 0 ? `Cannot close period: ${failedCount} failed operations remain in the journal` : '')
+      }
+    });
+  } catch (err) {
+    throw DraftProtocol.fail(err.code || 'RECONCILIATION_FAILED', { message: err.message });
+  }
+
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'PERIOD_CLOSE',
+      EntityKey: entityKey,
+      ExpectedRevision: expectedRevision,
+      ResultRevision: expectedRevision + 1,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  const existingEvents = rosterLifecycleFindEventsByOperation_(operationId);
+  if (existingEvents.length === 0) {
+    const closeEvent = RosterLifecycle.createLifecycleEvent({
+      periodId: periodId,
+      eventType: 'CLOSE',
+      operationId: operationId,
+      actor: actor,
+      baseRevision: currentRevision,
+      resultRevision: currentRevision + 1,
+      reason: data.adminNote || 'Period closed',
+      timestamp: timestamp
+    });
+    rosterLifecycleAppendRows_('RosterEvents', [closeEvent]);
+  }
+
+  const updatedPeriod = Object.assign({}, periodRecord, {
+    State: 'CLOSED',
+    Revision: currentRevision + 1,
+    ClosedAt: timestamp,
+    ClosedBy: actor,
+    LastOperationId: operationId,
+    UpdatedAt: timestamp
+  });
+  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+  const confirmedResult = {
+    ok: true,
+    operationId: operationId,
+    periodId: periodId,
+    state: 'CLOSED',
+    revision: currentRevision + 1,
+    closedAt: timestamp,
+    closedBy: actor
+  };
+
+  existingLog.Status = 'CONFIRMED';
+  existingLog.ResultRevision = currentRevision + 1;
+  existingLog.ResultJson = JSON.stringify(confirmedResult);
+  existingLog.CompletedAt = new Date().toISOString();
+  existingLog.ErrorCode = '';
+  rosterLifecycleWriteLog_(existingLog);
+
+  return confirmedResult;
+}
+
+function rosterLifecycleReopen_(data, actor) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
+  const operationId = String(data.operationId || '').trim();
+  if (!DraftProtocol.uuid(operationId)) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Valid operationId UUID is required' });
+  }
+
+  const clientId = String(data.clientId || operationId);
+  const tabId = String(data.tabId || operationId);
+  const entityKey = 'period:' + periodId;
+  const expectedRevision = Number(data.expectedRevision !== undefined ? data.expectedRevision : (data.payload && data.payload.expectedRevision !== undefined ? data.payload.expectedRevision : 0));
+  const reason = String(data.reason || (data.payload && data.payload.reason) || data.adminNote || (data.payload && data.payload.adminNote) || '').trim();
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!reason) {
+    throw DraftProtocol.fail('REOPEN_REASON_REQUIRED', { message: 'Reopen requires a non-empty trimmed reason string' });
+  }
+
+  const meaning = {
+    operationId: operationId,
+    clientId: clientId,
+    tabId: tabId,
+    operationType: 'PERIOD_REOPEN',
+    entityKey: entityKey,
+    expectedRevision: expectedRevision,
+    payload: {
+      periodId: periodId,
+      reason: reason
+    }
+  };
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(meaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found' });
+  }
+
+  const currentState = String(periodRecord.State || '').toUpperCase();
+  if (currentState === 'PUBLISHED') {
+    if (periodRecord.LastOperationId === operationId) {
+      let result = null;
+      if (existingLog && existingLog.ResultJson) {
+        try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
+      }
+      if (!result) {
+        result = {
+          ok: true,
+          operationId: operationId,
+          periodId: periodId,
+          state: 'PUBLISHED',
+          revision: Number(periodRecord.Revision),
+          reopenedAt: periodRecord.UpdatedAt,
+          reopenedBy: actor,
+          reason: reason
+        };
+      }
+      if (existingLog) {
+        existingLog.Status = 'CONFIRMED';
+        existingLog.ResultRevision = Number(periodRecord.Revision);
+        existingLog.ResultJson = JSON.stringify(result);
+        existingLog.CompletedAt = periodRecord.UpdatedAt || timestamp;
+        existingLog.ErrorCode = '';
+        rosterLifecycleWriteLog_(existingLog);
+      }
+      return result;
+    }
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' is already PUBLISHED' });
+  }
+  if (currentState !== 'CLOSED') {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot be reopened' });
+  }
+
+  const currentRevision = Number(periodRecord.Revision || 0);
+  if (expectedRevision !== currentRevision) {
+    throw DraftProtocol.fail('REVISION_CONFLICT', {
+      entityKey: entityKey,
+      currentRevision: currentRevision,
+      expectedRevision: expectedRevision
+    });
+  }
+
+  try {
+    RosterLifecycle.validateTransition(currentState, 'PUBLISHED', {
+      actor: actor,
+      reason: reason,
+      isManual: true,
+      currentRevision: currentRevision
+    });
+  } catch (err) {
+    throw DraftProtocol.fail(err.code || 'VALIDATION_FAILED', { message: err.message });
+  }
+
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'PERIOD_REOPEN',
+      EntityKey: entityKey,
+      ExpectedRevision: expectedRevision,
+      ResultRevision: expectedRevision + 1,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  const existingEvents = rosterLifecycleFindEventsByOperation_(operationId);
+  if (existingEvents.length === 0) {
+    const reopenEvent = RosterLifecycle.createLifecycleEvent({
+      periodId: periodId,
+      eventType: 'REOPEN',
+      operationId: operationId,
+      actor: actor,
+      baseRevision: currentRevision,
+      resultRevision: currentRevision + 1,
+      reason: reason,
+      timestamp: timestamp
+    });
+    rosterLifecycleAppendRows_('RosterEvents', [reopenEvent]);
+  }
+
+  const updatedPeriod = Object.assign({}, periodRecord, {
+    State: 'PUBLISHED',
+    Revision: currentRevision + 1,
+    ClosedAt: '',
+    ClosedBy: '',
+    LastOperationId: operationId,
+    UpdatedAt: timestamp
+  });
+  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+  const confirmedResult = {
+    ok: true,
+    operationId: operationId,
+    periodId: periodId,
+    state: 'PUBLISHED',
+    revision: currentRevision + 1,
+    reopenedAt: timestamp,
+    reopenedBy: actor,
+    reason: reason
+  };
+
+  existingLog.Status = 'CONFIRMED';
+  existingLog.ResultRevision = currentRevision + 1;
+  existingLog.ResultJson = JSON.stringify(confirmedResult);
+  existingLog.CompletedAt = new Date().toISOString();
+  existingLog.ErrorCode = '';
+  rosterLifecycleWriteLog_(existingLog);
+
+  return confirmedResult;
+}
+
+function rosterLifecycleStatus_(operationId) {
+  const log = rosterLifecycleFindOperationLog_(operationId);
+  if (!log) return { ok: true, operationId: operationId, status: 'NOT_FOUND' };
+  let result = null;
+  if (log.Status === 'CONFIRMED' && log.ResultJson) {
+    result = JSON.parse(log.ResultJson);
+  }
+  return {
+    ok: true,
+    operationId: operationId,
+    status: log.Status,
+    payloadHash: log.PayloadHash,
+    entityKey: log.EntityKey,
+    resultRevision: log.ResultRevision,
+    errorCode: log.ErrorCode || null,
+    result: result
+  };
+}
+
+function rosterLifecycleRecover_(operationId) {
+  const log = rosterLifecycleFindOperationLog_(operationId);
+  if (!log) throw DraftProtocol.fail('ENTITY_NOT_FOUND');
+  if (['CONFIRMED', 'FAILED'].includes(log.Status)) {
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  const periodId = log.EntityKey.replace(/^period:/, '');
+  const period = rosterLifecycleFindPeriod_(periodId);
+
+  if (log.OperationType === 'PERIOD_PUBLISH') {
+    if (period && period.State === 'PUBLISHED' && period.LastOperationId === operationId) {
+      if (!log.ResultJson) {
+        const snapAssignments = rosterLifecycleFindAssignmentsBySnapshot_(period.PlannedSnapshotId);
+        log.ResultJson = JSON.stringify({
+          ok: true,
+          operationId: operationId,
+          periodId: periodId,
+          state: 'PUBLISHED',
+          revision: Number(period.Revision),
+          plannedSnapshotId: period.PlannedSnapshotId,
+          assignmentCount: snapAssignments.length,
+          projectionChecksum: period.ProjectionChecksum,
+          publishedAt: period.PublishedAt,
+          publishedBy: period.PublishedBy
+        });
+      }
+      log.Status = 'CONFIRMED';
+      log.ErrorCode = '';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+    return rosterLifecycleStatus_(operationId);
+  } else if (log.OperationType === 'PERIOD_CLOSE') {
+    if (period && period.State === 'CLOSED' && period.LastOperationId === operationId) {
+      if (!log.ResultJson) {
+        log.ResultJson = JSON.stringify({
+          ok: true,
+          operationId: operationId,
+          periodId: periodId,
+          state: 'CLOSED',
+          revision: Number(period.Revision),
+          closedAt: period.ClosedAt,
+          closedBy: period.ClosedBy
+        });
+      }
+      log.Status = 'CONFIRMED';
+      log.ErrorCode = '';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+    return rosterLifecycleStatus_(operationId);
+  } else if (log.OperationType === 'PERIOD_REOPEN') {
+    if (period && period.State === 'PUBLISHED' && period.LastOperationId === operationId) {
+      if (!log.ResultJson) {
+        log.ResultJson = JSON.stringify({
+          ok: true,
+          operationId: operationId,
+          periodId: periodId,
+          state: 'PUBLISHED',
+          revision: Number(period.Revision)
+        });
+      }
+      log.Status = 'CONFIRMED';
+      log.ErrorCode = '';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  return rosterLifecycleStatus_(operationId);
+}
+
+function rosterLifecycleRoute_(action, data) {
+  let lock, acquired = false, principal;
+  try {
+    try {
+      principal = rosterV2RequireAdmin_();
+    } catch (error) {
+      throw DraftProtocol.fail('AUTHORIZATION_REQUIRED');
+    }
+
+    const settings = rosterDraftSettings_();
+    const switches = RosterCompatibility.featureSwitches(settings);
+    const writeActions = ['rosterv2publish', 'rosterv2close', 'rosterv2reopen', 'rosterv2lifecyclerecover'];
+    const isWrite = writeActions.includes(action);
+
+    if (isWrite) {
+      DraftProtocol.ensure(switches.roster_v2_write_enabled, 'FEATURE_DISABLED');
+    } else {
+      DraftProtocol.ensure(switches.roster_v2_read_enabled, 'FEATURE_DISABLED');
+    }
+
+    lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(10000);
+      acquired = true;
+    } catch (error) {
+      throw DraftProtocol.fail('LOCK_BUSY');
+    }
+
+    const lockedSettings = rosterDraftSettings_();
+    const lockedSwitches = RosterCompatibility.featureSwitches(lockedSettings);
+    if (isWrite) {
+      DraftProtocol.ensure(lockedSwitches.roster_v2_write_enabled, 'FEATURE_DISABLED');
+    } else {
+      DraftProtocol.ensure(lockedSwitches.roster_v2_read_enabled, 'FEATURE_DISABLED');
+    }
+
+    if (action === 'rosterv2lifecycleschema') {
+      return createJsonResponse({
+        ok: true,
+        schemaVersion: 2,
+        schemas: rosterLifecycleSchemas_(),
+        lifecycleWritesEnabled: Boolean(lockedSwitches.roster_v2_write_enabled)
+      });
+    }
+
+    if (action === 'rosterv2periodlifecycle') {
+      const periodId = RosterCompatibility.validatePeriod(String(data.periodId || data.period || ''));
+      rosterLifecycleEnsureAllSchemas_();
+      const periodRecord = rosterLifecycleFindPeriod_(periodId);
+      const events = rosterLifecycleFindEventsByPeriod_(periodId);
+      return createJsonResponse({
+        ok: true,
+        periodId: periodId,
+        period: periodRecord,
+        events: events
+      });
+    }
+
+    if (action === 'rosterv2publish') {
+      return createJsonResponse(rosterLifecyclePublish_(data, principal.email));
+    }
+
+    if (action === 'rosterv2close') {
+      return createJsonResponse(rosterLifecycleClose_(data, principal.email));
+    }
+
+    if (action === 'rosterv2reopen') {
+      return createJsonResponse(rosterLifecycleReopen_(data, principal.email));
+    }
+
+    if (action === 'rosterv2lifecyclerecover') {
+      return createJsonResponse(rosterLifecycleRecover_(data.operationId));
+    }
+
+    throw DraftProtocol.fail('VALIDATION_FAILED');
+  } catch (error) {
+    const recognizedErrors = [
+      'SNAPSHOT_IMMUTABLE', 'IMMUTABLE_SNAPSHOT_VIOLATION',
+      'INVALID_STATE', 'INVALID_LIFECYCLE_STATE', 'INVALID_LIFECYCLE_TRANSITION',
+      'CHECKSUM_MISMATCH', 'RECONCILIATION_FAILED', 'REOPEN_REASON_REQUIRED',
+      'AMENDED_RESERVED_PHASE5', 'TRANSITION_BLOCKED'
+    ];
+    const code = (DraftProtocol.errors.includes(error.code) ||
+      (RosterLifecycle.LIFECYCLE_ERRORS && RosterLifecycle.LIFECYCLE_ERRORS[error.code]) ||
+      recognizedErrors.includes(error.code))
+      ? error.code
+      : 'RECOVERY_REQUIRED';
+    let legacyMsg = error.message || code;
+    if (code === 'AUTHORIZATION_REQUIRED') legacyMsg = 'V2 administrator authorization required.';
+    else if (code === 'FEATURE_DISABLED') legacyMsg = 'Official v2 writes are disabled in Phase 1 / lifecycle not enabled.';
+    const detailsMsg = (error.details && error.details.message) || error.message || code;
+    return createJsonResponse({
+      ok: false,
+      result: 'error',
+      message: legacyMsg,
+      error: {
+        code: code,
+        retryable: ['LOCK_BUSY', 'TRANSIENT_BACKEND'].includes(code),
+        details: error.details || {},
+        message: detailsMsg
+      }
+    });
+  } finally {
+    if (acquired) lock.releaseLock();
+  }
 }
 // END GENERATED PHASE 1 COMPATIBILITY
