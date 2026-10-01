@@ -29,11 +29,13 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
     return()=>{live=false;unsubscribe?.();q?.stop();clearInterval(refresh);window.removeEventListener('online',connection);window.removeEventListener('offline',connection);};
   },[key,settings,runtimeFactory]); // Reopen the durable queue for the selected period; no legacy refresh mutation.
   const view=queue?.view(key),pending=[...(queue?.entities.values()||[])].flatMap(e=>e.operations.filter(o=>!terminal(o)));
+  const isLocked = view?.lifecycle?.state === 'PUBLISHED' || view?.lifecycle?.state === 'CLOSED';
   const act=fn=>Promise.resolve().then(fn).catch(e=>setError(e.code||e.message));
   const cellKey=personId+'/'+date;
   const cellText=(view?.cells[cellKey]||[]).map(a=>a.rawShift).join('\n');
   useEffect(()=>{setText(cellText);},[personId,date,queue,cellText]);
   const save=(value=text)=>act(async()=>{
+    if (isLocked) return;
     setError('');const old=queue.view(key).cells[cellKey]||[];
     const assignments=value===''?[]:value.split('\n').map((rawShift,i)=>({assignmentId:old[i]?.assignmentId||crypto.randomUUID(),rawShift}));
     await queue.enqueue(key,[{personId,date,assignments}]);
@@ -42,12 +44,16 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
     <h2 className="text-lg font-semibold">Private draft — {period}</h2>
     <p className="text-sm">Draft changes are separate from the official roster. This period must already be enrolled.</p>
     <p role="status" aria-live="polite">{offline?'Offline — changes retained locally. ':''}{!queue||view?.baseline.checksum===null?'Loading confirmed draft…':view?.unsafe||view?.error?'Local changes need storage recovery':pending.length?`${pending.length} changes need confirmation`:'All changes saved'}</p>
+    {isLocked&&<div className="my-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-center gap-2" role="alert">
+      <span>🔒</span>
+      <span>{view?.lifecycle?.state==='PUBLISHED'?'Planned Snapshot is locked. Normal draft editing is disabled for this published period.':'Period is closed. Draft editing is disabled.'}</span>
+    </div>}
     {(error||view?.error)&&<p role="alert">{errorMessages[error||view.error]||error||view.error}. Local proposals remain available for review.</p>}
     <div className="flex flex-wrap gap-3 my-3">
       <label>Person<select className="block min-h-11 border p-2" value={personId} onChange={e=>setPersonId(e.target.value)}>{people.map(p=><option key={p.PersonId} value={p.PersonId}>{p.CurrentDisplayName} ({p.DirectoryType})</option>)}</select></label>
       <label>Date<input className="block min-h-11 border p-2" type="date" value={date} min={period+'-01'} max={period+'-31'} onChange={e=>setDate(e.target.value)}/></label>
-      <label>Assignments, one per line<textarea className="block border p-2" value={text} disabled={!queue||!personId||view?.baseline.checksum===null} onChange={e=>{setText(e.target.value);save(e.target.value);}} placeholder="AM&#10;PM"/></label>
-      <button className="min-h-11 border rounded px-3" disabled={!queue||!personId||view?.baseline.checksum===null} onClick={()=>save()}>Save draft cell</button>
+      <label>Assignments, one per line<textarea className="block border p-2" value={text} disabled={!queue||!personId||view?.baseline.checksum===null||isLocked} onChange={e=>{if(!isLocked){setText(e.target.value);save(e.target.value);}}} placeholder="AM&#10;PM"/></label>
+      <button className="min-h-11 border rounded px-3" disabled={!queue||!personId||view?.baseline.checksum===null||isLocked} onClick={()=>save()}>Save draft cell</button>
       <button className="min-h-11 border rounded px-3" disabled={!queue} onClick={()=>act(()=>queue.refresh(key))}>Refresh confirmed draft</button>
       {(view?.unsafe||view?.error)&&<button className="min-h-11 border rounded px-3" onClick={()=>act(()=>queue.retryPersistence())}>Retry local storage</button>}
     </div>

@@ -1,4 +1,5 @@
 import DraftQueuePanel, { rosterPanelEnabled } from '../features/roster/components/DraftQueuePanel.jsx';
+import LifecycleControls from '../features/roster/components/LifecycleControls.jsx';
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
@@ -724,6 +725,40 @@ export default function RosterPage({
     return `${yyyy}-${mm}`;
   });
 
+  // Phase 4 Roster Lifecycle State
+  const [lifecycleInfo, setLifecycleInfo] = useState({
+    period: rosterMonth,
+    isEnrolled: false,
+    state: null,
+    revision: null,
+  });
+
+  useEffect(() => {
+    setLifecycleInfo({
+      period: rosterMonth,
+      isEnrolled: false,
+      state: null,
+      revision: null,
+    });
+  }, [rosterMonth]);
+
+  const isPeriodLocked = Boolean(
+    lifecycleInfo.isEnrolled &&
+    lifecycleInfo.period === rosterMonth &&
+    ['PUBLISHED', 'CLOSED'].includes(lifecycleInfo.state)
+  );
+
+  useEffect(() => {
+    if (isPeriodLocked) {
+      setIsEditMode(false);
+      setIsStandbyEditMode(false);
+      setIsExtendedEditMode(false);
+      setIsExcelTableEditMode(false);
+      setActiveEpStamp(null);
+      setEditedGrid({});
+    }
+  }, [isPeriodLocked]);
+
   // Roster Memo Planner Modal States
   const [isMemoModalOpen, setIsMemoModalOpen] = useState(false);
   const [memoMonth, setMemoMonth] = useState(rosterMonth);
@@ -1202,6 +1237,7 @@ export default function RosterPage({
   };
 
   const toggleEditMode = () => {
+    if (isPeriodLocked) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1219,6 +1255,7 @@ export default function RosterPage({
   };
 
   const toggleStandbyEditMode = () => {
+    if (isPeriodLocked) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1237,6 +1274,7 @@ export default function RosterPage({
   };
 
   const toggleExtendedEditMode = () => {
+    if (isPeriodLocked) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1255,6 +1293,7 @@ export default function RosterPage({
   };
 
   const toggleExcelTableEditMode = () => {
+    if (isPeriodLocked) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1291,7 +1330,7 @@ export default function RosterPage({
   }, [activeEpStamp]);
 
   const handleBatchFillWeekdays = (doctorName) => {
-    if (!doctorName || doctorName === '__CLEAR__') return;
+    if (isPeriodLocked || !doctorName || doctorName === '__CLEAR__') return;
     const confirmMsg = `Assign ${doctorName} to all weekdays (Mon-Fri) Office Hour for ${monthLabel}?`;
     if (!confirm(confirmMsg)) return;
 
@@ -1311,7 +1350,7 @@ export default function RosterPage({
   };
 
   const handleBatchFillWeekends = (doctorName) => {
-    if (!doctorName || doctorName === '__CLEAR__') return;
+    if (isPeriodLocked || !doctorName || doctorName === '__CLEAR__') return;
     const confirmMsg = `Assign ${doctorName} to all weekends (Sat-Sun) On Call for ${monthLabel}?`;
     if (!confirm(confirmMsg)) return;
 
@@ -1395,7 +1434,7 @@ export default function RosterPage({
   }, [activeCommentDetail?.doctorName, activeCommentDetail?.dateStr, activeCommentDetail?.val]);
 
   const handleDirectShiftReassignment = async (isClearing = false) => {
-    if (!activeCommentDetail || !onUploadMasterRoster) return;
+    if (isPeriodLocked || !activeCommentDetail || !onUploadMasterRoster) return;
     const { doctorName, dateStr } = activeCommentDetail;
     const normalizedTargetName = normalizeForComparison(doctorName);
     const targetDate = dateStr;
@@ -2137,6 +2176,7 @@ export default function RosterPage({
   };
 
   const handleSave = async () => {
+    if (isPeriodLocked) return;
     const flatRows = [];
     Object.keys(editedGrid).forEach((dateStr) => {
       Object.keys(editedGrid[dateStr]).forEach((shift) => {
@@ -2294,6 +2334,16 @@ export default function RosterPage({
             </button>
           </div>
         </div>
+
+        {/* Phase 4 Roster Lifecycle Status & Controls */}
+        <div className="flex flex-col sm:items-end gap-2 shrink-0">
+          <LifecycleControls
+            period={rosterMonth}
+            settings={settings}
+            isAdmin={isAdmin}
+            onLifecycleStateChange={setLifecycleInfo}
+          />
+        </div>
       </div>
 
       {/* 🧭 Tab Control */}
@@ -2344,7 +2394,18 @@ export default function RosterPage({
                 )}
               </>
             )}
-            {!isStandbyEditMode && !isExtendedEditMode && (
+            {isPeriodLocked ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 shadow-sm" role="status">
+                <span>🔒</span>
+                <span>
+                  {lifecycleInfo.state === 'PUBLISHED'
+                    ? 'Planned Snapshot Locked'
+                    : 'Period Closed (Read-Only)'}
+                </span>
+              </div>
+            ) : (
+              <>
+                {!isStandbyEditMode && !isExtendedEditMode && (
               <>
                 {!isExcelTableEditMode && (
                   <button
@@ -2421,6 +2482,8 @@ export default function RosterPage({
                 >
                   💾 Save Changes
                 </button>
+              </>
+            )}
               </>
             )}
           </div>
@@ -2784,7 +2847,7 @@ export default function RosterPage({
                           const isRequested = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() === reqData.shift.toUpperCase());
                           const hasOverride = !!(reqData && !isCustomCommentOnly && cleanVal.toUpperCase() !== reqData.shift.toUpperCase());
                           const hasIndicator = hasRequestComment || hasCustomComment || hasOverride;
-                          const isCellInteractive = (hasIndicator || isAdmin) && !isEditMode && !isStandbyEditMode && !isExtendedEditMode && !isExcelTableEditMode;
+                          const isCellInteractive = (hasIndicator || (isAdmin && !isPeriodLocked)) && !isEditMode && !isStandbyEditMode && !isExtendedEditMode && !isExcelTableEditMode;
 
                           let cellBg = isToday 
                             ? 'bg-indigo-50/40' 
@@ -3513,7 +3576,7 @@ export default function RosterPage({
               )}
 
               {/* Direct Shift Re-assignment (Admin Only) */}
-              {isAdmin && (
+              {isAdmin && !isPeriodLocked && (
                 <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4 animate-fadeIn space-y-3">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
@@ -3643,6 +3706,13 @@ export default function RosterPage({
                       </button>
                     )}
                   </div>
+                </div>
+              )}
+
+              {isAdmin && isPeriodLocked && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 flex items-center gap-2">
+                  <span>🔒</span>
+                  <span>Shift reassignment is disabled because this period is {lifecycleInfo.state === 'CLOSED' ? 'Closed' : 'Published'}.</span>
                 </div>
               )}
 
