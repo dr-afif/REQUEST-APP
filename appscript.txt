@@ -3193,17 +3193,32 @@ function rosterLifecycleEnsureSchema_(sheetName) {
   const values = dataRange.getValues();
   const currentHeaders = values[0] || [];
 
-  const isMatch = currentHeaders.length === targetHeaders.length &&
-    currentHeaders.every(function(h, i) { return h === targetHeaders[i]; });
-  if (isMatch) return sheet;
+  if (currentHeaders.length === 0) {
+    sheet.getRange(1, 1, 1, targetHeaders.length).setValues([targetHeaders]);
+    SpreadsheetApp.flush();
+    return sheet;
+  }
 
-  // Dynamic additive & idempotent upgrade
+  // If every targetHeader is already present in currentHeaders, no upgrade needed.
+  const allTargetHeadersPresent = targetHeaders.every(function(h) {
+    return currentHeaders.indexOf(h) >= 0;
+  });
+  if (allTargetHeadersPresent) return sheet;
+
+  // Additive & idempotent upgrade:
+  // Target lifecycle headers come first in canonical order, followed by any existing non-target headers
+  // (preserving Phase 1 columns like EnrolledAt, EnrolledBy, and any custom/legacy fields).
+  const extraHeaders = currentHeaders.filter(function(h) {
+    return h && targetHeaders.indexOf(h) === -1;
+  });
+  const upgradedHeaders = targetHeaders.concat(extraHeaders);
+
   const rows = values.slice(1);
   const headerMap = {};
   currentHeaders.forEach(function(h, i) { if (h) headerMap[h] = i; });
 
   const upgradedRows = rows.map(function(row) {
-    return targetHeaders.map(function(header) {
+    return upgradedHeaders.map(function(header) {
       if (headerMap[header] !== undefined) return row[headerMap[header]];
       if (sheetName === 'RosterPeriods') {
         if (header === 'State') return 'DRAFT';
@@ -3217,8 +3232,8 @@ function rosterLifecycleEnsureSchema_(sheetName) {
   });
 
   sheet.getDataRange().clearContent();
-  const allValues = [targetHeaders].concat(upgradedRows);
-  sheet.getRange(1, 1, allValues.length, targetHeaders.length).setValues(allValues);
+  const allValues = [upgradedHeaders].concat(upgradedRows);
+  sheet.getRange(1, 1, allValues.length, upgradedHeaders.length).setValues(allValues);
   SpreadsheetApp.flush();
   return sheet;
 }
@@ -3255,8 +3270,9 @@ function rosterLifecycleGetRecords_(sheetName) {
 
 function rosterLifecycleWriteRow_(sheetName, record, row) {
   rosterLifecycleEnsureSchema_(sheetName);
-  const targetHeaders = rosterLifecycleSchemas_()[sheetName] || (ROSTER_DRAFT_SCHEMAS[sheetName]);
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  const currentHeaders = sheet.getDataRange().getValues()[0] || [];
+  const targetHeaders = currentHeaders.length > 0 ? currentHeaders : (rosterLifecycleSchemas_()[sheetName] || ROSTER_DRAFT_SCHEMAS[sheetName]);
   const values = targetHeaders.map(function(h) {
     return record[h] === undefined ? '' : record[h];
   });
@@ -3268,8 +3284,9 @@ function rosterLifecycleWriteRow_(sheetName, record, row) {
 function rosterLifecycleAppendRows_(sheetName, records) {
   if (!records || records.length === 0) return;
   rosterLifecycleEnsureSchema_(sheetName);
-  const targetHeaders = rosterLifecycleSchemas_()[sheetName];
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  const currentHeaders = sheet.getDataRange().getValues()[0] || [];
+  const targetHeaders = currentHeaders.length > 0 ? currentHeaders : rosterLifecycleSchemas_()[sheetName];
   const matrix = records.map(function(record) {
     return targetHeaders.map(function(h) {
       return record[h] === undefined ? '' : record[h];
@@ -3554,7 +3571,7 @@ function rosterLifecyclePublish_(data, actor) {
   const currentWeekRecords = rosterLifecycleGetRecords_('WeeklyOffSnapshots');
   weekSnapshots.forEach(function(ws) {
     const existing = currentWeekRecords.find(function(r) {
-      return r.WeekSnapshotId === ws.WeekSnapshotId && r.PersonId === ws.PersonId;
+      return (r.WeekSnapshotId === ws.WeekSnapshotId) || (r.WeekStart === ws.WeekStart && r.PersonId === ws.PersonId);
     });
     if (existing) {
       if (Number(ws.Revision) >= Number(existing.Revision)) {
@@ -3631,7 +3648,9 @@ function rosterLifecyclePublish_(data, actor) {
     ProjectionChecksum: actualChecksum,
     SchemaVersion: 2,
     LastOperationId: operationId,
-    UpdatedAt: timestamp
+    UpdatedAt: timestamp,
+    EnrolledAt: periodRecord.EnrolledAt || timestamp,
+    EnrolledBy: periodRecord.EnrolledBy || actor
   });
   rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
 
@@ -4045,6 +4064,23 @@ function rosterLifecycleStatus_(operationId) {
   };
 }
 
+// Supported Recovery Contract:
+// 1. `rosterv2publish` retry (with the SAME operationId):
+//    Performs deterministic repair and resumption of incomplete transitions.
+//    If a publish attempt fails (e.g. CHECKSUM_MISMATCH, partial append, or transient readback error),
+//    retrying `rosterv2publish` with the same operationId deterministically repairs the target-month
+//    MasterRoster projection, deduplicates assignments and weekly snapshots, appends exactly one
+//    PUBLISH event, updates RosterPeriods to PUBLISHED, and marks the OperationLog as CONFIRMED.
+//
+// 2. `rosterv2lifecyclerecover`:
+//    Generic journal reconciliation endpoint that recovers lost acknowledgments.
+//    It finalizes operations whose canonical transitions have ALREADY completed in the underlying
+//    domain table (e.g. period.State === 'PUBLISHED' and period.LastOperationId === operationId)
+//    but whose OperationLog write was interrupted.
+//    For operations whose canonical transition did not complete (e.g. still DRAFT after CHECKSUM_MISMATCH),
+//    it reports `status: 'RECOVERY_REQUIRED'` with `errorCode: 'CHECKSUM_MISMATCH'` and DOES NOT
+//    falsely claim successful repair. Callers must retry the original publish operation with the same
+//    operationId and payload to effectuate repair.
 function rosterLifecycleRecover_(operationId) {
   const log = rosterLifecycleFindOperationLog_(operationId);
   if (!log) throw DraftProtocol.fail('ENTITY_NOT_FOUND');

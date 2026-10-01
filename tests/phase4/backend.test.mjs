@@ -18,6 +18,7 @@ function setup(options = {}) {
     ...options
   });
   h.context.SpreadsheetApp.flush = () => {};
+  h.context.Utilities.getUuid = () => crypto.randomUUID();
   h.grids.Settings.push(
     ['roster_v2_write_enabled', 'true'],
     ['roster_v2_read_enabled', 'true'],
@@ -174,6 +175,7 @@ const periodLifecycle = (h, periodId) => h.get('rosterv2periodlifecycle', { peri
 
 test('fresh lifecycle schema creation initializes all tables with correct Phase 4 headers', () => {
   const h = setup();
+  delete h.grids.RosterPeriods; // Test fresh table creation from absent state
   h.context.rosterLifecycleEnsureAllSchemas_();
   const schemas = lifecycle.ROSTER_LIFECYCLE_SCHEMAS;
   for (const [name, expectedHeaders] of Object.entries(schemas)) {
@@ -183,19 +185,22 @@ test('fresh lifecycle schema creation initializes all tables with correct Phase 
   assert.ok(h.grids.OperationLog, 'OperationLog must exist');
 });
 
-test('4-column Phase 1 RosterPeriods upgrades dynamically to 13 columns preserving legacy values', () => {
+test('Phase 1 RosterPeriods upgrades additively preserving EnrolledAt, EnrolledBy, and unknown legacy columns', () => {
   const h = setup();
   h.grids.RosterPeriods = [
-    ['PeriodId', 'SchemaVersion', 'EnrolledAt', 'EnrolledBy'],
-    ['2030-07', 2, '2030-01-01', 'owner'],
-    ['2030-08', 2, '2030-01-02', 'owner']
+    ['PeriodId', 'SchemaVersion', 'EnrolledAt', 'EnrolledBy', 'CustomLegacyField', 'AuditTag'],
+    ['2030-07', 2, '2030-01-01T00:00:00.000Z', 'owner-1', 'LegacyValue1', 'TagA'],
+    ['2030-08', 2, '2030-01-02T12:00:00.000Z', 'owner-2', 'LegacyValue2', 'TagB']
   ];
 
   h.context.rosterLifecycleEnsureSchema_('RosterPeriods');
 
   const headers = h.grids.RosterPeriods[0];
-  assert.equal(headers.length, 13);
-  assert.deepEqual(headers, lifecycle.ROSTER_LIFECYCLE_SCHEMAS.RosterPeriods);
+  // 13 canonical Phase 4 lifecycle headers + 4 preserved headers (EnrolledAt, EnrolledBy, CustomLegacyField, AuditTag)
+  assert.equal(headers.length, 17);
+  const canonicalLifecycleHeaders = lifecycle.ROSTER_LIFECYCLE_SCHEMAS.RosterPeriods;
+  assert.deepEqual(headers.slice(0, 13), canonicalLifecycleHeaders);
+  assert.deepEqual(headers.slice(13), ['EnrolledAt', 'EnrolledBy', 'CustomLegacyField', 'AuditTag']);
 
   // Check row 1 preserved
   const row1 = h.grids.RosterPeriods[1];
@@ -205,26 +210,76 @@ test('4-column Phase 1 RosterPeriods upgrades dynamically to 13 columns preservi
   const draftRevIdx = headers.indexOf('DraftRevision');
   const schemaVerIdx = headers.indexOf('SchemaVersion');
   const updatedIdx = headers.indexOf('UpdatedAt');
+  const enrolledAtIdx = headers.indexOf('EnrolledAt');
+  const enrolledByIdx = headers.indexOf('EnrolledBy');
+  const customIdx = headers.indexOf('CustomLegacyField');
+  const auditIdx = headers.indexOf('AuditTag');
 
   assert.equal(row1[pIdIdx], '2030-07');
   assert.equal(row1[stateIdx], 'DRAFT');
   assert.equal(row1[revIdx], 0);
   assert.equal(row1[draftRevIdx], 0);
   assert.equal(row1[schemaVerIdx], 2);
-  assert.equal(row1[updatedIdx], '2030-01-01');
+  assert.equal(row1[updatedIdx], '2030-01-01T00:00:00.000Z');
+  assert.equal(row1[enrolledAtIdx], '2030-01-01T00:00:00.000Z');
+  assert.equal(row1[enrolledByIdx], 'owner-1');
+  assert.equal(row1[customIdx], 'LegacyValue1');
+  assert.equal(row1[auditIdx], 'TagA');
 
   // Check row 2 preserved
   const row2 = h.grids.RosterPeriods[2];
   assert.equal(row2[pIdIdx], '2030-08');
   assert.equal(row2[stateIdx], 'DRAFT');
-  assert.equal(row2[updatedIdx], '2030-01-02');
+  assert.equal(row2[updatedIdx], '2030-01-02T12:00:00.000Z');
+  assert.equal(row2[enrolledAtIdx], '2030-01-02T12:00:00.000Z');
+  assert.equal(row2[enrolledByIdx], 'owner-2');
+  assert.equal(row2[customIdx], 'LegacyValue2');
+  assert.equal(row2[auditIdx], 'TagB');
 });
 
-test('schema upgrade is strictly idempotent on repeated calls', () => {
+test('compatibility readers rosterV2Period_, rosterDraftEnrollment_, and periodInfo recognize upgraded RosterPeriods without error', () => {
   const h = setup();
   h.grids.RosterPeriods = [
     ['PeriodId', 'SchemaVersion', 'EnrolledAt', 'EnrolledBy'],
-    ['2030-07', 2, '2030-01-01', 'owner']
+    ['2030-07', 2, '2030-01-01T00:00:00.000Z', 'owner-user'],
+    ['2030-08', 2, '2030-01-02T00:00:00.000Z', 'owner-user']
+  ];
+
+  // Perform schema upgrade
+  h.context.rosterLifecycleEnsureSchema_('RosterPeriods');
+
+  // 1. periodInfo pure contract
+  const periods = h.context.rosterV2Records_(
+    h.context.rosterV2ReadTable_('RosterPeriods'),
+    ['PeriodId', 'SchemaVersion', 'EnrolledAt', 'EnrolledBy']
+  );
+  assert.equal(periods.length, 2);
+  assert.equal(periods[0].EnrolledAt, '2030-01-01T00:00:00.000Z');
+  assert.equal(periods[0].EnrolledBy, 'owner-user');
+
+  const info = compatibility.periodInfo('2030-07', periods);
+  assert.equal(info.mode, 'ENROLLED');
+  assert.equal(info.schemaVersion, 2);
+
+  // 2. rosterV2Period_ (Phase 1 legacy compatibility shadow reader)
+  const shadow = h.context.rosterV2Period_({ period: '2030-07', mode: 'shadow' });
+  assert.equal(shadow.period.mode, 'ENROLLED');
+  assert.equal(shadow.period.schemaVersion, 2);
+
+  // 3. rosterDraftEnrollment_ (Phase 2 draft enrollment check)
+  assert.doesNotThrow(() => {
+    h.context.rosterDraftEnrollment_('draft:2030-07');
+  });
+  assert.doesNotThrow(() => {
+    h.context.rosterDraftEnrollment_('draft:2030-08');
+  });
+});
+
+test('schema upgrade is strictly idempotent on repeated calls and causes no data loss', () => {
+  const h = setup();
+  h.grids.RosterPeriods = [
+    ['PeriodId', 'SchemaVersion', 'EnrolledAt', 'EnrolledBy', 'UnknownCol'],
+    ['2030-07', 2, '2030-01-01', 'owner', 'custom-value']
   ];
 
   h.context.rosterLifecycleEnsureSchema_('RosterPeriods');
@@ -233,7 +288,45 @@ test('schema upgrade is strictly idempotent on repeated calls', () => {
   h.context.rosterLifecycleEnsureSchema_('RosterPeriods');
   const afterSecond = JSON.stringify(h.grids.RosterPeriods);
 
+  h.context.rosterLifecycleEnsureSchema_('RosterPeriods');
+  const afterThird = JSON.stringify(h.grids.RosterPeriods);
+
   assert.equal(afterFirst, afterSecond);
+  assert.equal(afterSecond, afterThird);
+
+  // Verify unknown column survived repeated upgrade
+  const headers = h.grids.RosterPeriods[0];
+  assert.ok(headers.includes('UnknownCol'));
+  assert.equal(h.grids.RosterPeriods[1][headers.indexOf('UnknownCol')], 'custom-value');
+});
+
+test('lifecycle mutations preserve EnrolledAt, EnrolledBy, and custom columns in RosterPeriods', () => {
+  const h = setup();
+  h.grids.RosterPeriods = [
+    ['PeriodId', 'SchemaVersion', 'EnrolledAt', 'EnrolledBy', 'CustomMetadata'],
+    ['2030-07', 2, '2030-01-01T00:00:00.000Z', 'original-enroller', 'KeepMe123'],
+    ['2030-08', 2, '2030-01-01T00:00:00.000Z', 'original-enroller', 'KeepMe456']
+  ];
+
+  const pubOp = makePublishOp({ periodId: '2030-07' });
+  const pubRes = publish(h, pubOp);
+  assert.equal(pubRes.ok, true);
+  assert.equal(pubRes.state, 'PUBLISHED');
+
+  const headers = h.grids.RosterPeriods[0];
+  const row = h.grids.RosterPeriods[1];
+  assert.equal(row[headers.indexOf('PeriodId')], '2030-07');
+  assert.equal(row[headers.indexOf('State')], 'PUBLISHED');
+  assert.equal(row[headers.indexOf('EnrolledAt')], '2030-01-01T00:00:00.000Z');
+  assert.equal(row[headers.indexOf('EnrolledBy')], 'original-enroller');
+  assert.equal(row[headers.indexOf('CustomMetadata')], 'KeepMe123');
+
+  // Readers continue to work on PUBLISHED period
+  assert.doesNotThrow(() => {
+    h.context.rosterDraftEnrollment_('draft:2030-07');
+  });
+  const shadow = h.context.rosterV2Period_({ period: '2030-07', mode: 'shadow' });
+  assert.equal(shadow.period.mode, 'ENROLLED');
 });
 
 // ==========================================
@@ -420,7 +513,7 @@ test('failure during MasterRoster write leaves period in DRAFT and is recoverabl
   assert.equal(retry.state, 'PUBLISHED');
 });
 
-test('failure during checksum verification sets RECOVERY_REQUIRED and blocks publication', () => {
+test('failure during checksum verification sets RECOVERY_REQUIRED and successful retry deduplicates fully', () => {
   const h = setup();
   const op = makePublishOp();
 
@@ -437,17 +530,85 @@ test('failure during checksum verification sets RECOVERY_REQUIRED and blocks pub
   const failed = publish(h, op);
   assert.equal(failed.ok, false);
   assert.equal(failed.error.code, 'CHECKSUM_MISMATCH');
+
+  // 1. Period initially remains DRAFT
+  const periodInitial = h.context.rosterLifecycleFindPeriod_('2030-07');
+  assert.equal(periodInitial.State, 'DRAFT');
+
+  // 2. OperationLog initially becomes RECOVERY_REQUIRED
+  const logInitial = h.context.rosterLifecycleFindOperationLog_(op.operationId);
+  assert.equal(logInitial.Status, 'RECOVERY_REQUIRED');
+  assert.equal(logInitial.ErrorCode, 'CHECKSUM_MISMATCH');
+
+  // 3. Distinction test: rosterv2lifecyclerecover reports RECOVERY_REQUIRED and does NOT falsely claim repair
+  const recoveryAttempt = recover(h, op.operationId);
+  assert.equal(recoveryAttempt.ok, true);
+  assert.equal(recoveryAttempt.status, 'RECOVERY_REQUIRED');
+  assert.equal(recoveryAttempt.errorCode, 'CHECKSUM_MISMATCH');
+  assert.equal(recoveryAttempt.result, null);
   assert.equal(h.context.rosterLifecycleFindPeriod_('2030-07').State, 'DRAFT');
 
-  // Journal marked RECOVERY_REQUIRED
-  const log = h.context.rosterLifecycleFindOperationLog_(op.operationId);
-  assert.equal(log.Status, 'RECOVERY_REQUIRED');
-
-  // Restore and retry
+  // 4. Restore digest and retry with the SAME operationId
   h.context.rosterV2Digest_ = originalDigest;
   const retry = publish(h, op);
   assert.equal(retry.ok, true);
   assert.equal(retry.state, 'PUBLISHED');
+
+  // 5. Retry deterministically rewrites/repairs the target-month MasterRoster projection
+  // and persisted projection readback passes checksum verification
+  const readbackTable = h.context.rosterV2ReadTable_('MasterRoster');
+  const readbackRows = h.context.rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+  const targetMonthRows = readbackRows.filter(r => {
+    const d = compatibility.localDate(r.Date);
+    return d && d.slice(0, 7) === '2030-07';
+  });
+  assert.equal(targetMonthRows.length, 2);
+  const recomputedChecksum = lifecycle.computeProjectionChecksum(targetMonthRows, h.context.rosterV2Digest_);
+  assert.equal(recomputedChecksum, retry.projectionChecksum);
+
+  // 6. Final period becomes PUBLISHED
+  const periodFinal = h.context.rosterLifecycleFindPeriod_('2030-07');
+  assert.equal(periodFinal.State, 'PUBLISHED');
+  assert.equal(periodFinal.Revision, 1);
+
+  // 7. Exactly the expected number of RosterAssignments exists
+  const assignments = h.context.rosterLifecycleFindAssignmentsByPeriod_('2030-07');
+  assert.equal(assignments.length, 2);
+
+  // 8. No duplicate assignment IDs exist
+  const assignmentIds = assignments.map(a => a.AssignmentId);
+  assert.equal(new Set(assignmentIds).size, 2, 'No duplicate assignment IDs allowed');
+
+  // 9. Exactly the expected WeeklyOffSnapshots exist
+  const weekSnapshots = h.context.rosterLifecycleGetRecords_('WeeklyOffSnapshots');
+  const expectedWeeks = guidance.weeksForPeriod('2030-07').length * 2; // 2 MO people
+  assert.equal(weekSnapshots.length, expectedWeeks);
+
+  // 10. No duplicate weekly snapshots exist
+  const weekPersonKeys = weekSnapshots.map(ws => `${ws.PersonId}:${ws.WeekStart}`);
+  assert.equal(new Set(weekPersonKeys).size, expectedWeeks, 'No duplicate weekly off snapshots per person/week allowed');
+  const weekSnapshotIds = weekSnapshots.map(ws => ws.WeekSnapshotId);
+  assert.equal(new Set(weekSnapshotIds).size, expectedWeeks, 'No duplicate weekly snapshot IDs allowed');
+
+  // 11. Exactly one PUBLISH event exists for the operation
+  const events = h.context.rosterLifecycleFindEventsByOperation_(op.operationId);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].EventType, 'PUBLISH');
+
+  // 12. OperationLog ends CONFIRMED
+  const logFinal = h.context.rosterLifecycleFindOperationLog_(op.operationId);
+  assert.equal(logFinal.Status, 'CONFIRMED');
+  assert.equal(logFinal.ErrorCode, '');
+  assert.equal(logFinal.ResultRevision, 1);
+
+  // 13. The final projection checksum matches the stored RosterPeriods.ProjectionChecksum
+  assert.equal(periodFinal.ProjectionChecksum, retry.projectionChecksum);
+
+  // 14. Once repaired/confirmed, rosterv2lifecyclerecover returns confirmed status
+  const recoveryConfirmed = recover(h, op.operationId);
+  assert.equal(recoveryConfirmed.ok, true);
+  assert.equal(recoveryConfirmed.status, 'CONFIRMED');
+  assert.equal(recoveryConfirmed.result.projectionChecksum, periodFinal.ProjectionChecksum);
 });
 
 // ==========================================
