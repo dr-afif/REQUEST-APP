@@ -446,6 +446,44 @@ test('retry after partial planned assignment persistence deduplicates and finish
   assert.equal(h.grids.RosterAssignments.length, 3); // header + 2 rows total, NO duplicate of first row!
 });
 
+test('retry after partial WeeklyOffSnapshots persistence deduplicates and finishes successfully', () => {
+  const h = setup();
+  const op = makePublishOp();
+
+  let weekWriteCount = 0;
+  const originalWriteRow = h.context.rosterLifecycleWriteRow_;
+  h.context.rosterLifecycleWriteRow_ = function(sheetName, record, targetRow) {
+    if (sheetName === 'WeeklyOffSnapshots' && ++weekWriteCount === 1) {
+      originalWriteRow(sheetName, record, targetRow);
+      throw new Error('Injected crash after partial WeeklyOffSnapshots write');
+    }
+    return originalWriteRow(sheetName, record, targetRow);
+  };
+
+  const failed = publish(h, op);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error.code, 'RECOVERY_REQUIRED');
+
+  // Verify period is still DRAFT
+  assert.equal(h.context.rosterLifecycleFindPeriod_('2030-07').State, 'DRAFT');
+
+  // Restore and retry with same operationId
+  h.context.rosterLifecycleWriteRow_ = originalWriteRow;
+  const retry = publish(h, op);
+
+  assert.equal(retry.ok, true);
+  assert.equal(retry.state, 'PUBLISHED');
+
+  // Verify WeeklyOffSnapshots has no duplicate records for same (WeekStart, PersonId)
+  const weeks = h.context.rosterLifecycleGetRecords_('WeeklyOffSnapshots');
+  const seen = new Set();
+  for (const w of weeks) {
+    const key = `${w.WeekStart}|${w.PersonId}`;
+    assert.equal(seen.has(key), false, `Duplicate WeeklyOffSnapshot detected for ${key}`);
+    seen.add(key);
+  }
+});
+
 test('critical retry window: retry after RosterPeriods state mutation before journal confirmation recovers successfully', () => {
   const h = setup();
   const op = makePublishOp();
