@@ -76,10 +76,30 @@ const RosterLifecycle = (() => {
   const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const genUuid = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid() : '00000000-0000-4000-8000-000000000000');
 
-  function deterministicAssignmentId(operationId, personId, date, index, digestFn) {
-    const seed = `${operationId}:${personId}:${date}:${index}`;
-    if (typeof digestFn === 'function') {
-      const h = digestFn(seed);
+  // Deterministic UUID-shaped assignment identifier derived from semantic identity tuple.
+  // Formatted with RFC 4122 layout (setting version 4 and variant 8) to satisfy UUID validators,
+  // but explicitly documented as a deterministic assignment identifier, not a random UUID v4.
+  function deterministicAssignmentId(operationId, personId, date, dutyDomainOrIndex, shiftCode, rawShiftOrOccurrence, occurrenceOrDigest, maybeDigest) {
+    let seed;
+    let digest = maybeDigest;
+    if (typeof shiftCode === 'undefined' || typeof dutyDomainOrIndex === 'number') {
+      // Legacy signature: (operationId, personId, date, index, digestFn)
+      seed = `${operationId}:${personId}:${date}:${dutyDomainOrIndex}`;
+      digest = shiftCode;
+    } else if (typeof occurrenceOrDigest === 'function' || (typeof maybeDigest === 'undefined' && typeof occurrenceOrDigest === 'undefined')) {
+      // Signature: (operationId, personId, date, dutyDomain, shiftCode, occurrence, digestFn)
+      const occurrence = typeof rawShiftOrOccurrence === 'number' ? rawShiftOrOccurrence : 0;
+      seed = `${operationId}:${personId}:${date}:${dutyDomainOrIndex}:${shiftCode}:${occurrence}`;
+      digest = typeof occurrenceOrDigest === 'function' ? occurrenceOrDigest : maybeDigest;
+    } else {
+      // Signature: (operationId, personId, date, dutyDomain, shiftCode, rawShift, occurrence, digestFn)
+      const raw = rawShiftOrOccurrence == null ? '' : String(rawShiftOrOccurrence);
+      const occurrence = typeof occurrenceOrDigest === 'number' ? occurrenceOrDigest : 0;
+      seed = `${operationId}:${personId}:${date}:${dutyDomainOrIndex}:${shiftCode}:${raw}:${occurrence}`;
+      digest = maybeDigest;
+    }
+    if (typeof digest === 'function') {
+      const h = digest(seed);
       return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
     }
     let h1 = 0x811c9dc5, h2 = 0x811c9dc5, h3 = 0x811c9dc5, h4 = 0x811c9dc5;
@@ -157,6 +177,65 @@ const RosterLifecycle = (() => {
     throw fail(LIFECYCLE_ERRORS.INVALID_LIFECYCLE_TRANSITION, `Unsupported transition from ${fromState} to ${toState}`);
   }
 
+  function normalizeDraftCells(draftCells) {
+    const normalized = new Map();
+    if (!draftCells) return normalized;
+
+    function addCellItem(personId, date, item) {
+      if (!personId || !date) return;
+      const key = `${personId}/${date}`;
+      if (!normalized.has(key)) normalized.set(key, []);
+      normalized.get(key).push(item);
+    }
+
+    if (Array.isArray(draftCells)) {
+      draftCells.forEach(entry => {
+        if (!entry) return;
+        if (Array.isArray(entry) && entry.length >= 2) {
+          const [cellKey, items] = entry;
+          const parts = String(cellKey).split('/');
+          if (parts.length === 2) {
+            const arr = Array.isArray(items) ? items : [items];
+            arr.forEach(it => addCellItem(parts[0], parts[1], it));
+          }
+        } else if (typeof entry === 'object') {
+          if (entry.cellKey) {
+            const parts = String(entry.cellKey).split('/');
+            if (parts.length === 2) {
+              const items = entry.assignments || entry.rawAssignments || entry.items || entry;
+              const arr = Array.isArray(items) ? items : [items];
+              arr.forEach(it => addCellItem(parts[0], parts[1], it));
+            }
+          } else {
+            const personId = entry.PersonId || entry.personId;
+            const date = entry.Date || entry.date;
+            if (personId && date) {
+              addCellItem(personId, date, entry);
+            }
+          }
+        }
+      });
+    } else if (draftCells instanceof Map) {
+      for (const [cellKey, value] of draftCells.entries()) {
+        const parts = String(cellKey).split('/');
+        if (parts.length === 2) {
+          const arr = Array.isArray(value) ? value : [value];
+          arr.forEach(it => addCellItem(parts[0], parts[1], it));
+        }
+      }
+    } else if (typeof draftCells === 'object') {
+      for (const [cellKey, value] of Object.entries(draftCells)) {
+        const parts = String(cellKey).split('/');
+        if (parts.length === 2) {
+          const arr = Array.isArray(value) ? value : [value];
+          arr.forEach(it => addCellItem(parts[0], parts[1], it));
+        }
+      }
+    }
+
+    return normalized;
+  }
+
   function generatePlannedSnapshot({
     periodId,
     draftCells = {},
@@ -186,14 +265,12 @@ const RosterLifecycle = (() => {
     const plannedSnapshotId = snapshotId || (`snapshot:${periodId}:${snapshotUuid || operationId}`);
     const assignments = [];
 
-    // Sort cell keys for stable iteration order
-    const sortedCellKeys = Object.keys(draftCells).sort();
+    const normalizedCells = normalizeDraftCells(draftCells);
+    const sortedCellKeys = Array.from(normalizedCells.keys()).sort();
 
     for (const cellKey of sortedCellKeys) {
-      const rawAssignments = draftCells[cellKey];
-      const parts = cellKey.split('/');
-      if (parts.length !== 2) continue;
-      const [personId, date] = parts;
+      const items = normalizedCells.get(cellKey) || [];
+      const [personId, date] = cellKey.split('/');
 
       if (!RosterCompatibility.localDate(date) || date.slice(0, 7) !== periodId) {
         throw fail(LIFECYCLE_ERRORS.INVALID_PERIOD_ASSIGNMENT, `Date ${date} is outside the target period ${periodId}`);
@@ -204,13 +281,39 @@ const RosterLifecycle = (() => {
         throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, `PersonId ${personId} not found in registered people`);
       }
 
-      const items = Array.isArray(rawAssignments) ? rawAssignments : [];
-      items.forEach((item, index) => {
-        const rawShift = typeof item === 'string' ? item : item.rawShift;
-        const assignmentId = (typeof item === 'object' && item.assignmentId && isUuid(item.assignmentId))
-          ? item.assignmentId
-          : deterministicAssignmentId(operationId, personId, date, index, digestFn);
-        const resolved = RosterCompatibility.resolveShift(rawShift, person.DirectoryType || 'MO');
+      const dutyDomain = person.DirectoryType || 'MO';
+
+      // Step A: Parse items into normalized objects
+      const parsedItems = items.map(item => {
+        const rawShift = typeof item === 'string' ? item : (item.rawShift || item.ShiftCode || item.shiftCode || '');
+        const resolved = RosterCompatibility.resolveShift(rawShift, dutyDomain);
+        const explicitId = (typeof item === 'object' && (item.assignmentId || item.AssignmentId) && isUuid(item.assignmentId || item.AssignmentId))
+          ? (item.assignmentId || item.AssignmentId)
+          : null;
+        return { rawShift, resolved, explicitId };
+      });
+
+      // Step B: Sort items canonically before assigning fallback IDs to eliminate raw input array ordering dependency
+      parsedItems.sort((a, b) => {
+        if (a.explicitId && b.explicitId) return a.explicitId.localeCompare(b.explicitId);
+        if (a.explicitId) return -1;
+        if (b.explicitId) return 1;
+        const codeCmp = a.resolved.baseCode.localeCompare(b.resolved.baseCode);
+        if (codeCmp !== 0) return codeCmp;
+        return String(a.rawShift).localeCompare(String(b.rawShift));
+      });
+
+      // Step C: Assign IDs with occurrence discriminator computed in canonical order
+      const occurrenceCounters = new Map();
+
+      parsedItems.forEach(item => {
+        const { rawShift, resolved, explicitId } = item;
+        const semanticKey = `${dutyDomain}:${resolved.baseCode}:${rawShift}`;
+        const occurrence = occurrenceCounters.get(semanticKey) || 0;
+        occurrenceCounters.set(semanticKey, occurrence + 1);
+
+        const assignmentId = explicitId ||
+          deterministicAssignmentId(operationId, personId, date, dutyDomain, resolved.baseCode, rawShift, occurrence, digestFn);
 
         assignments.push({
           AssignmentId: assignmentId,
@@ -220,7 +323,7 @@ const RosterLifecycle = (() => {
           PersonId: person.PersonId,
           PersonNameSnapshot: person.CurrentDisplayName || person.MemberName || '',
           Date: date,
-          DutyDomain: person.DirectoryType || 'MO',
+          DutyDomain: dutyDomain,
           ShiftCode: resolved.baseCode,
           ModifiersJson: JSON.stringify(resolved.modifiers || { extended: false, standby: false }),
           DraftRevision: 0,

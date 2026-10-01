@@ -693,3 +693,165 @@ test('mergeMasterRosterProjection strictly preserves non-target month rows, type
   assert.equal(result.mergedRows[2]._legacyTag, 'historical-3');
 });
 
+test('permutation determinism: input row/cell/item order permutations yield identical planned snapshots, IDs, and projection checksums', () => {
+  const fixedOpId = '77777777-7777-4777-8777-777777777777';
+  const explicitOffId = '33333333-3333-4333-8333-333333333333';
+
+  // Logical dataset with:
+  // - single assignment
+  // - multiple distinct assignments for same person/date ('AM', 'PM')
+  // - multiple identical true duplicate assignments for same person/date ('AM', 'AM')
+  // - multiple assignments with modifiers ('PM', 'PM (S)')
+  // - existing explicit assignmentId to verify preservation
+  // - multiple people across multiple dates
+
+  // Format 1: Canonical Map / Object grouping
+  const draftSet1 = {
+    [`${mockPerson1.PersonId}/2030-07-01`]: [
+      { rawShift: 'AM' },
+      { rawShift: 'PM' }
+    ],
+    [`${mockPerson1.PersonId}/2030-07-02`]: [
+      { rawShift: 'ED' }
+    ],
+    [`${mockPerson1.PersonId}/2030-07-03`]: [
+      { rawShift: 'AM' },
+      { rawShift: 'AM' } // true duplicate semantic assignments
+    ],
+    [`${mockPerson2.PersonId}/2030-07-01`]: [
+      { rawShift: 'PM' },
+      { rawShift: 'PM (S)' }
+    ],
+    [`${mockPerson2.PersonId}/2030-07-02`]: [
+      { assignmentId: explicitOffId, rawShift: 'OFF' }
+    ]
+  };
+
+  // Format 2: Reversed object keys AND reversed cell item arrays within cells
+  const draftSet2 = {
+    [`${mockPerson2.PersonId}/2030-07-02`]: [
+      { assignmentId: explicitOffId, rawShift: 'OFF' }
+    ],
+    [`${mockPerson2.PersonId}/2030-07-01`]: [
+      { rawShift: 'PM (S)' },
+      { rawShift: 'PM' } // reversed order of items within cell
+    ],
+    [`${mockPerson1.PersonId}/2030-07-03`]: [
+      { rawShift: 'AM' },
+      { rawShift: 'AM' }
+    ],
+    [`${mockPerson1.PersonId}/2030-07-02`]: [
+      { rawShift: 'ED' }
+    ],
+    [`${mockPerson1.PersonId}/2030-07-01`]: [
+      { rawShift: 'PM' },
+      { rawShift: 'AM' } // reversed order of items within cell
+    ]
+  };
+
+  // Format 3: Shuffled array of individual draft rows
+  const draftSet3 = [
+    { PersonId: mockPerson2.PersonId, Date: '2030-07-01', ShiftCode: 'PM (S)' },
+    { PersonId: mockPerson1.PersonId, Date: '2030-07-03', ShiftCode: 'AM' },
+    { PersonId: mockPerson1.PersonId, Date: '2030-07-01', ShiftCode: 'PM' },
+    { PersonId: mockPerson2.PersonId, Date: '2030-07-02', AssignmentId: explicitOffId, ShiftCode: 'OFF' },
+    { PersonId: mockPerson1.PersonId, Date: '2030-07-02', ShiftCode: 'ED' },
+    { PersonId: mockPerson1.PersonId, Date: '2030-07-03', ShiftCode: 'AM' }, // duplicate AM
+    { PersonId: mockPerson2.PersonId, Date: '2030-07-01', ShiftCode: 'PM' },
+    { PersonId: mockPerson1.PersonId, Date: '2030-07-01', ShiftCode: 'AM' }
+  ];
+
+  // Format 4: Reverse of Format 3 array
+  const draftSet4 = [...draftSet3].reverse();
+
+  const snap1 = RosterLifecycle.generatePlannedSnapshot({
+    periodId: '2030-07',
+    draftCells: draftSet1,
+    people: mockPeople,
+    operationId: fixedOpId,
+    actor: 'admin@example.com',
+    timestamp: '2030-06-30T12:00:00.000Z'
+  });
+
+  const snap2 = RosterLifecycle.generatePlannedSnapshot({
+    periodId: '2030-07',
+    draftCells: draftSet2,
+    people: mockPeople,
+    operationId: fixedOpId,
+    actor: 'admin@example.com',
+    timestamp: '2030-06-30T12:00:00.000Z'
+  });
+
+  const snap3 = RosterLifecycle.generatePlannedSnapshot({
+    periodId: '2030-07',
+    draftCells: draftSet3,
+    people: mockPeople,
+    operationId: fixedOpId,
+    actor: 'admin@example.com',
+    timestamp: '2030-06-30T12:00:00.000Z'
+  });
+
+  const snap4 = RosterLifecycle.generatePlannedSnapshot({
+    periodId: '2030-07',
+    draftCells: draftSet4,
+    people: mockPeople,
+    operationId: fixedOpId,
+    actor: 'admin@example.com',
+    timestamp: '2030-06-30T12:00:00.000Z'
+  });
+
+  // 1. SnapshotId must be identical across all permutations
+  assert.equal(snap1.plannedSnapshotId, `snapshot:2030-07:${fixedOpId}`);
+  assert.equal(snap2.plannedSnapshotId, snap1.plannedSnapshotId);
+  assert.equal(snap3.plannedSnapshotId, snap1.plannedSnapshotId);
+  assert.equal(snap4.plannedSnapshotId, snap1.plannedSnapshotId);
+
+  // 2. Total assignments count matches exactly
+  assert.equal(snap1.assignments.length, 8);
+  assert.equal(snap2.assignments.length, 8);
+  assert.equal(snap3.assignments.length, 8);
+  assert.equal(snap4.assignments.length, 8);
+
+  // 3. Exact AssignmentIds match across all runs
+  const ids1 = snap1.assignments.map(a => a.AssignmentId);
+  const ids2 = snap2.assignments.map(a => a.AssignmentId);
+  const ids3 = snap3.assignments.map(a => a.AssignmentId);
+  const ids4 = snap4.assignments.map(a => a.AssignmentId);
+  assert.deepEqual(ids1, ids2);
+  assert.deepEqual(ids1, ids3);
+  assert.deepEqual(ids1, ids4);
+
+  // 4. Entire canonical planned rows match deeply across all permutations
+  assert.deepEqual(snap1.assignments, snap2.assignments);
+  assert.deepEqual(snap1.assignments, snap3.assignments);
+  assert.deepEqual(snap1.assignments, snap4.assignments);
+
+  // 5. Explicit assignment ID is preserved unchanged
+  const preservedRow = snap1.assignments.find(a => a.Date === '2030-07-02' && a.PersonId === mockPerson2.PersonId);
+  assert.ok(preservedRow);
+  assert.equal(preservedRow.AssignmentId, explicitOffId);
+
+  // 6. True duplicate assignments receive stable, distinct deterministic IDs
+  const dupes = snap1.assignments.filter(a => a.Date === '2030-07-03' && a.PersonId === mockPerson1.PersonId);
+  assert.equal(dupes.length, 2);
+  assert.notEqual(dupes[0].AssignmentId, dupes[1].AssignmentId);
+
+  // 7. Projected MasterRoster rows match across all permutations
+  const proj1 = RosterLifecycle.generateMasterRosterProjection(snap1.assignments);
+  const proj2 = RosterLifecycle.generateMasterRosterProjection(snap2.assignments);
+  const proj3 = RosterLifecycle.generateMasterRosterProjection(snap3.assignments);
+  const proj4 = RosterLifecycle.generateMasterRosterProjection(snap4.assignments);
+  assert.deepEqual(proj1, proj2);
+  assert.deepEqual(proj1, proj3);
+  assert.deepEqual(proj1, proj4);
+
+  // 8. Projection checksums match identically
+  const chk1 = RosterLifecycle.computeProjectionChecksum(proj1, sha256);
+  const chk2 = RosterLifecycle.computeProjectionChecksum(proj2, sha256);
+  const chk3 = RosterLifecycle.computeProjectionChecksum(proj3, sha256);
+  const chk4 = RosterLifecycle.computeProjectionChecksum(proj4, sha256);
+  assert.equal(chk1, chk2);
+  assert.equal(chk1, chk3);
+  assert.equal(chk1, chk4);
+});
+
