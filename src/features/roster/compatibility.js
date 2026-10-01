@@ -18,6 +18,35 @@ const RosterCompatibility = (() => {
     RosterPeriods: ['PeriodId', 'SchemaVersion', 'EnrolledAt', 'EnrolledBy'],
     ShiftSemantics: ['ShiftCode', 'RuleVersion', 'DirectoryType', 'CountsAsWorked', 'ConsecutiveBehavior', 'StaffingBucket', 'PolicyBQualifier', 'NormalOff', 'CanDisplaceOffEarnGoff', 'ExpectedPredecessorsJson', 'ExpectedFollowersJson'],
   });
+  const lifecycleSchemas = freeze({
+    RosterPeriods: [
+      'PeriodId', 'State', 'Revision', 'DraftRevision', 'PlannedSnapshotId',
+      'PublishedAt', 'PublishedBy', 'ClosedAt', 'ClosedBy',
+      'ProjectionChecksum', 'SchemaVersion', 'LastOperationId', 'UpdatedAt'
+    ],
+    RosterAssignments: [
+      'AssignmentId', 'PeriodId', 'Layer', 'SnapshotId',
+      'PersonId', 'PersonNameSnapshot', 'Date', 'DutyDomain',
+      'ShiftCode', 'ModifiersJson', 'DraftRevision', 'Source',
+      'OperationId', 'CreatedAt', 'CreatedBy'
+    ],
+    RosterEvents: [
+      'EventId', 'LineId', 'EventType', 'OperationId', 'PeriodId',
+      'BaseRevision', 'ResultRevision', 'PersonId', 'LinkedPersonIdsJson',
+      'Date', 'DutyDomain', 'PlannedAssignmentJson', 'BeforeCurrentJson',
+      'AfterCurrentJson', 'PublicReasonCode', 'AdminNote', 'ShortageAccepted',
+      'ShortageReason', 'GoffTransactionIdsJson', 'ReversesEventId',
+      'CreatedAt', 'CreatedBy'
+    ],
+    WeeklyOffSnapshots: [
+      'WeekSnapshotId', 'WeekStart', 'WeekEnd', 'PolicyLockedByPeriodId',
+      'PublishedPeriodIdsJson', 'PublishedDateMask', 'EvaluationState',
+      'PlannedSnapshotIdsJson', 'PlannedWeekChecksum', 'PersonId',
+      'PersonNameSnapshot', 'PolicyId', 'PolicyCode', 'RuleVersion',
+      'HasQualifyingPlannedNight', 'RequiredOffCount', 'AssignedOffCountAtPublish',
+      'Revision', 'OperationId', 'CreatedAt', 'CompletedAt'
+    ]
+  });
   const staffingDefaults = freeze({ amMinimum: 2, pmMinimum: 3, nightMinimum: 2, nightMaximum: 2,
     distribution: { pmAtLeastAm: true, maximumPmMinusAm: 1 }, advisory: true,
     appliesOnWeekendsAndPublicHolidays: true, holidayReductionRequiresHodAuthorization: true });
@@ -239,7 +268,7 @@ const RosterCompatibility = (() => {
     return Object.entries(schemas).map(([name, headers]) => ({ name, headers: [...headers], exists: owns(existingHeaders, name),
       missingHeaders: headers.filter(h => !(existingHeaders[name] || []).includes(h)), action: owns(existingHeaders, name) ? 'INSPECT_ONLY' : 'PROPOSE_CREATE', apply: false }));
   }
-  return freeze({ featureDefaults, schemas, staffingDefaults, catalog, resolveShift, classifyCalendarDay, advanceWorkedDays,
+  return freeze({ featureDefaults, schemas, lifecycleSchemas, staffingDefaults, catalog, resolveShift, classifyCalendarDay, advanceWorkedDays,
     featureSwitches, isReservedSetting, canonicalName, createPerson, renamePerson, personIndex, localDate, validatePeriod, periodInfo,
     adaptLegacyRecords, projectPeriod, legacyTransportRows, legacyProjection, canonicalJson, snapshotDatasets, reconcileRows, schemaPlan });
 })();
