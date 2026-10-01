@@ -911,3 +911,166 @@ test('complete audit history preserved across DRAFT -> PUBLISH -> CLOSE -> REOPE
   assert.equal(events[2].EventType, 'REOPEN');
   assert.equal(events[2].AdminNote, 'Audited correction reopen');
 });
+
+// ==========================================
+// 8. CONCURRENCY & IDEMPOTENCY MISMATCH TESTS
+// ==========================================
+
+test('publish rejects stale or wrong expectedRevision with REVISION_CONFLICT', () => {
+  const h = setup();
+  const badPub = makePublishOp({ expectedRevision: 99 });
+  const res = publish(h, badPub);
+  assert.equal(res.ok, false);
+  assert.equal(res.error.code, 'REVISION_CONFLICT');
+});
+
+test('close rejects stale expectedRevision with REVISION_CONFLICT', () => {
+  const h = setup();
+  publish(h, makePublishOp({ expectedRevision: 0 }));
+  const badClose = makeCloseOp({ expectedRevision: 0 }); // Period is now Rev 1
+  const res = close(h, badClose);
+  assert.equal(res.ok, false);
+  assert.equal(res.error.code, 'REVISION_CONFLICT');
+});
+
+test('reopen rejects stale expectedRevision with REVISION_CONFLICT', () => {
+  const h = setup();
+  publish(h, makePublishOp({ expectedRevision: 0 }));
+  close(h, makeCloseOp({ expectedRevision: 1 }));
+  const badReopen = makeReopenOp({ expectedRevision: 1 }); // Period is now Rev 2
+  const res = reopen(h, badReopen);
+  assert.equal(res.ok, false);
+  assert.equal(res.error.code, 'REVISION_CONFLICT');
+});
+
+test('cyclical lifecycle enforces expectedRevision even when period state matches transition origin', () => {
+  const h = setup();
+  publish(h, makePublishOp({ expectedRevision: 0 })); // PUBLISHED (1)
+  close(h, makeCloseOp({ expectedRevision: 1 })); // CLOSED (2)
+  reopen(h, makeReopenOp({ expectedRevision: 2 })); // PUBLISHED (3)
+  close(h, makeCloseOp({ expectedRevision: 3 })); // CLOSED (4)
+
+  // Period is now CLOSED at Revision 4. Stale client attempts reopen with expectedRevision: 2
+  const staleReopen = makeReopenOp({ expectedRevision: 2 });
+  const res = reopen(h, staleReopen);
+  assert.equal(res.ok, false);
+  assert.equal(res.error.code, 'REVISION_CONFLICT');
+
+  // Reopen with current expectedRevision: 4 succeeds
+  const validReopen = makeReopenOp({ expectedRevision: 4 });
+  const okRes = reopen(h, validReopen);
+  assert.equal(okRes.ok, true);
+  assert.equal(okRes.revision, 5);
+  assert.equal(okRes.state, 'PUBLISHED');
+});
+
+test('reusing operationId with semantically different publish payload throws IDEMPOTENCY_MISMATCH', () => {
+  const h = setup();
+  const op = makePublishOp({ adminNote: 'Original note' });
+  const first = publish(h, op);
+  assert.equal(first.ok, true);
+
+  // Exact replay is idempotent
+  const replay = publish(h, op);
+  assert.deepEqual(replay, first);
+
+  // Changed draftCells
+  const altDraftCells = {
+    [`${person1}/2030-07-02`]: [{ rawShift: 'NIGHT' }]
+  };
+  const meaningCells = {
+    operationId: op.operationId,
+    clientId: op.clientId,
+    tabId: op.tabId,
+    operationType: 'PERIOD_PUBLISH',
+    entityKey: `period:${op.periodId}`,
+    expectedRevision: op.expectedRevision,
+    payload: { periodId: op.periodId, draftCells: altDraftCells, adminNote: op.adminNote }
+  };
+  const tampered1 = publish(h, {
+    ...op,
+    draftCells: altDraftCells,
+    payloadHash: digest(protocol.canonical(meaningCells))
+  });
+  assert.equal(tampered1.ok, false);
+  assert.equal(tampered1.error.code, 'IDEMPOTENCY_MISMATCH');
+
+  // Changed adminNote
+  const meaningNote = {
+    operationId: op.operationId,
+    clientId: op.clientId,
+    tabId: op.tabId,
+    operationType: 'PERIOD_PUBLISH',
+    entityKey: `period:${op.periodId}`,
+    expectedRevision: op.expectedRevision,
+    payload: { periodId: op.periodId, draftCells: op.draftCells, adminNote: 'Altered note' }
+  };
+  const tampered2 = publish(h, {
+    ...op,
+    adminNote: 'Altered note',
+    payloadHash: digest(protocol.canonical(meaningNote))
+  });
+  assert.equal(tampered2.ok, false);
+  assert.equal(tampered2.error.code, 'IDEMPOTENCY_MISMATCH');
+});
+
+test('reusing operationId with changed close adminNote throws IDEMPOTENCY_MISMATCH', () => {
+  const h = setup();
+  publish(h, makePublishOp({ expectedRevision: 0 }));
+  const closeOp = makeCloseOp({ expectedRevision: 1, adminNote: 'Original close note' });
+  const first = close(h, closeOp);
+  assert.equal(first.ok, true);
+
+  // Exact replay is idempotent
+  const replay = close(h, closeOp);
+  assert.deepEqual(replay, first);
+
+  // Changed adminNote
+  const meaning = {
+    operationId: closeOp.operationId,
+    clientId: closeOp.clientId,
+    tabId: closeOp.tabId,
+    operationType: 'PERIOD_CLOSE',
+    entityKey: `period:${closeOp.periodId}`,
+    expectedRevision: closeOp.expectedRevision,
+    payload: { periodId: closeOp.periodId, adminNote: 'Altered close note' }
+  };
+  const tampered = close(h, {
+    ...closeOp,
+    adminNote: 'Altered close note',
+    payloadHash: digest(protocol.canonical(meaning))
+  });
+  assert.equal(tampered.ok, false);
+  assert.equal(tampered.error.code, 'IDEMPOTENCY_MISMATCH');
+});
+
+test('reusing operationId with changed reopen reason throws IDEMPOTENCY_MISMATCH', () => {
+  const h = setup();
+  publish(h, makePublishOp({ expectedRevision: 0 }));
+  close(h, makeCloseOp({ expectedRevision: 1 }));
+  const reopenOp = makeReopenOp({ expectedRevision: 2, reason: 'Original reason' });
+  const first = reopen(h, reopenOp);
+  assert.equal(first.ok, true);
+
+  // Exact replay is idempotent
+  const replay = reopen(h, reopenOp);
+  assert.deepEqual(replay, first);
+
+  // Changed reason
+  const meaning = {
+    operationId: reopenOp.operationId,
+    clientId: reopenOp.clientId,
+    tabId: reopenOp.tabId,
+    operationType: 'PERIOD_REOPEN',
+    entityKey: `period:${reopenOp.periodId}`,
+    expectedRevision: reopenOp.expectedRevision,
+    payload: { periodId: reopenOp.periodId, reason: 'Altered reason' }
+  };
+  const tampered = reopen(h, {
+    ...reopenOp,
+    reason: 'Altered reason',
+    payloadHash: digest(protocol.canonical(meaning))
+  });
+  assert.equal(tampered.ok, false);
+  assert.equal(tampered.error.code, 'IDEMPOTENCY_MISMATCH');
+});

@@ -59,8 +59,26 @@ export function mergeSnapshot(entity,snapshot,confirmedId=null) {
 }
 export function mergeLifecycle(entity, result, confirmedId=null) {
   if(!entity) return entity;
+  if (confirmedId) {
+    for (const op of entity.operations) {
+      if (op.operationId === confirmedId) {
+        op.status = 'CONFIRMED';
+        op.lastError = null;
+      }
+    }
+  }
+  const incomingRevision = Number.isSafeInteger(result?.revision)
+    ? result.revision
+    : (Number.isSafeInteger(result?.period?.Revision) ? Number(result.period.Revision) : null);
+  const currentRevision = Number.isSafeInteger(entity.lifecycle?.revision) ? entity.lifecycle.revision : null;
+
+  // Monotonicity guard: if entity already has a newer confirmed lifecycle revision, ignore stale update
+  if (incomingRevision !== null && currentRevision !== null && incomingRevision < currentRevision) {
+    return entity;
+  }
+
   const state = result?.state || (result?.period && result.period.State) || entity.lifecycle?.state || 'DRAFT';
-  const revision = Number.isSafeInteger(result?.revision) ? result.revision : (Number.isSafeInteger(result?.period?.Revision) ? Number(result.period.Revision) : (entity.lifecycle?.revision || entity.baseline.revision));
+  const revision = incomingRevision !== null ? incomingRevision : (currentRevision !== null ? currentRevision : 0);
   entity.lifecycle = {
     state,
     revision,
@@ -70,15 +88,6 @@ export function mergeLifecycle(entity, result, confirmedId=null) {
     ...(result?.closedAt ? { closedAt: result.closedAt, closedBy: result.closedBy } : {}),
     ...(result?.reopenedAt ? { reopenedAt: result.reopenedAt, reopenedBy: result.reopenedBy, reason: result.reason } : {})
   };
-  entity.baseline.revision = Math.max(entity.baseline.revision, revision);
-  if (confirmedId) {
-    for (const op of entity.operations) {
-      if (op.operationId === confirmedId) {
-        op.status = 'CONFIRMED';
-        op.lastError = null;
-      }
-    }
-  }
   return entity;
 }
 export function retryDelay(attempt,random=Math.random) {return Math.floor(Math.min(30000,500*2**Math.max(0,attempt-1))*(0.75+random()*0.5));}

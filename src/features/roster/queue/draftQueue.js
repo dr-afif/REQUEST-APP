@@ -318,7 +318,7 @@ export class DraftQueue {
         });
       }else{
         id=options.operationId||crypto.randomUUID();
-        const expectedRevision=current.baseline.revision;
+        const expectedRevision=options.expectedRevision!==undefined?options.expectedRevision:(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
         const draftCells=structuredClone(current.baseline.cells);
         const adminNote=options.adminNote||'';
         await this.change(key,e=>{
@@ -379,7 +379,7 @@ export class DraftQueue {
         });
       }else{
         id=options.operationId||crypto.randomUUID();
-        const expectedRevision=options.expectedRevision!==undefined?options.expectedRevision:(current.lifecycle?.revision||current.baseline.revision);
+        const expectedRevision=options.expectedRevision!==undefined?options.expectedRevision:(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
         const adminNote=options.adminNote||'';
         await this.change(key,e=>{
           const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
@@ -440,7 +440,7 @@ export class DraftQueue {
         });
       }else{
         id=options.operationId||crypto.randomUUID();
-        const expectedRevision=options.expectedRevision!==undefined?options.expectedRevision:(current.lifecycle?.revision||current.baseline.revision);
+        const expectedRevision=options.expectedRevision!==undefined?options.expectedRevision:(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
         await this.change(key,e=>{
           const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
           if(st==='PUBLISHED')throw protocol.fail('INVALID_STATE');

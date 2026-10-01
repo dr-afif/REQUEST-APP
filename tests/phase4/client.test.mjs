@@ -88,6 +88,13 @@ function createMockRepository() {
     async publish(op) {
       calls.push({ method: 'publish', op: structuredClone(op) });
       if (state.publishResponse instanceof Error) throw state.publishResponse;
+      if (state.expectedLifecycleRevision !== undefined && op.expectedRevision !== state.expectedLifecycleRevision) {
+        return {
+          ok: false,
+          errorCode: 'REVISION_CONFLICT',
+          error: { code: 'REVISION_CONFLICT', message: `Expected lifecycle revision ${state.expectedLifecycleRevision} but got ${op.expectedRevision}` }
+        };
+      }
       return structuredClone(state.publishResponse || {
         ok: true,
         operationId: op.operationId,
@@ -407,6 +414,9 @@ describe('Phase 4 Slice 3: Client Data Layer & Queue Integration', () => {
       };
       await q.enqueue(key, [patch]);
 
+      // Set expected lifecycle revision on mock backend: period starts at lifecycle revision 0
+      repo.state.expectedLifecycleRevision = 0;
+
       // Publish immediately without waiting for debounce timer
       const publishPromise = q.publish(periodId, { adminNote: 'Ordered publish' });
 
@@ -415,10 +425,21 @@ describe('Phase 4 Slice 3: Client Data Layer & Queue Integration', () => {
       assert.equal(lifecycle.state, 'PUBLISHED');
 
       // Verify call sequence: write (draft patch) came BEFORE publish
-      const writeCallIdx = repo.calls.findIndex(c => c.method === 'write');
-      const publishCallIdx = repo.calls.findIndex(c => c.method === 'publish');
-      assert.ok(writeCallIdx >= 0, 'Draft write was executed');
-      assert.ok(publishCallIdx > writeCallIdx, 'Publish was executed after draft write confirmed');
+      const writeCall = repo.calls.find(c => c.method === 'write');
+      const publishCall = repo.calls.find(c => c.method === 'publish');
+      assert.ok(writeCall, 'Draft write was executed');
+      assert.ok(publishCall, 'Publish was executed after draft write confirmed');
+      assert.ok(repo.calls.indexOf(publishCall) > repo.calls.indexOf(writeCall), 'Publish was executed strictly after draft write');
+
+      // Verify draft baseline revision was advanced to 1 by the draft write
+      assert.equal(q.view(key).baseline.revision, 1, 'Draft baseline revision is 1');
+
+      // Verify Publish sent expectedRevision: 0 (the lifecycle revision), NOT 1 (the draft baseline revision)
+      assert.equal(publishCall.op.expectedRevision, 0, 'Publish sent lifecycle expectedRevision 0 rather than draft baseline revision 1');
+
+      // Verify final confirmed lifecycle revision
+      assert.equal(q.view(key).lifecycle.revision, 1, 'Lifecycle revision advanced to 1 after publish');
+      assert.equal(q.view(key).lifecycle.state, 'PUBLISHED');
 
       q.stop();
     });
@@ -808,6 +829,91 @@ describe('Phase 4 Slice 3: Client Data Layer & Queue Integration', () => {
       const reopenOp = finalEntity.operations.find(o => o.operationType === 'PERIOD_REOPEN');
       assert.equal(reopenOp.status, 'CONFIRMED');
       assert.equal(reopenOp.payload.reason, reason);
+
+      q.stop();
+    });
+
+    it('out-of-order lifecycle reconciliation preserves monotonic non-decreasing revision and settles older operation', async () => {
+      const store = createMockStore();
+      const repo = createMockRepository();
+      const locks = createMockLocks();
+      const periodId = '2030-07';
+      const key = `draft:${periodId}`;
+
+      const q = new DraftQueue({
+        store,
+        repository: repo,
+        settings: standardSettings,
+        locks
+      });
+      await q.start();
+
+      // Step 1: Establish CLOSED at Revision 2
+      await q.publish(periodId); // Revision 1
+      await q.close(periodId); // Revision 2
+      assert.equal(q.view(key).lifecycle.state, 'CLOSED');
+      assert.equal(q.view(key).lifecycle.revision, 2);
+
+      // Step 2: Establish PUBLISHED at Revision 3
+      const reopenRes = await q.reopen(periodId, 'Monotonicity audit reopen');
+      assert.equal(reopenRes.state, 'PUBLISHED');
+      assert.equal(reopenRes.revision, 3);
+      assert.equal(q.view(key).lifecycle.state, 'PUBLISHED');
+      assert.equal(q.view(key).lifecycle.revision, 3);
+
+      // Simulate an unconfirmed older operation in the queue (e.g. op A from earlier close)
+      const oldOpId = crypto.randomUUID();
+      const oldOpBase = {
+        operationId: oldOpId,
+        clientId: q.clientId,
+        tabId: q.tabId,
+        operationType: 'PERIOD_CLOSE',
+        entityKey: key,
+        expectedRevision: 1,
+        payload: { periodId, adminNote: 'Older close attempt' }
+      };
+      const oldPayloadHash = await sha256(protocol.canonical(protocol.payload(oldOpBase)));
+      await q.change(key, e => {
+        e.operations.push({
+          ...oldOpBase,
+          operationClass: 'LIFECYCLE',
+          schemaVersion: 1,
+          payloadHash: oldPayloadHash,
+          localSequence: ++e.sequence,
+          status: 'AWAITING_STATUS',
+          everSent: true,
+          attemptCount: 1,
+          nextRetryAt: q.now() + 60000,
+          lastError: null,
+          createdAt: q.now(),
+          updatedAt: q.now(),
+          lastConfirmed: {}
+        });
+        return e;
+      });
+
+      // Step 3: Delayed reconciliation for older operation A arrives with CLOSED, revision 2
+      const delayedResultA = {
+        ok: true,
+        status: 'CONFIRMED',
+        operationId: oldOpId,
+        periodId,
+        state: 'CLOSED',
+        revision: 2,
+        closedAt: new Date().toISOString()
+      };
+      await q.handle(key, oldOpId, delayedResultA);
+
+      // Step 4: Verify entity lifecycle remains PUBLISHED at Revision 3 (did NOT regress)
+      const updatedEntity = await store.read(key);
+      assert.equal(updatedEntity.lifecycle.state, 'PUBLISHED');
+      assert.equal(updatedEntity.lifecycle.revision, 3);
+      assert.equal(q.view(key).lifecycle.state, 'PUBLISHED');
+      assert.equal(q.view(key).lifecycle.revision, 3);
+
+      // Step 5: Verify the older operation was settled to CONFIRMED without regressing canonical state
+      const settledOpA = updatedEntity.operations.find(o => o.operationId === oldOpId);
+      assert.equal(settledOpA.status, 'CONFIRMED');
 
       q.stop();
     });
