@@ -3,8 +3,13 @@ import RosterCompatibility from '../compatibility.js';
 // Shared transport and patch contract; no I/O or future lifecycle rules.
 const DraftProtocol = (() => {
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
-  const errors = ['VALIDATION_FAILED','AUTHORIZATION_REQUIRED','FEATURE_DISABLED','ENTITY_NOT_FOUND','REVISION_CONFLICT',
-    'IDEMPOTENCY_MISMATCH','LOCK_BUSY','TRANSIENT_BACKEND','PERMANENT_FAILURE','RECOVERY_REQUIRED'];
+  const errors = [
+    'VALIDATION_FAILED','AUTHORIZATION_REQUIRED','FEATURE_DISABLED','ENTITY_NOT_FOUND','REVISION_CONFLICT',
+    'IDEMPOTENCY_MISMATCH','LOCK_BUSY','TRANSIENT_BACKEND','PERMANENT_FAILURE','RECOVERY_REQUIRED',
+    'SNAPSHOT_IMMUTABLE','IMMUTABLE_SNAPSHOT_VIOLATION','INVALID_STATE','INVALID_LIFECYCLE_STATE',
+    'INVALID_LIFECYCLE_TRANSITION','CHECKSUM_MISMATCH','RECONCILIATION_FAILED','REOPEN_REASON_REQUIRED',
+    'AMENDED_RESERVED_PHASE5','TRANSITION_BLOCKED','LIFECYCLE_OPERATION_PENDING'
+  ];
   const fail = (code, details = {}) => Object.assign(new Error(code), { code, details });
   const ensure = (ok, code = 'VALIDATION_FAILED') => { if (!ok) throw fail(code); };
   const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
@@ -15,27 +20,90 @@ const DraftProtocol = (() => {
   };
   function payload(operation) {
     ensure(operation && uuid(operation.operationId) && uuid(operation.clientId) && uuid(operation.tabId));
-    ensure(operation.operationType === 'DRAFT_PATCH' && typeof operation.entityKey==='string' && /^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(operation.entityKey));
-    const period = operation.entityKey.slice(6);
-    RosterCompatibility.validatePeriod(period);
     ensure(Number.isSafeInteger(operation.expectedRevision) && operation.expectedRevision >= 0);
-    ensure(exact(operation.payload,['patches']) && Array.isArray(operation.payload.patches) && operation.payload.patches.length > 0 && operation.payload.patches.length <= 100);
-    const cells = new Set(), ids = new Set();
-    const patches = operation.payload.patches.map(p => {
-      ensure(exact(p,['personId','date','assignments']) && uuid(p.personId) &&
-        /^\d{4}-\d{2}-\d{2}$/.test(p.date) && RosterCompatibility.localDate(p.date) === p.date && p.date.slice(0,7) === period);
-      const key = cellKey(p); ensure(!cells.has(key)); cells.add(key);
-      ensure(Array.isArray(p.assignments) && p.assignments.length <= 12);
-      const assignments = p.assignments.map(a => {
-        ensure(exact(a,['assignmentId','rawShift']) && uuid(a.assignmentId) && typeof a.rawShift === 'string' && a.rawShift.length <= 80);
-        ensure(!ids.has(a.assignmentId)); ids.add(a.assignmentId);
-        return { assignmentId:a.assignmentId, rawShift:a.rawShift };
-      });
-      return { personId:p.personId, date:p.date, assignments };
-    }).sort((a,b) => cellKey(a).localeCompare(cellKey(b),'en'));
-    const result = { operationType:'DRAFT_PATCH', entityKey:operation.entityKey, expectedRevision:operation.expectedRevision===0?0:operation.expectedRevision, payload:{patches} };
-    ensure(JSON.stringify(result).length < 35000);
-    return result;
+
+    if (operation.operationType === 'DRAFT_PATCH') {
+      ensure(typeof operation.entityKey === 'string' && /^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(operation.entityKey));
+      const period = operation.entityKey.slice(6);
+      RosterCompatibility.validatePeriod(period);
+      ensure(exact(operation.payload,['patches']) && Array.isArray(operation.payload.patches) && operation.payload.patches.length > 0 && operation.payload.patches.length <= 100);
+      const cells = new Set(), ids = new Set();
+      const patches = operation.payload.patches.map(p => {
+        ensure(exact(p,['personId','date','assignments']) && uuid(p.personId) &&
+          /^\d{4}-\d{2}-\d{2}$/.test(p.date) && RosterCompatibility.localDate(p.date) === p.date && p.date.slice(0,7) === period);
+        const key = cellKey(p); ensure(!cells.has(key)); cells.add(key);
+        ensure(Array.isArray(p.assignments) && p.assignments.length <= 12);
+        const assignments = p.assignments.map(a => {
+          ensure(exact(a,['assignmentId','rawShift']) && uuid(a.assignmentId) && typeof a.rawShift === 'string' && a.rawShift.length <= 80);
+          ensure(!ids.has(a.assignmentId)); ids.add(a.assignmentId);
+          return { assignmentId:a.assignmentId, rawShift:a.rawShift };
+        });
+        return { personId:p.personId, date:p.date, assignments };
+      }).sort((a,b) => cellKey(a).localeCompare(cellKey(b),'en'));
+      const result = { operationType:'DRAFT_PATCH', entityKey:operation.entityKey, expectedRevision:operation.expectedRevision===0?0:operation.expectedRevision, payload:{patches} };
+      ensure(JSON.stringify(result).length < 35000);
+      return result;
+    }
+
+    if (operation.operationType === 'PERIOD_PUBLISH') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const draftCells = operation.payload?.draftCells !== undefined ? operation.payload.draftCells : (operation.draftCells !== undefined ? operation.draftCells : {});
+      ensure(draftCells && typeof draftCells === 'object' && !Array.isArray(draftCells));
+      const adminNote = String(operation.payload?.adminNote || operation.adminNote || '');
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'PERIOD_PUBLISH',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          draftCells: draftCells,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'PERIOD_CLOSE') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const adminNote = String(operation.payload?.adminNote || operation.adminNote || '');
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'PERIOD_CLOSE',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'PERIOD_REOPEN') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const reason = String(operation.payload?.reason || operation.reason || '').trim();
+      ensure(reason.length > 0, 'REOPEN_REASON_REQUIRED');
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'PERIOD_REOPEN',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          reason: reason
+        }
+      };
+    }
+
+    throw fail('VALIDATION_FAILED');
   }
   const cellKey = p => p.personId + '/' + p.date;
   function apply(cells, patches) {

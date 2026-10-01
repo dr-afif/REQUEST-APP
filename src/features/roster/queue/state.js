@@ -1,6 +1,6 @@
 import protocol from './protocol.js';
 export const terminal = op => ['CONFIRMED','REVERTED'].includes(op.status);
-export const emptyEntity = entityKey => ({schemaVersion:1,entityKey,baseline:{revision:0,checksum:null,cells:{}},sequence:0,operations:[]});
+export const emptyEntity = entityKey => ({schemaVersion:1,storageRevision:0,entityKey,baseline:{revision:0,checksum:null,cells:{}},sequence:0,operations:[]});
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const integer=value=>Number.isSafeInteger(value)&&value>=0;
 const hash=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value);
@@ -20,10 +20,11 @@ export function validateEntity(entity,key=entity?.entityKey) {
     check(record(entity)&&typeof key==='string'&&/^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(key)&&entity.entityKey===key);
     check(integer(entity.storageRevision)&&integer(entity.sequence)&&record(entity.baseline)&&integer(entity.baseline.revision)&&Array.isArray(entity.operations));
     validateCells(key,entity.baseline.cells);
-    check(hash(entity.baseline.checksum)||(entity.baseline.checksum===null&&entity.baseline.revision===0&&Object.keys(entity.baseline.cells).length===0));
+    check(hash(entity.baseline.checksum)||(entity.baseline.checksum===null&&Object.keys(entity.baseline.cells).length===0));
+    check(!entity.lifecycle||(record(entity.lifecycle)&&typeof entity.lifecycle.state==='string'&&integer(entity.lifecycle.revision)));
     let sequence=0;const ids=new Set();
     for(const op of entity.operations){
-      check(record(op)&&op.schemaVersion===1&&op.entityKey===key&&op.operationClass==='DRAFT');
+      check(record(op)&&op.schemaVersion===1&&op.entityKey===key&&['DRAFT','LIFECYCLE'].includes(op.operationClass));
       protocol.payload(op);
       check(!ids.has(op.operationId)&&integer(op.localSequence)&&op.localSequence>sequence);ids.add(op.operationId);sequence=op.localSequence;
       check(['QUEUED','SENDING','AWAITING_STATUS','RETRY_SCHEDULED','FAILED','CONFLICT','RECOVERY_REQUIRED','CONFIRMED','REVERTED'].includes(op.status));
@@ -32,7 +33,7 @@ export function validateEntity(entity,key=entity?.entityKey) {
       check(op.everSent?(hash(op.payloadHash)||(op.status==='SENDING'&&op.payloadHash===null)):op.payloadHash===null);
       check(!['SENDING','AWAITING_STATUS','CONFIRMED'].includes(op.status)||op.everSent);
       check(op.status!=='QUEUED'||!op.everSent);
-      check(op.status!=='CONFIRMED'||entity.baseline.revision>=op.expectedRevision+1);
+      check(op.status!=='CONFIRMED'||entity.baseline.revision>=op.expectedRevision+1||(entity.lifecycle&&entity.lifecycle.revision>=op.expectedRevision+1));
     }
     check(entity.sequence===sequence);return entity;
   }catch{throw new Error('OUTBOX_INVALID');}
@@ -40,7 +41,9 @@ export function validateEntity(entity,key=entity?.entityKey) {
 export function projection(entity) {
   let cells={...entity.baseline.cells}; const statuses={};
   for(const op of entity.operations.filter(o=>!terminal(o)).sort((a,b)=>a.localSequence-b.localSequence)) {
-    for(const patch of op.payload.patches){cells[protocol.cellKey(patch)]=patch.assignments;statuses[protocol.cellKey(patch)]={operationId:op.operationId,status:op.status};}
+    if(op.operationType==='DRAFT_PATCH'&&op.payload?.patches){
+      for(const patch of op.payload.patches){cells[protocol.cellKey(patch)]=patch.assignments;statuses[protocol.cellKey(patch)]={operationId:op.operationId,status:op.status};}
+    }
   }
   return {cells,statuses};
 }
@@ -51,6 +54,30 @@ export function mergeSnapshot(entity,snapshot,confirmedId=null) {
   for(const op of entity.operations){
     if(op.operationId===confirmedId){op.status='CONFIRMED';op.lastError=null;}
     else if(!terminal(op)&&!op.everSent&&op.expectedRevision<snapshot.revision){op.status='CONFLICT';op.lastError='REVISION_CONFLICT';}
+  }
+  return entity;
+}
+export function mergeLifecycle(entity, result, confirmedId=null) {
+  if(!entity) return entity;
+  const state = result?.state || (result?.period && result.period.State) || entity.lifecycle?.state || 'DRAFT';
+  const revision = Number.isSafeInteger(result?.revision) ? result.revision : (Number.isSafeInteger(result?.period?.Revision) ? Number(result.period.Revision) : (entity.lifecycle?.revision || entity.baseline.revision));
+  entity.lifecycle = {
+    state,
+    revision,
+    updatedAt: result?.updatedAt || new Date().toISOString(),
+    ...(result?.plannedSnapshotId ? { plannedSnapshotId: result.plannedSnapshotId } : {}),
+    ...(result?.projectionChecksum ? { projectionChecksum: result.projectionChecksum } : {}),
+    ...(result?.closedAt ? { closedAt: result.closedAt, closedBy: result.closedBy } : {}),
+    ...(result?.reopenedAt ? { reopenedAt: result.reopenedAt, reopenedBy: result.reopenedBy, reason: result.reason } : {})
+  };
+  entity.baseline.revision = Math.max(entity.baseline.revision, revision);
+  if (confirmedId) {
+    for (const op of entity.operations) {
+      if (op.operationId === confirmedId) {
+        op.status = 'CONFIRMED';
+        op.lastError = null;
+      }
+    }
   }
   return entity;
 }

@@ -12,7 +12,37 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
   }
   const wire=op=>({operationId:op.operationId,clientId:op.clientId,tabId:op.tabId,operationType:op.operationType,entityKey:op.entityKey,
     expectedRevision:op.expectedRevision,payload:op.payload,payloadHash:op.payloadHash});
-  return {schema:()=>request('rosterv2draftschema'),read:entityKey=>request('rosterv2draft',{entityKey}),
-    write:op=>request('rosterv2draftpatch',wire(op),true),status:operationId=>request('rosterv2operation',{operationId}),
-    recover:operationId=>request('rosterv2draftrecover',{operationId},true),abandon:op=>request('rosterv2draftabandon',wire(op),true)};
+  const lifecycleWire=op=>{
+    const periodId=op.payload?.periodId||op.periodId||(typeof op.entityKey==='string'?op.entityKey.replace(/^(draft|period):/,''):'');
+    const base={operationId:op.operationId,clientId:op.clientId,tabId:op.tabId,operationType:op.operationType,
+      entityKey:`period:${periodId}`,periodId,expectedRevision:op.expectedRevision,payloadHash:op.payloadHash};
+    if(op.operationType==='PERIOD_PUBLISH'){
+      const draftCells=op.payload?.draftCells!==undefined?op.payload.draftCells:(op.draftCells!==undefined?op.draftCells:{});
+      const adminNote=op.payload?.adminNote||op.adminNote||'';
+      return {...base,draftCells,adminNote,payload:{periodId,draftCells,adminNote}};
+    }
+    if(op.operationType==='PERIOD_CLOSE'){
+      const adminNote=op.payload?.adminNote||op.adminNote||'';
+      return {...base,adminNote,payload:{periodId,adminNote}};
+    }
+    if(op.operationType==='PERIOD_REOPEN'){
+      const reason=op.payload?.reason||op.reason||'';
+      return {...base,reason,payload:{periodId,reason}};
+    }
+    return {...base,payload:op.payload};
+  };
+  return {
+    schema:()=>request('rosterv2draftschema'),
+    read:entityKey=>request('rosterv2draft',{entityKey}),
+    write:op=>request('rosterv2draftpatch',wire(op),true),
+    status:operationId=>request('rosterv2operation',{operationId}),
+    recover:operationId=>request('rosterv2draftrecover',{operationId},true),
+    abandon:op=>request('rosterv2draftabandon',wire(op),true),
+    getPeriodLifecycle:periodId=>request('rosterv2periodlifecycle',{periodId}),
+    lifecycleSchema:()=>request('rosterv2lifecycleschema'),
+    publish:op=>request('rosterv2publish',lifecycleWire(op),true),
+    close:op=>request('rosterv2close',lifecycleWire(op),true),
+    reopen:op=>request('rosterv2reopen',lifecycleWire(op),true),
+    recoverLifecycle:operationId=>request('rosterv2lifecyclerecover',{operationId},true)
+  };
 }
