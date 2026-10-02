@@ -35,11 +35,6 @@ const RosterLifecycle = (() => {
     ADMIN_CORRECTION: 'ADMIN_CORRECTION',
     DUTY_COVERAGE: 'DUTY_COVERAGE',
     OPERATIONAL_CHANGE: 'OPERATIONAL_CHANGE',
-    REVERSAL: 'REVERSAL',
-    MC: 'MC',
-    EL: 'EL',
-    AL: 'AL',
-    COURSE: 'COURSE',
     OTHER: 'OTHER'
   });
 
@@ -60,6 +55,7 @@ const RosterLifecycle = (() => {
     CANNOT_REVERSE_REVERSAL: 'CANNOT_REVERSE_REVERSAL',
     CANNOT_REVERSE_LIFECYCLE_EVENT: 'CANNOT_REVERSE_LIFECYCLE_EVENT',
     REVERSAL_DEPENDENCY_CONFLICT: 'REVERSAL_DEPENDENCY_CONFLICT',
+    REVISION_CONFLICT: 'REVISION_CONFLICT',
     UNKNOWN_REASON_CODE: 'UNKNOWN_REASON_CODE',
     EVENT_NOT_FOUND: 'EVENT_NOT_FOUND'
   });
@@ -745,7 +741,10 @@ const RosterLifecycle = (() => {
   function makeCellKey(personId, date, dutyDomain = 'MO') {
     const p = String(personId || '').trim();
     const d = String(date || '').trim();
-    const dom = String(dutyDomain || 'MO').trim() || 'MO';
+    const dom = dutyDomain !== undefined && dutyDomain !== null ? String(dutyDomain).trim() : 'MO';
+    if (!p) throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'personId is required for makeCellKey');
+    if (!d) throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'date is required for makeCellKey');
+    if (!dom) throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'dutyDomain is required for makeCellKey');
     return `${p}/${d}/${dom}`;
   }
 
@@ -795,18 +794,41 @@ const RosterLifecycle = (() => {
       if (!eventId) throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, 'Event line missing EventId');
       if (!lineId) throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, 'Event line missing LineId');
 
+      const normEventType = String(raw.EventType || raw.eventType || '').trim();
+      const rawDomain = raw.DutyDomain !== undefined && raw.DutyDomain !== null
+        ? String(raw.DutyDomain).trim()
+        : (raw.dutyDomain !== undefined && raw.dutyDomain !== null ? String(raw.dutyDomain).trim() : '');
+      const rawPerson = raw.PersonId !== undefined && raw.PersonId !== null
+        ? String(raw.PersonId).trim()
+        : (raw.personId !== undefined && raw.personId !== null ? String(raw.personId).trim() : '');
+      const rawDate = raw.Date !== undefined && raw.Date !== null
+        ? String(raw.Date).trim()
+        : (raw.date !== undefined && raw.date !== null ? String(raw.date).trim() : '');
+
+      if (['ADMIN_CORRECTION', 'SWAP', 'REVERSAL'].includes(normEventType)) {
+        if (!rawDomain) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Event line '${lineId}' missing DutyDomain`);
+        }
+        if (!rawPerson) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Event line '${lineId}' missing PersonId`);
+        }
+        if (!rawDate) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Event line '${lineId}' missing Date`);
+        }
+      }
+
       const normRow = {
         EventId: eventId,
         LineId: lineId,
-        EventType: String(raw.EventType || raw.eventType || '').trim(),
+        EventType: normEventType,
         OperationId: String(raw.OperationId || raw.operationId || '').trim(),
         PeriodId: String(raw.PeriodId || raw.periodId || '').trim(),
         BaseRevision: Number(raw.BaseRevision ?? raw.baseRevision ?? 0),
         ResultRevision: Number(raw.ResultRevision ?? raw.resultRevision ?? 0),
-        PersonId: String(raw.PersonId || raw.personId || '').trim(),
+        PersonId: rawPerson,
         LinkedPersonIdsJson: typeof raw.LinkedPersonIdsJson === 'string' ? raw.LinkedPersonIdsJson : JSON.stringify(raw.LinkedPersonIdsJson || []),
-        Date: String(raw.Date || raw.date || '').trim(),
-        DutyDomain: String(raw.DutyDomain || raw.dutyDomain || 'MO').trim() || 'MO',
+        Date: rawDate,
+        DutyDomain: rawDomain,
         PlannedAssignmentJson: typeof raw.PlannedAssignmentJson === 'string' ? raw.PlannedAssignmentJson : JSON.stringify(raw.PlannedAssignmentJson || []),
         BeforeCurrentJson: typeof raw.BeforeCurrentJson === 'string' ? raw.BeforeCurrentJson : JSON.stringify(raw.BeforeCurrentJson || []),
         AfterCurrentJson: typeof raw.AfterCurrentJson === 'string' ? raw.AfterCurrentJson : JSON.stringify(raw.AfterCurrentJson || []),
@@ -830,7 +852,7 @@ const RosterLifecycle = (() => {
       if (lines.length === 0) continue;
       const head = lines[0];
 
-      // Validate uniformity across lines
+      // Validate uniformity across lines for all event-level fields
       const seenLineIds = new Set();
       for (const line of lines) {
         if (seenLineIds.has(line.LineId)) {
@@ -838,6 +860,7 @@ const RosterLifecycle = (() => {
         }
         seenLineIds.add(line.LineId);
 
+        // Event-level fields MUST be strictly identical across all lines
         if (line.EventType !== head.EventType) {
           throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent EventType in event '${eventId}'`);
         }
@@ -853,11 +876,26 @@ const RosterLifecycle = (() => {
         if (line.ResultRevision !== head.ResultRevision) {
           throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent ResultRevision in event '${eventId}'`);
         }
+        if (line.PublicReasonCode !== head.PublicReasonCode) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent PublicReasonCode in event '${eventId}'`);
+        }
+        if (line.AdminNote !== head.AdminNote) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent AdminNote in event '${eventId}'`);
+        }
         if (line.ReversesEventId !== head.ReversesEventId) {
           throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent ReversesEventId in event '${eventId}'`);
         }
-        if (line.PublicReasonCode !== head.PublicReasonCode) {
-          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent PublicReasonCode in event '${eventId}'`);
+        if (line.CreatedAt !== head.CreatedAt) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent CreatedAt in event '${eventId}'`);
+        }
+        if (line.CreatedBy !== head.CreatedBy) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent CreatedBy in event '${eventId}'`);
+        }
+        if (line.ShortageAccepted !== head.ShortageAccepted) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent ShortageAccepted in event '${eventId}'`);
+        }
+        if (line.ShortageReason !== head.ShortageReason) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Inconsistent ShortageReason in event '${eventId}'`);
         }
       }
 
@@ -1061,9 +1099,30 @@ const RosterLifecycle = (() => {
       });
     }
 
-    // 2. Validate and track reversals
+    // 2. Validate revision chain invariants and track reversals
     const reversedEventIds = new Set();
-    for (const ev of eventGroups) {
+    for (let i = 0; i < eventGroups.length; i++) {
+      const ev = eventGroups[i];
+      if (!Number.isInteger(ev.BaseRevision) || ev.BaseRevision < 0) {
+        throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Event '${ev.EventId}' has invalid BaseRevision: ${ev.BaseRevision}`);
+      }
+      if (!Number.isInteger(ev.ResultRevision) || ev.ResultRevision <= 0) {
+        throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Event '${ev.EventId}' has invalid ResultRevision: ${ev.ResultRevision}`);
+      }
+      if (ev.ResultRevision <= ev.BaseRevision) {
+        throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Event '${ev.EventId}' ResultRevision (${ev.ResultRevision}) must be greater than BaseRevision (${ev.BaseRevision})`);
+      }
+
+      if (i > 0) {
+        const prev = eventGroups[i - 1];
+        if (ev.ResultRevision === prev.ResultRevision) {
+          throw fail(LIFECYCLE_ERRORS.REVISION_CONFLICT, `Duplicate ResultRevision ${ev.ResultRevision} found in events '${ev.EventId}' and '${prev.EventId}'`);
+        }
+        if (ev.BaseRevision < prev.ResultRevision) {
+          throw fail(LIFECYCLE_ERRORS.REVISION_CONFLICT, `Event '${ev.EventId}' branches from BaseRevision ${ev.BaseRevision}, but preceding event already produced ResultRevision ${prev.ResultRevision}`);
+        }
+      }
+
       if (ev.EventType === 'REVERSAL') {
         if (!ev.ReversesEventId) {
           throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Reversal event '${ev.EventId}' missing ReversesEventId`);
@@ -1082,6 +1141,9 @@ const RosterLifecycle = (() => {
       }
 
       for (const line of ev.lines) {
+        if (!line.DutyDomain || !String(line.DutyDomain).trim()) {
+          throw fail(LIFECYCLE_ERRORS.MALFORMED_EVENT, `Event line '${line.LineId}' missing DutyDomain`);
+        }
         const cellKey = makeCellKey(line.PersonId, line.Date, line.DutyDomain);
         let afterItems = [];
         if (line.AfterCurrentJson) {
@@ -1097,11 +1159,11 @@ const RosterLifecycle = (() => {
           afterItems = afterItems ? [afterItems] : [];
         }
 
-        const normalizedItems = afterItems.map(item => {
+        const normalizedItems = afterItems.map((item, idx) => {
           if (typeof item === 'string') {
             const resolved = RosterCompatibility.resolveShift(item, line.DutyDomain);
             return {
-              AssignmentId: deterministicAssignmentId(ev.OperationId, line.PersonId, line.Date, line.DutyDomain, resolved.baseCode, item, 0),
+              AssignmentId: deterministicAssignmentId(ev.OperationId, line.PersonId, line.Date, line.DutyDomain, resolved.baseCode, item, idx, digestFn),
               PeriodId: line.PeriodId,
               Layer: 'CURRENT',
               SnapshotId: '',
@@ -1122,7 +1184,7 @@ const RosterLifecycle = (() => {
           const raw = item._rawShift || item.rawShift || item.ShiftCode || item.shiftCode || '';
           const resolved = RosterCompatibility.resolveShift(raw, line.DutyDomain);
           return {
-            AssignmentId: item.AssignmentId || item.assignmentId || deterministicAssignmentId(ev.OperationId, line.PersonId, line.Date, line.DutyDomain, resolved.baseCode, raw, 0),
+            AssignmentId: item.AssignmentId || item.assignmentId || deterministicAssignmentId(ev.OperationId, line.PersonId, line.Date, line.DutyDomain, resolved.baseCode, raw, idx, digestFn),
             PeriodId: line.PeriodId,
             Layer: 'CURRENT',
             SnapshotId: item.SnapshotId || '',
@@ -1211,7 +1273,7 @@ const RosterLifecycle = (() => {
     adminNote = '',
     personId,
     date,
-    dutyDomain = 'MO',
+    dutyDomain,
     plannedAssignments = [],
     beforeAssignments = [],
     afterAssignments = [],
@@ -1228,6 +1290,17 @@ const RosterLifecycle = (() => {
     if (!cleanActor) {
       throw fail(LIFECYCLE_ERRORS.INVALID_OPERATOR, 'Actor is required');
     }
+    if (!dutyDomain || typeof dutyDomain !== 'string' || !dutyDomain.trim()) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'DutyDomain is required and must be explicit for amendment event');
+    }
+    const cleanPersonId = String(personId || '').trim();
+    if (!cleanPersonId) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'PersonId is required and must be explicit for amendment event');
+    }
+    const cleanDate = String(date || '').trim();
+    if (!cleanDate) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'Date is required and must be explicit for amendment event');
+    }
     const reason = validatePublicReasonCode(publicReasonCode);
 
     const eventId = genUuid();
@@ -1241,10 +1314,10 @@ const RosterLifecycle = (() => {
       PeriodId: periodId,
       BaseRevision: Number(baseRevision),
       ResultRevision: Number(resultRevision),
-      PersonId: String(personId).trim(),
+      PersonId: cleanPersonId,
       LinkedPersonIdsJson: JSON.stringify(linkedPersonIds || []),
-      Date: String(date).trim(),
-      DutyDomain: String(dutyDomain || 'MO').trim() || 'MO',
+      Date: cleanDate,
+      DutyDomain: dutyDomain.trim(),
       PlannedAssignmentJson: typeof plannedAssignments === 'string' ? plannedAssignments : JSON.stringify(plannedAssignments || []),
       BeforeCurrentJson: typeof beforeAssignments === 'string' ? beforeAssignments : JSON.stringify(beforeAssignments || []),
       AfterCurrentJson: typeof afterAssignments === 'string' ? afterAssignments : JSON.stringify(afterAssignments || []),
@@ -1287,6 +1360,15 @@ const RosterLifecycle = (() => {
     if (!person1 || !person2 || !person1.personId || !person2.personId) {
       throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'SWAP event requires two participants with personId');
     }
+    if (!person1.date || !person2.date) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'SWAP event requires dates for both participants');
+    }
+    if (!person1.dutyDomain || typeof person1.dutyDomain !== 'string' || !person1.dutyDomain.trim()) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'person1 DutyDomain is required and must be explicit for swap event');
+    }
+    if (!person2.dutyDomain || typeof person2.dutyDomain !== 'string' || !person2.dutyDomain.trim()) {
+      throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'person2 DutyDomain is required and must be explicit for swap event');
+    }
     const reason = validatePublicReasonCode(publicReasonCode);
 
     const eventId = genUuid();
@@ -1302,7 +1384,7 @@ const RosterLifecycle = (() => {
       PersonId: String(person1.personId).trim(),
       LinkedPersonIdsJson: JSON.stringify([String(person2.personId).trim()]),
       Date: String(person1.date).trim(),
-      DutyDomain: String(person1.dutyDomain || 'MO').trim() || 'MO',
+      DutyDomain: String(person1.dutyDomain).trim(),
       PlannedAssignmentJson: typeof person1.plannedAssignments === 'string' ? person1.plannedAssignments : JSON.stringify(person1.plannedAssignments || []),
       BeforeCurrentJson: typeof person1.beforeAssignments === 'string' ? person1.beforeAssignments : JSON.stringify(person1.beforeAssignments || []),
       AfterCurrentJson: typeof person1.afterAssignments === 'string' ? person1.afterAssignments : JSON.stringify(person1.afterAssignments || []),
@@ -1327,7 +1409,7 @@ const RosterLifecycle = (() => {
       PersonId: String(person2.personId).trim(),
       LinkedPersonIdsJson: JSON.stringify([String(person1.personId).trim()]),
       Date: String(person2.date).trim(),
-      DutyDomain: String(person2.dutyDomain || 'MO').trim() || 'MO',
+      DutyDomain: String(person2.dutyDomain).trim(),
       PlannedAssignmentJson: typeof person2.plannedAssignments === 'string' ? person2.plannedAssignments : JSON.stringify(person2.plannedAssignments || []),
       BeforeCurrentJson: typeof person2.beforeAssignments === 'string' ? person2.beforeAssignments : JSON.stringify(person2.beforeAssignments || []),
       AfterCurrentJson: typeof person2.afterAssignments === 'string' ? person2.afterAssignments : JSON.stringify(person2.afterAssignments || []),
@@ -1353,11 +1435,11 @@ const RosterLifecycle = (() => {
     resultRevision,
     operationId,
     actor,
-    publicReasonCode = PUBLIC_REASON_CODES.REVERSAL,
+    publicReasonCode,
     adminNote = '',
     timestamp = new Date().toISOString()
   }) {
-    if (!targetEvent || !targetEvent.EventId || !Array.isArray(targetEvent.lines)) {
+    if (!targetEvent || !targetEvent.EventId || !Array.isArray(targetEvent.lines) || targetEvent.lines.length === 0) {
       throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'Valid targetEvent with lines is required for reversal');
     }
     if (!operationId || !isUuid(operationId)) {
@@ -1367,7 +1449,21 @@ const RosterLifecycle = (() => {
     if (!cleanActor) {
       throw fail(LIFECYCLE_ERRORS.INVALID_OPERATOR, 'Actor is required');
     }
-    const reason = validatePublicReasonCode(publicReasonCode);
+
+    const chosenCode = publicReasonCode || targetEvent.PublicReasonCode || PUBLIC_REASON_CODES.ADMIN_CORRECTION;
+    const reason = validatePublicReasonCode(chosenCode);
+
+    for (const tgtLine of targetEvent.lines) {
+      if (!tgtLine.DutyDomain || !String(tgtLine.DutyDomain).trim()) {
+        throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, `targetEvent line '${tgtLine.LineId}' missing DutyDomain`);
+      }
+      if (!tgtLine.PersonId || !String(tgtLine.PersonId).trim()) {
+        throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, `targetEvent line '${tgtLine.LineId}' missing PersonId`);
+      }
+      if (!tgtLine.Date || !String(tgtLine.Date).trim()) {
+        throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, `targetEvent line '${tgtLine.LineId}' missing Date`);
+      }
+    }
 
     const eventId = genUuid();
     const lines = targetEvent.lines.map(tgtLine => ({

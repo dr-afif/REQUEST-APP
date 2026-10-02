@@ -561,7 +561,7 @@ test('12. Compensating reversal restores previous Current state', () => {
     resultRevision: 3,
     operationId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
     actor: 'admin',
-    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.REVERSAL
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION
   });
 
   const res = RosterLifecycle.resolveCurrentRoster({
@@ -1083,4 +1083,615 @@ test('24. Multi-line events using shared EventId and deterministic LineId orderi
   assert.throws(() => {
     RosterLifecycle.groupEventLines(duplicateRows);
   }, err => err.code === 'MALFORMED_EVENT');
+});
+
+test('25. PublicReasonCode narrow scope verification (Section A)', () => {
+  // Exact 5 Phase 5 public reason codes
+  assert.deepStrictEqual(Object.keys(RosterLifecycle.PUBLIC_REASON_CODES).sort(), [
+    'ADMIN_CORRECTION',
+    'DUTY_COVERAGE',
+    'OPERATIONAL_CHANGE',
+    'OTHER',
+    'SHIFT_SWAP'
+  ]);
+
+  // Phase 6 absence codes (MC, EL, AL, COURSE) and REVERSAL are not authorized Phase 5 reason codes
+  for (const prohibited of ['MC', 'EL', 'AL', 'COURSE', 'REVERSAL']) {
+    assert.equal(RosterLifecycle.isValidPublicReasonCode(prohibited), false);
+    assert.throws(() => {
+      RosterLifecycle.validatePublicReasonCode(prohibited);
+    }, err => err.code === 'UNKNOWN_REASON_CODE');
+  }
+
+  // Reversal events default to target event public reason or ADMIN_CORRECTION, not 'REVERSAL'
+  const amend = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: 'a1000000-0000-4000-8000-000000000001',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.DUTY_COVERAGE,
+    personId: 'p-siti',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+  const groupedAmend = RosterLifecycle.groupEventLines(amend.lines);
+  const rev = RosterLifecycle.createReversalEvent({
+    targetEvent: groupedAmend[0],
+    baseRevision: 2,
+    resultRevision: 3,
+    operationId: 'a1000000-0000-4000-8000-000000000002',
+    actor: 'admin'
+  });
+  assert.equal(rev.lines[0].PublicReasonCode, RosterLifecycle.PUBLIC_REASON_CODES.DUTY_COVERAGE);
+  assert.equal(rev.lines[0].EventType, 'REVERSAL');
+  assert.equal(rev.lines[0].ReversesEventId, groupedAmend[0].EventId);
+});
+
+test('26. DutyDomain validation and cross-domain mutation isolation (Section B)', () => {
+  const baseSnap = createBasePlannedSnapshot();
+
+  // 1. Valid explicit MO event works
+  const moEv = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: 'b1000000-0000-4000-8000-000000000001',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-siti',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+  assert.equal(moEv.lines[0].DutyDomain, 'MO');
+
+  // 2. Valid explicit EP event works
+  const epEv = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: 'b1000000-0000-4000-8000-000000000002',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-ep',
+    date: '2026-07-01',
+    dutyDomain: 'EP',
+    beforeAssignments: [],
+    afterAssignments: [{ ShiftCode: 'EP_CONSULTANT' }]
+  });
+  assert.equal(epEv.lines[0].DutyDomain, 'EP');
+
+  // 3. Missing / empty DutyDomain on newly created amendment is rejected (does NOT silently default to MO)
+  assert.throws(() => {
+    RosterLifecycle.createAmendmentEvent({
+      periodId: '2026-07',
+      baseRevision: 1,
+      resultRevision: 2,
+      operationId: 'b1000000-0000-4000-8000-000000000003',
+      actor: 'admin',
+      publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+      personId: 'p-siti',
+      date: '2026-07-01',
+      dutyDomain: '', // empty
+      beforeAssignments: [],
+      afterAssignments: [{ ShiftCode: 'PM' }]
+    });
+  }, err => err.code === 'VALIDATION_FAILED');
+
+  assert.throws(() => {
+    RosterLifecycle.createAmendmentEvent({
+      periodId: '2026-07',
+      baseRevision: 1,
+      resultRevision: 2,
+      operationId: 'b1000000-0000-4000-8000-000000000004',
+      actor: 'admin',
+      publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+      personId: 'p-siti',
+      date: '2026-07-01',
+      // omitted dutyDomain
+      beforeAssignments: [],
+      afterAssignments: [{ ShiftCode: 'PM' }]
+    });
+  }, err => err.code === 'VALIDATION_FAILED');
+
+  // 4. Missing DutyDomain on swap event participants is rejected
+  assert.throws(() => {
+    RosterLifecycle.createSwapEvent({
+      periodId: '2026-07',
+      baseRevision: 1,
+      resultRevision: 2,
+      operationId: 'b1000000-0000-4000-8000-000000000005',
+      actor: 'admin',
+      publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.SHIFT_SWAP,
+      person1: { personId: 'p-siti', date: '2026-07-01', dutyDomain: 'MO' },
+      person2: { personId: 'p-ahmad', date: '2026-07-01' } // missing dutyDomain
+    });
+  }, err => err.code === 'VALIDATION_FAILED');
+
+  // 5. Missing DutyDomain on raw event line in groupEventLines is rejected
+  assert.throws(() => {
+    RosterLifecycle.groupEventLines([
+      {
+        EventId: 'b1000000-0000-4000-8000-000000000006',
+        LineId: 'line-bad-domain',
+        EventType: 'ADMIN_CORRECTION',
+        OperationId: 'b1000000-0000-4000-8000-000000000007',
+        PeriodId: '2026-07',
+        BaseRevision: 1,
+        ResultRevision: 2,
+        PersonId: 'p-siti',
+        Date: '2026-07-01',
+        DutyDomain: '', // missing
+        PublicReasonCode: 'ADMIN_CORRECTION'
+      }
+    ]);
+  }, err => err.code === 'MALFORMED_EVENT');
+
+  // 6. One domain cannot mutate another domain:
+  // Siti has both an MO assignment and an EP assignment on 2026-07-01
+  const multiDomainPlanned = [
+    ...baseSnap.assignments,
+    {
+      AssignmentId: 'snap-ep-siti-01',
+      PeriodId: '2026-07',
+      Layer: 'PLANNED',
+      SnapshotId: 'snap-1',
+      PersonId: 'p-siti',
+      PersonNameSnapshot: 'Dr Siti',
+      Date: '2026-07-01',
+      DutyDomain: 'EP',
+      ShiftCode: 'EP_DUTY',
+      ModifiersJson: '{}',
+      DraftRevision: 1,
+      Source: 'NEW',
+      OperationId: 'b1000000-0000-4000-8000-000000000008',
+      CreatedAt: new Date().toISOString(),
+      CreatedBy: 'admin',
+      _rawShift: 'EP_DUTY'
+    }
+  ];
+
+  // Amend Siti's MO assignment only
+  const amendMO = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: 'b1000000-0000-4000-8000-000000000009',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-siti',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+
+  const resMulti = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: multiDomainPlanned,
+    events: amendMO.lines,
+    people: TEST_PEOPLE,
+    digestFn
+  });
+
+  const sitiMO = resMulti.currentAssignments.find(a => a.PersonId === 'p-siti' && a.Date === '2026-07-01' && a.DutyDomain === 'MO');
+  const sitiEP = resMulti.currentAssignments.find(a => a.PersonId === 'p-siti' && a.Date === '2026-07-01' && a.DutyDomain === 'EP');
+
+  assert.equal(sitiMO.ShiftCode, 'PM'); // MO updated
+  assert.equal(sitiEP.ShiftCode, 'EP_DUTY'); // EP completely untouched!
+  assert.equal(sitiEP.AssignmentId, 'snap-ep-siti-01'); // Original ID preserved
+});
+
+test('27. Formalized event-level vs line-level field validation (Section C)', () => {
+  const baseEventId = 'c1000000-0000-4000-8000-000000000001';
+  const baseOpId = 'c1000000-0000-4000-8000-000000000002';
+  const createValidSwapLines = () => [
+    {
+      EventId: baseEventId,
+      LineId: 'line-swap-1',
+      EventType: 'SWAP',
+      OperationId: baseOpId,
+      PeriodId: '2026-07',
+      BaseRevision: 1,
+      ResultRevision: 2,
+      PersonId: 'p-siti',
+      LinkedPersonIdsJson: '["p-ahmad"]',
+      Date: '2026-07-01',
+      DutyDomain: 'MO',
+      PlannedAssignmentJson: '[]',
+      BeforeCurrentJson: '[{"ShiftCode":"AM"}]',
+      AfterCurrentJson: '[{"ShiftCode":"PM"}]',
+      PublicReasonCode: 'SHIFT_SWAP',
+      AdminNote: 'Approved swap',
+      ShortageAccepted: false,
+      ShortageReason: '',
+      GoffTransactionIdsJson: '[]',
+      ReversesEventId: '',
+      CreatedAt: '2026-07-01T10:00:00.000Z',
+      CreatedBy: 'admin@hospital.org'
+    },
+    {
+      EventId: baseEventId,
+      LineId: 'line-swap-2',
+      EventType: 'SWAP',
+      OperationId: baseOpId,
+      PeriodId: '2026-07',
+      BaseRevision: 1,
+      ResultRevision: 2,
+      PersonId: 'p-ahmad',
+      LinkedPersonIdsJson: '["p-siti"]',
+      Date: '2026-07-02',
+      DutyDomain: 'MO',
+      PlannedAssignmentJson: '[]',
+      BeforeCurrentJson: '[{"ShiftCode":"PM"}]',
+      AfterCurrentJson: '[{"ShiftCode":"AM"}]',
+      PublicReasonCode: 'SHIFT_SWAP',
+      AdminNote: 'Approved swap',
+      ShortageAccepted: false,
+      ShortageReason: '',
+      GoffTransactionIdsJson: '[]',
+      ReversesEventId: '',
+      CreatedAt: '2026-07-01T10:00:00.000Z',
+      CreatedBy: 'admin@hospital.org'
+    }
+  ];
+
+  // 1. Valid lines with legitimate differences in line-level fields succeed
+  const validGroup = RosterLifecycle.groupEventLines(createValidSwapLines());
+  assert.equal(validGroup.length, 1);
+  assert.equal(validGroup[0].lines.length, 2);
+
+  // 2. Reject multi-line event if any EVENT-LEVEL metadata differs between lines:
+  const eventLevelFields = [
+    { field: 'CreatedBy', val1: 'admin-1@hospital.org', val2: 'admin-2@hospital.org' },
+    { field: 'AdminNote', val1: 'Note 1', val2: 'Note 2' },
+    { field: 'OperationId', val1: baseOpId, val2: 'c1000000-0000-4000-8000-000000000099' },
+    { field: 'BaseRevision', val1: 1, val2: 2 },
+    { field: 'ResultRevision', val1: 2, val2: 3 },
+    { field: 'PublicReasonCode', val1: 'SHIFT_SWAP', val2: 'OTHER' },
+    { field: 'CreatedAt', val1: '2026-07-01T10:00:00.000Z', val2: '2026-07-01T11:00:00.000Z' },
+    { field: 'EventType', val1: 'SWAP', val2: 'ADMIN_CORRECTION' },
+    { field: 'PeriodId', val1: '2026-07', val2: '2026-08' },
+    { field: 'ReversesEventId', val1: '', val2: 'rev-id' },
+    { field: 'ShortageAccepted', val1: false, val2: true },
+    { field: 'ShortageReason', val1: '', val2: 'Approved shortage' }
+  ];
+
+  for (const { field, val1, val2 } of eventLevelFields) {
+    const lines = createValidSwapLines();
+    lines[0][field] = val1;
+    lines[1][field] = val2;
+    assert.throws(() => {
+      RosterLifecycle.groupEventLines(lines);
+    }, err => err.code === 'MALFORMED_EVENT', `Expected groupEventLines to reject differing ${field}`);
+  }
+});
+
+test('28. Event revision ordering invariants & conflict rejection (Section D)', () => {
+  const baseSnap = createBasePlannedSnapshot();
+
+  const ev1 = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: 'd1000000-0000-4000-8000-000000000001',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-siti',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+
+  // 1. Reject duplicate ResultRevision (two independent events claiming the same revision)
+  const conflictingEv = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2, // duplicate ResultRevision 2!
+    operationId: 'd1000000-0000-4000-8000-000000000002',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-ahmad',
+    date: '2026-07-02',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'ON1' }]
+  });
+
+  assert.throws(() => {
+    RosterLifecycle.resolveCurrentRoster({
+      periodId: '2026-07',
+      plannedAssignments: baseSnap.assignments,
+      events: [...ev1.lines, ...conflictingEv.lines],
+      people: TEST_PEOPLE
+    });
+  }, err => err.code === 'REVISION_CONFLICT');
+
+  // 2. Reject branching conflict (second event has BaseRevision < prev.ResultRevision)
+  const branchingEv = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1, // Branching from 1 after revision 2 already confirmed!
+    resultRevision: 3,
+    operationId: 'd1000000-0000-4000-8000-000000000003',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-tan',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'ON1' }],
+    afterAssignments: [{ ShiftCode: 'AM' }]
+  });
+
+  assert.throws(() => {
+    RosterLifecycle.resolveCurrentRoster({
+      periodId: '2026-07',
+      plannedAssignments: baseSnap.assignments,
+      events: [...ev1.lines, ...branchingEv.lines],
+      people: TEST_PEOPLE
+    });
+  }, err => err.code === 'REVISION_CONFLICT');
+
+  // 3. Reject invalid revision numbers (non-integer, negative, or Result <= Base)
+  assert.throws(() => {
+    RosterLifecycle.resolveCurrentRoster({
+      periodId: '2026-07',
+      plannedAssignments: baseSnap.assignments,
+      events: [{ ...ev1.lines[0], BaseRevision: -1 }],
+      people: TEST_PEOPLE
+    });
+  }, err => err.code === 'MALFORMED_EVENT');
+
+  assert.throws(() => {
+    RosterLifecycle.resolveCurrentRoster({
+      periodId: '2026-07',
+      plannedAssignments: baseSnap.assignments,
+      events: [{ ...ev1.lines[0], ResultRevision: 1, BaseRevision: 1 }],
+      people: TEST_PEOPLE
+    });
+  }, err => err.code === 'MALFORMED_EVENT');
+
+  // 4. Permissible forward gaps: Phase 4 lifecycle events advance revision without altering cells
+  // ev1: Base 1 -> Result 2
+  // Intervening lifecycle event (e.g. CLOSE or metadata update): advances period to revision 3
+  // ev2: Base 3 -> Result 4
+  const gapEv = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 3,
+    resultRevision: 4,
+    operationId: 'd1000000-0000-4000-8000-000000000004',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-ahmad',
+    date: '2026-07-02',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'ON1' }]
+  });
+
+  const resGap = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: baseSnap.assignments,
+    events: [...ev1.lines, ...gapEv.lines],
+    people: TEST_PEOPLE
+  });
+  assert.equal(resGap.effectiveState, 'AMENDED');
+  assert.equal(resGap.activeAmendmentCount, 2);
+});
+
+test('29. Comprehensive active-amendment counting audit (Section E)', () => {
+  const baseSnap = createBasePlannedSnapshot();
+
+  // 0. Base published roster has 0 active amendments
+  const res0 = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: baseSnap.assignments,
+    events: [],
+    people: TEST_PEOPLE
+  });
+  assert.equal(res0.activeAmendmentCount, 0);
+  assert.equal(res0.effectiveState, 'PUBLISHED');
+
+  // 1. Single ADMIN_CORRECTION contributes 1 active amendment
+  const ev1 = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: 'e1000000-0000-4000-8000-000000000001',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-siti',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+  assert.equal(RosterLifecycle.countActiveAmendments(ev1.lines), 1);
+
+  // 2. SWAP (2 lines sharing EventId) contributes 1 active amendment, NOT 2
+  const swap = RosterLifecycle.createSwapEvent({
+    periodId: '2026-07',
+    baseRevision: 2,
+    resultRevision: 3,
+    operationId: 'e1000000-0000-4000-8000-000000000002',
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.SHIFT_SWAP,
+    person1: {
+      personId: 'p-siti',
+      date: '2026-07-02',
+      dutyDomain: 'MO',
+      beforeAssignments: [{ ShiftCode: 'ON1' }],
+      afterAssignments: [{ ShiftCode: 'AM' }]
+    },
+    person2: {
+      personId: 'p-ahmad',
+      date: '2026-07-02',
+      dutyDomain: 'MO',
+      beforeAssignments: [{ ShiftCode: 'AM' }],
+      afterAssignments: [{ ShiftCode: 'ON1' }]
+    }
+  });
+  assert.equal(swap.lines.length, 2);
+  assert.equal(RosterLifecycle.countActiveAmendments(swap.lines), 1); // Exactly 1!
+
+  // 3. Two independent amendments: count = 2
+  assert.equal(RosterLifecycle.countActiveAmendments([...ev1.lines, ...swap.lines]), 2);
+
+  // 4. Reversal of swap: does NOT become an additional active amendment, reduces active count by 1
+  const groupedSwap = RosterLifecycle.groupEventLines(swap.lines);
+  const revSwap = RosterLifecycle.createReversalEvent({
+    targetEvent: groupedSwap[0],
+    baseRevision: 3,
+    resultRevision: 4,
+    operationId: 'e1000000-0000-4000-8000-000000000003',
+    actor: 'admin'
+  });
+  // ev1 + swap + revSwap: active count must be 1 (ev1 is still active, swap is reversed, revSwap is reversal)
+  assert.equal(RosterLifecycle.countActiveAmendments([...ev1.lines, ...swap.lines, ...revSwap.lines]), 1);
+
+  // 5. Reversal of ev1: leaves active count = 0
+  const groupedEv1 = RosterLifecycle.groupEventLines(ev1.lines);
+  const revEv1 = RosterLifecycle.createReversalEvent({
+    targetEvent: groupedEv1[0],
+    baseRevision: 4,
+    resultRevision: 5,
+    operationId: 'e1000000-0000-4000-8000-000000000004',
+    actor: 'admin'
+  });
+  assert.equal(RosterLifecycle.countActiveAmendments([...ev1.lines, ...swap.lines, ...revSwap.lines, ...revEv1.lines]), 0);
+
+  // 6. Lifecycle events (PUBLISH, CLOSE, REOPEN) do NOT contribute to active amendment count
+  const lifecycleEvents = [
+    { EventId: 'e-pub', LineId: 'l-pub', EventType: 'PUBLISH', OperationId: 'op-pub', PeriodId: '2026-07', BaseRevision: 0, ResultRevision: 1, DutyDomain: '', PersonId: '', Date: '' },
+    { EventId: 'e-cls', LineId: 'l-cls', EventType: 'CLOSE', OperationId: 'op-cls', PeriodId: '2026-07', BaseRevision: 5, ResultRevision: 6, DutyDomain: '', PersonId: '', Date: '' },
+    { EventId: 'e-rop', LineId: 'l-rop', EventType: 'REOPEN', OperationId: 'op-rop', PeriodId: '2026-07', BaseRevision: 6, ResultRevision: 7, DutyDomain: '', PersonId: '', Date: '' }
+  ];
+  assert.equal(RosterLifecycle.countActiveAmendments(lifecycleEvents), 0);
+  assert.equal(RosterLifecycle.countActiveAmendments([...lifecycleEvents, ...ev1.lines]), 1);
+});
+
+test('30. Current assignment identity behavior & stability (Section F)', () => {
+  const baseSnap = createBasePlannedSnapshot();
+  const originalPlannedAssignments = baseSnap.assignments;
+
+  // 1. Unchanged Planned assignments preserve their exact original AssignmentId
+  const resBase = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: originalPlannedAssignments,
+    events: [],
+    people: TEST_PEOPLE,
+    digestFn
+  });
+  for (let i = 0; i < originalPlannedAssignments.length; i++) {
+    assert.equal(resBase.currentAssignments[i].AssignmentId, originalPlannedAssignments[i].AssignmentId);
+  }
+
+  // 2. Changed existing shift receives deterministic AssignmentId with occurrence index
+  const amendOpId = 'f1000000-0000-4000-8000-000000000001';
+  const originalPlannedSiti = originalPlannedAssignments.find(a => a.PersonId === 'p-siti' && a.Date === '2026-07-01');
+  const evAmend = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: amendOpId,
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-siti',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [originalPlannedSiti],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+
+  const resAmend = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: originalPlannedAssignments,
+    events: evAmend.lines,
+    people: TEST_PEOPLE,
+    digestFn
+  });
+
+  const changedSiti = resAmend.currentAssignments.find(a => a.PersonId === 'p-siti' && a.Date === '2026-07-01');
+  const expectedId = RosterLifecycle.deterministicAssignmentId(amendOpId, 'p-siti', '2026-07-01', 'MO', 'PM', 'PM', 0, digestFn);
+  assert.equal(changedSiti.AssignmentId, expectedId);
+
+  // 3. Added new assignment receives deterministic AssignmentId
+  const addOpId = 'f1000000-0000-4000-8000-000000000002';
+  const evAdd = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 2,
+    resultRevision: 3,
+    operationId: addOpId,
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.DUTY_COVERAGE,
+    personId: 'p-ahmad',
+    date: '2026-07-03',
+    dutyDomain: 'MO',
+    beforeAssignments: [],
+    afterAssignments: [{ ShiftCode: 'AM' }]
+  });
+
+  const resAdd = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: originalPlannedAssignments,
+    events: [...evAmend.lines, ...evAdd.lines],
+    people: TEST_PEOPLE,
+    digestFn
+  });
+  const addedAhmad = resAdd.currentAssignments.find(a => a.PersonId === 'p-ahmad' && a.Date === '2026-07-03');
+  const expectedAddId = RosterLifecycle.deterministicAssignmentId(addOpId, 'p-ahmad', '2026-07-03', 'MO', 'AM', 'AM', 0, digestFn);
+  assert.equal(addedAhmad.AssignmentId, expectedAddId);
+
+  // 4. After reversal, assignment identity reverts to original Planned AssignmentId
+  const groupedAmend = RosterLifecycle.groupEventLines(evAmend.lines);
+  const evRev = RosterLifecycle.createReversalEvent({
+    targetEvent: groupedAmend[0],
+    baseRevision: 3,
+    resultRevision: 4,
+    operationId: 'f1000000-0000-4000-8000-000000000003',
+    actor: 'admin'
+  });
+
+  const resRev = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: originalPlannedAssignments,
+    events: [...evAmend.lines, ...evAdd.lines, ...evRev.lines],
+    people: TEST_PEOPLE,
+    digestFn
+  });
+  const revertedSiti = resRev.currentAssignments.find(a => a.PersonId === 'p-siti' && a.Date === '2026-07-01');
+  assert.equal(revertedSiti.AssignmentId, originalPlannedSiti.AssignmentId);
+  assert.equal(revertedSiti.ShiftCode, 'AM');
+
+  // 5. Repeated reconstruction produces byte-identical stable identifiers
+  const run1 = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: originalPlannedAssignments,
+    events: [...evAmend.lines, ...evAdd.lines],
+    people: TEST_PEOPLE,
+    digestFn
+  });
+  const run2 = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: originalPlannedAssignments,
+    events: [...evAmend.lines, ...evAdd.lines],
+    people: TEST_PEOPLE,
+    digestFn
+  });
+  assert.deepStrictEqual(run1.currentAssignments, run2.currentAssignments);
+
+  // 6. Input row ordering does not affect identifiers or outputs
+  const shuffledEvents = [...evAdd.lines, ...evAmend.lines];
+  const runShuffled = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: originalPlannedAssignments,
+    events: shuffledEvents,
+    people: TEST_PEOPLE,
+    digestFn
+  });
+  assert.deepStrictEqual(run1.currentAssignments, runShuffled.currentAssignments);
 });
