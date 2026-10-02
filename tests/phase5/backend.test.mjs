@@ -862,9 +862,14 @@ test('20. History: returns reverse-chronological grouped events, reversal status
   viewerHist.events.forEach(ev => {
     assert.equal(ev.AdminNote, undefined, 'Viewer must never receive AdminNote on event');
     assert.equal(ev.CreatedBy, undefined, 'Viewer must never receive CreatedBy on event');
+    assert.equal(ev.OperationId, undefined, 'Viewer must never receive OperationId on event');
+    assert.equal(ev.canReverse, undefined, 'Viewer must never receive canReverse on event');
+    assert.equal(ev.reversalIneligibilityReason, undefined, 'Viewer must never receive reversalIneligibilityReason on event');
     ev.lines.forEach(line => {
       assert.equal(line.AdminNote, undefined, 'Viewer must never receive AdminNote on line');
       assert.equal(line.CreatedBy, undefined, 'Viewer must never receive CreatedBy on line');
+      assert.equal(line.OperationId, undefined, 'Viewer must never receive OperationId on line');
+      assert.equal(line.ShortageReason, undefined, 'Viewer must never receive ShortageReason on line');
     });
   });
 });
@@ -876,4 +881,688 @@ test('21. Legacy unenrolled period: rejects Phase 5 amendments cleanly', () => {
   const res = amend(h, op);
   assert.equal(res.ok, false);
   assert.equal(res.error.code, 'ENTITY_NOT_FOUND');
+});
+
+// ==========================================
+// 10. RECOVERY INVARIANTS & HARDENING AUDIT
+// ==========================================
+
+function checkRecoveryInvariants({
+  h,
+  periodId,
+  op,
+  result,
+  expectedEventId,
+  expectedLineCount,
+  plannedBeforeJson,
+  weeklyOffBeforeJson,
+  expectedFinalRevision = 2,
+  expectedFinalState = 'AMENDED'
+}) {
+  assert.equal(result.ok, true, 'Result must be ok');
+  assert.equal(result.operationId, op.operationId, 'Must return same operationId');
+  if (expectedEventId && (result.eventId || result.reversalEventId)) {
+    assert.equal(result.eventId || result.reversalEventId, expectedEventId, 'Must return same deterministic EventId');
+  }
+  assert.equal(result.state, expectedFinalState, `State must be ${expectedFinalState}`);
+  assert.equal(result.revision, expectedFinalRevision, `Revision must be ${expectedFinalRevision}`);
+
+  // No duplicate RosterEvents rows
+  const eventRows = h.grids.RosterEvents.slice(1).filter(r => r[3] === op.operationId);
+  if (expectedLineCount !== undefined) {
+    assert.equal(eventRows.length, expectedLineCount, `Expected exactly ${expectedLineCount} event lines`);
+  }
+
+  // Planned assignments unchanged
+  const plannedAfterJson = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  assert.equal(plannedAfterJson, plannedBeforeJson, 'Planned rows must remain immutable');
+
+  // WeeklyOffSnapshots unchanged
+  const weeklyOffAfterJson = JSON.stringify(h.grids.WeeklyOffSnapshots);
+  assert.equal(weeklyOffAfterJson, weeklyOffBeforeJson, 'WeeklyOffSnapshots must remain immutable');
+
+  // RosterPeriods verification
+  const periodRow = h.grids.RosterPeriods.find(r => r[0] === periodId);
+  assert.equal(periodRow[1], expectedFinalState, `Period state must be ${expectedFinalState}`);
+  assert.equal(periodRow[2], expectedFinalRevision, `Period revision must be ${expectedFinalRevision}`);
+  assert.equal(periodRow[9], result.projectionChecksum, 'Period checksum must match result projectionChecksum');
+  assert.equal(periodRow[11], op.operationId, 'Period LastOperationId must match operationId');
+
+  // MasterRoster equals resolved Current
+  const confirmedRows = h.context.rosterLifecycleFindConfirmedEventsByPeriod_(periodId).filter(r => !['PUBLISH', 'CLOSE', 'REOPEN'].includes(r.EventType));
+  const confirmedEvents = lifecycle.groupEventLines(confirmedRows);
+  const plannedAssignments = h.context.rosterLifecycleFindAssignmentsByPeriod_(periodId).filter(r => r.Layer === 'PLANNED');
+  const resolvedCurrent = lifecycle.resolveCurrentRoster({
+    periodId,
+    plannedAssignments,
+    events: confirmedEvents,
+    people: h.context.rosterLifecycleGetPeople_(),
+    digestFn: digest
+  });
+  const expectedMasterRows = resolvedCurrent.masterRosterProjection.filter(r => r.Date.slice(0, 7) === periodId);
+  const actualMasterRows = h.grids.MasterRoster.slice(1)
+    .filter(r => r[1].slice(0, 7) === periodId)
+    .map(r => ({ Name: r[0], Date: r[1], Shift: r[2] }));
+  assert.deepEqual(actualMasterRows, expectedMasterRows, 'Final MasterRoster must equal resolved Current');
+
+  // Final ProjectionChecksum matches persisted projection
+  const computedChecksum = lifecycle.computeProjectionChecksum(actualMasterRows, digest);
+  assert.equal(computedChecksum, result.projectionChecksum, 'Computed checksum must match result');
+
+  // OperationLog ends CONFIRMED
+  const logRow = h.grids.OperationLog.find(r => r[0] === op.operationId);
+  assert.ok(logRow, 'OperationLog row must exist');
+  assert.equal(logRow[8], 'CONFIRMED', 'OperationLog Status must be CONFIRMED');
+  assert.equal(logRow[10], '', 'ErrorCode must be empty upon confirmation');
+}
+
+test('22. Fault injection Window 1: failure before any event row is persisted recovers with identical IDs and zero duplicates', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  const op = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const deterministicId = lifecycle.deterministicEventId(op.operationId, 'ADMIN_CORRECTION', person1, '2030-07-01', 'MO');
+
+  // Intercept event persistence on first attempt before any event line is written
+  const origPersist = h.context.rosterLifecyclePersistEventsIdempotently_;
+  let persistCalls = 0;
+  h.context.rosterLifecyclePersistEventsIdempotently_ = function(...args) {
+    if (++persistCalls === 1) {
+      throw new Error('Simulated crash before persisting any event line');
+    }
+    return origPersist.apply(this, args);
+  };
+
+  const failRes = amend(h, op);
+  assert.equal(failRes.ok, false);
+
+  // Assert 0 rows added to RosterEvents
+  const eventsForOp = h.grids.RosterEvents.slice(1).filter(r => r[3] === op.operationId);
+  assert.equal(eventsForOp.length, 0, 'No event rows must exist after pre-persistence crash');
+
+  // Assert period revision and state did not advance
+  const periodRow = h.grids.RosterPeriods.find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'PUBLISHED');
+  assert.equal(periodRow[2], 1);
+
+  // Retry with same operationId
+  const retryRes = amend(h, op);
+  assert.equal(retryRes.ok, true);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op,
+    result: retryRes,
+    expectedEventId: deterministicId,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore
+  });
+});
+
+test('23. Fault injection Window 3: failure after all canonical event rows are persisted but before MasterRoster write recovers cleanly', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  const op = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const deterministicId = lifecycle.deterministicEventId(op.operationId, 'ADMIN_CORRECTION', person1, '2030-07-01', 'MO');
+
+  // Intercept MasterRoster write on first attempt
+  const origWriteMaster = h.context.rosterLifecycleWriteMasterRoster_;
+  let writeCalls = 0;
+  h.context.rosterLifecycleWriteMasterRoster_ = function(...args) {
+    if (++writeCalls === 1) {
+      throw new Error('Simulated crash before MasterRoster projection write');
+    }
+    return origWriteMaster.apply(this, args);
+  };
+
+  const failRes = amend(h, op);
+  assert.equal(failRes.ok, false);
+
+  // Canonical event row was persisted
+  const eventsForOp = h.grids.RosterEvents.slice(1).filter(r => r[3] === op.operationId);
+  assert.equal(eventsForOp.length, 1);
+
+  // Period was not yet updated
+  const periodRow = h.grids.RosterPeriods.find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'PUBLISHED');
+  assert.equal(periodRow[2], 1);
+
+  // Retry with same operationId
+  const retryRes = amend(h, op);
+  assert.equal(retryRes.ok, true);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op,
+    result: retryRes,
+    expectedEventId: deterministicId,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore
+  });
+});
+
+test('24. Fault injection Window 4: failure after MasterRoster write but before readback/checksum verification recovers cleanly', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  const op = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const deterministicId = lifecycle.deterministicEventId(op.operationId, 'ADMIN_CORRECTION', person1, '2030-07-01', 'MO');
+
+  // Intercept readTable during readback verification
+  const origReadTable = h.context.rosterV2ReadTable_;
+  let masterReadCount = 0;
+  h.context.rosterV2ReadTable_ = function(name) {
+    if (name === 'MasterRoster') {
+      masterReadCount++;
+      if (masterReadCount === 2) {
+        // First read was before merge; second read is the readback verification
+        throw new Error('Simulated I/O loss during MasterRoster readback');
+      }
+    }
+    return origReadTable.apply(this, arguments);
+  };
+
+  const failRes = amend(h, op);
+  assert.equal(failRes.ok, false);
+
+  // Period row was not updated yet
+  const periodRow = h.grids.RosterPeriods.find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'PUBLISHED');
+  assert.equal(periodRow[2], 1);
+
+  // Retry with same operationId
+  const retryRes = amend(h, op);
+  assert.equal(retryRes.ok, true);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op,
+    result: retryRes,
+    expectedEventId: deterministicId,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore
+  });
+});
+
+test('25. Fault injection Window 6: failure after checksum verification but before RosterPeriods update recovers cleanly', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  const op = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const deterministicId = lifecycle.deterministicEventId(op.operationId, 'ADMIN_CORRECTION', person1, '2030-07-01', 'MO');
+
+  // Intercept writeRow for RosterPeriods on first attempt
+  const origWriteRow = h.context.rosterLifecycleWriteRow_;
+  let periodWriteCount = 0;
+  h.context.rosterLifecycleWriteRow_ = function(sheetName, ...args) {
+    if (sheetName === 'RosterPeriods' && ++periodWriteCount === 1) {
+      throw new Error('Simulated crash right before RosterPeriods update');
+    }
+    return origWriteRow.call(this, sheetName, ...args);
+  };
+
+  const failRes = amend(h, op);
+  assert.equal(failRes.ok, false);
+
+  // Period was not yet updated
+  const periodRow = h.grids.RosterPeriods.find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'PUBLISHED');
+  assert.equal(periodRow[2], 1);
+
+  // Retry with same operationId
+  const retryRes = amend(h, op);
+  assert.equal(retryRes.ok, true);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op,
+    result: retryRes,
+    expectedEventId: deterministicId,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore
+  });
+});
+
+test('26. Fault injection Windows 7 & 8: crash before OperationLog CONFIRMED and lost response recovery', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  const op = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const res1 = amend(h, op);
+  assert.equal(res1.ok, true);
+
+  // Simulate Window 7: Period updated to rev 2 / AMENDED, but crash happened before log CONFIRMED
+  const logIndex = h.grids.OperationLog.findIndex(r => r[0] === op.operationId);
+  h.grids.OperationLog[logIndex][8] = 'PENDING';
+  h.grids.OperationLog[logIndex][9] = '';
+
+  // Recover via rosterv2lifecyclerecover
+  const recRes = recover(h, op.operationId);
+  assert.equal(recRes.ok, true);
+  assert.equal(recRes.status, 'CONFIRMED');
+
+  // Verify all invariants hold after recovery
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op,
+    result: recRes.result,
+    expectedEventId: res1.eventId,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore
+  });
+
+  // Simulate Window 8: identical retry after full completion returns cached result without advancing revision
+  const replayRes = amend(h, op);
+  assert.deepEqual(replayRes, res1);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op,
+    result: replayRes,
+    expectedEventId: res1.eventId,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore
+  });
+});
+
+test('27. Reversal Fault Window 1: reversal event persisted before MasterRoster write failure recovers without double reversal', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  // 1. Create initial amendment (rev 1 -> 2)
+  const amendOp = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const amendRes = amend(h, amendOp);
+  assert.equal(amendRes.ok, true);
+
+  // 2. Prepare reversal op
+  const revOp = makeReversalOp({ periodId, expectedRevision: 2, targetEventId: amendRes.eventId, adminNote: 'Reversing amendment' });
+
+  // 3. Intercept MasterRoster write during reversal
+  const origWriteMaster = h.context.rosterLifecycleWriteMasterRoster_;
+  let writeCalls = 0;
+  h.context.rosterLifecycleWriteMasterRoster_ = function(...args) {
+    if (++writeCalls === 1) {
+      throw new Error('Simulated crash during reversal MasterRoster write');
+    }
+    return origWriteMaster.apply(this, args);
+  };
+
+  const failRes = amendReversal(h, revOp);
+  assert.equal(failRes.ok, false);
+
+  // Reversal event line was persisted
+  const revEvents = h.grids.RosterEvents.slice(1).filter(r => r[3] === revOp.operationId);
+  assert.equal(revEvents.length, 1);
+
+  // Period was not yet updated (remains AMENDED / rev 2)
+  const periodRow = h.grids.RosterPeriods.find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'AMENDED');
+  assert.equal(periodRow[2], 2);
+
+  // 4. Retry reversal with same operationId
+  const retryRes = amendReversal(h, revOp);
+  assert.equal(retryRes.ok, true);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op: revOp,
+    result: retryRes,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore,
+    expectedFinalRevision: 3,
+    expectedFinalState: 'PUBLISHED'
+  });
+
+  // Verify only 1 reversal event exists for this operation and target is not reversed twice
+  const allReversalsForTarget = h.grids.RosterEvents.slice(1).filter(r => r[2] === 'REVERSAL' && r[19] === amendRes.eventId);
+  assert.equal(allReversalsForTarget.length, 1, 'Target event must have exactly one compensating reversal event');
+});
+
+test('28. Reversal Fault Window 2: checksum mismatch during reversal readback marks RECOVERY_REQUIRED and same-op retry repairs it', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  const amendOp = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const amendRes = amend(h, amendOp);
+
+  const revOp = makeReversalOp({ periodId, expectedRevision: 2, targetEventId: amendRes.eventId });
+
+  // Tamper with digest on reversal readback
+  const originalDigest = h.context.rosterV2Digest_;
+  let nameCallCount = 0;
+  h.context.rosterV2Digest_ = function(content) {
+    if (typeof content === 'string' && content.includes('"Name"')) {
+      nameCallCount++;
+      if (nameCallCount === 3) {
+        return 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+      }
+    }
+    return originalDigest.apply(this, arguments);
+  };
+
+  const failRes = amendReversal(h, revOp);
+  assert.equal(failRes.ok, false);
+  assert.equal(failRes.error.code, 'CHECKSUM_MISMATCH');
+
+  // OperationLog is RECOVERY_REQUIRED
+  const logRow = h.grids.OperationLog.find(r => r[0] === revOp.operationId);
+  assert.equal(logRow[8], 'RECOVERY_REQUIRED');
+
+  // Period revision remains 2, state remains AMENDED
+  const periodRow = h.grids.RosterPeriods.find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'AMENDED');
+  assert.equal(periodRow[2], 2);
+
+  // Retry with same operationId without tampering
+  const retryRes = amendReversal(h, revOp);
+  assert.equal(retryRes.ok, true);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op: revOp,
+    result: retryRes,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore,
+    expectedFinalRevision: 3,
+    expectedFinalState: 'PUBLISHED'
+  });
+});
+
+test('29. Reversal Fault Windows 3 & 4: RosterPeriods updated before OperationLog confirmation & lost response replay idempotency', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = JSON.stringify(h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED'));
+  const weeklyOffBefore = JSON.stringify(h.grids.WeeklyOffSnapshots);
+
+  const amendOp = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-01', afterAssignments: [{ shiftCode: 'PM' }] });
+  const amendRes = amend(h, amendOp);
+
+  const revOp = makeReversalOp({ periodId, expectedRevision: 2, targetEventId: amendRes.eventId });
+  const revRes = amendReversal(h, revOp);
+  assert.equal(revRes.ok, true);
+
+  // Simulate Window 3: Period updated to rev 3 / PUBLISHED, but crash happened before log CONFIRMED
+  const logIndex = h.grids.OperationLog.findIndex(r => r[0] === revOp.operationId);
+  h.grids.OperationLog[logIndex][8] = 'PENDING';
+  h.grids.OperationLog[logIndex][9] = '';
+
+  // Recover via rosterv2lifecyclerecover
+  const recRes = recover(h, revOp.operationId);
+  assert.equal(recRes.ok, true);
+  assert.equal(recRes.status, 'CONFIRMED');
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op: revOp,
+    result: recRes.result,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore,
+    expectedFinalRevision: 3,
+    expectedFinalState: 'PUBLISHED'
+  });
+
+  // Simulate Window 4: identical replay of completed reversal
+  const replayRes = amendReversal(h, revOp);
+  assert.deepEqual(replayRes, revRes);
+
+  checkRecoveryInvariants({
+    h,
+    periodId,
+    op: revOp,
+    result: replayRes,
+    expectedLineCount: 1,
+    plannedBeforeJson: plannedBefore,
+    weeklyOffBeforeJson: weeklyOffBefore,
+    expectedFinalRevision: 3,
+    expectedFinalState: 'PUBLISHED'
+  });
+});
+
+test('30. OperationLog visibility isolation: normal reads and in-progress mutations exclude foreign unconfirmed operations', () => {
+  const { h, periodId } = setupPublished();
+
+  // Inject Op A: PENDING amendment on Person 1 Day 1 -> Shift 'PM'
+  const opAId = crypto.randomUUID();
+  h.grids.OperationLog.push([
+    opAId, opAId, opAId, 'PERIOD_AMEND', `period:${periodId}`,
+    1, 2, '000000000000000000000000000000000000000000000000000000000000000a',
+    'PENDING', '', '', new Date().toISOString(), ''
+  ]);
+  h.grids.RosterEvents.push([
+    crypto.randomUUID(), crypto.randomUUID(), 'ADMIN_CORRECTION', opAId, periodId,
+    1, 2, person1, '[]', '2030-07-01', 'MO',
+    JSON.stringify([{ ShiftCode: 'AM' }]), JSON.stringify([{ ShiftCode: 'AM' }]), JSON.stringify([{ ShiftCode: 'PM' }]),
+    'ADMIN_CORRECTION', 'pending note A', false, '', '[]', '', new Date().toISOString(), 'admin@example.invalid'
+  ]);
+
+  // Inject Op B: RECOVERY_REQUIRED amendment on Person 2 Day 1 -> Shift 'ND'
+  const opBId = crypto.randomUUID();
+  h.grids.OperationLog.push([
+    opBId, opBId, opBId, 'PERIOD_AMEND', `period:${periodId}`,
+    1, 2, '000000000000000000000000000000000000000000000000000000000000000b',
+    'RECOVERY_REQUIRED', '', 'CHECKSUM_MISMATCH', new Date().toISOString(), ''
+  ]);
+  h.grids.RosterEvents.push([
+    crypto.randomUUID(), crypto.randomUUID(), 'ADMIN_CORRECTION', opBId, periodId,
+    1, 2, person2, '[]', '2030-07-01', 'MO',
+    JSON.stringify([{ ShiftCode: 'PM' }]), JSON.stringify([{ ShiftCode: 'PM' }]), JSON.stringify([{ ShiftCode: 'ND' }]),
+    'ADMIN_CORRECTION', 'recovery note B', false, '', '[]', '', new Date().toISOString(), 'admin@example.invalid'
+  ]);
+
+  // Inject Op C: FAILED operation on Person 3 Day 1 -> Shift 'OFF'
+  const opCId = crypto.randomUUID();
+  h.grids.OperationLog.push([
+    opCId, opCId, opCId, 'PERIOD_AMEND', `period:${periodId}`,
+    1, 2, '000000000000000000000000000000000000000000000000000000000000000c',
+    'FAILED', '', 'PERMANENT_FAILURE', new Date().toISOString(), ''
+  ]);
+  h.grids.RosterEvents.push([
+    crypto.randomUUID(), crypto.randomUUID(), 'ADMIN_CORRECTION', opCId, periodId,
+    1, 2, person3, '[]', '2030-07-01', 'MO',
+    JSON.stringify([{ ShiftCode: 'ND' }]), JSON.stringify([{ ShiftCode: 'ND' }]), JSON.stringify([{ ShiftCode: 'OFF' }]),
+    'ADMIN_CORRECTION', 'failed note C', false, '', '[]', '', new Date().toISOString(), 'admin@example.invalid'
+  ]);
+
+  // Execute in-progress Op D: legitimate amendment on Person 1 Day 2 -> 'PM'
+  const opD = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: '2030-07-02', afterAssignments: [{ shiftCode: 'PM' }] });
+  const resD = amend(h, opD);
+  assert.equal(resD.ok, true);
+  assert.equal(resD.revision, 2);
+
+  // Authoritative MasterRoster projection must contain ONLY Op D's change!
+  // Person 1 Day 1 must still be baseline AM (not PM from Op A)
+  // Person 2 Day 1 must still be baseline PM (not ND from Op B)
+  // Person 3 Day 1 must still be baseline ND (not OFF from Op C)
+  // Person 1 Day 2 must be PM (from Op D)
+  const masterRows = h.grids.MasterRoster.slice(1);
+  const p1Day1 = masterRows.find(r => r[0] === 'Dr. Ali' && r[1] === '2030-07-01');
+  const p2Day1 = masterRows.find(r => r[0] === 'Dr. Siti' && r[1] === '2030-07-01');
+  const p3Day1 = masterRows.find(r => r[0] === 'Dr. Tan' && r[1] === '2030-07-01');
+  const p1Day2 = masterRows.find(r => r[0] === 'Dr. Ali' && r[1] === '2030-07-02');
+
+  assert.equal(p1Day1[2], 'AM', 'Op A must not bleed into confirmed projection');
+  assert.equal(p2Day1[2], 'PM', 'Op B must not bleed into confirmed projection');
+  assert.equal(p3Day1[2], 'ND', 'Op C must not bleed into confirmed projection');
+  assert.equal(p1Day2[2], 'PM', 'Op D must be accurately projected');
+
+  // Amendment history read must return ONLY Op D
+  const historyRes = amendmentHistory(h, periodId);
+  assert.equal(historyRes.ok, true);
+  assert.equal(historyRes.count, 1, 'History must contain ONLY confirmed operation D');
+  assert.equal(historyRes.events[0].OperationId, opD.operationId);
+});
+
+test('31. Semantic request / payloadHash contract: changed semantic payload with same operationId triggers IDEMPOTENCY_MISMATCH', () => {
+  const { h, periodId } = setupPublished();
+
+  // Case 1: Changed adminNote
+  {
+    const op1 = makeAmendOp({ periodId, expectedRevision: 1, adminNote: 'Original Note' });
+    const res1 = amend(h, op1);
+    assert.equal(res1.ok, true);
+
+    const tampered = { ...op1, adminNote: 'Changed Note' };
+    const res2 = amend(h, tampered);
+    assert.equal(res2.ok, false);
+    assert.equal(res2.error.code, 'IDEMPOTENCY_MISMATCH');
+  }
+
+  // Case 2: Changed publicReasonCode
+  {
+    const op1 = makeAmendOp({ periodId, expectedRevision: 2, date: '2030-07-02', publicReasonCode: 'ADMIN_CORRECTION' });
+    const res1 = amend(h, op1);
+    assert.equal(res1.ok, true);
+
+    const tampered = { ...op1, publicReasonCode: 'DUTY_COVERAGE' };
+    const res2 = amend(h, tampered);
+    assert.equal(res2.ok, false);
+    assert.equal(res2.error.code, 'IDEMPOTENCY_MISMATCH');
+  }
+
+  // Case 3: Changed desired assignment
+  {
+    const op1 = makeAmendOp({ periodId, expectedRevision: 3, date: '2030-07-03', afterAssignments: [{ shiftCode: 'PM' }] });
+    const res1 = amend(h, op1);
+    assert.equal(res1.ok, true);
+
+    const tampered = { ...op1, afterAssignments: [{ shiftCode: 'ND' }] };
+    const res2 = amend(h, tampered);
+    assert.equal(res2.ok, false);
+    assert.equal(res2.error.code, 'IDEMPOTENCY_MISMATCH');
+  }
+
+  // Case 4: Changed swap counterpart
+  {
+    const swapOp = makeSwapOp({
+      periodId,
+      expectedRevision: 4,
+      person1Target: { personId: person1, date: '2030-07-01', dutyDomain: 'MO' },
+      person2Target: { personId: person2, date: '2030-07-01', dutyDomain: 'MO' }
+    });
+    const swapRes = amend(h, swapOp);
+    assert.equal(swapRes.ok, true);
+
+    const tamperedSwap = {
+      ...swapOp,
+      person2: { personId: person3, date: '2030-07-01', dutyDomain: 'MO' }
+    };
+    const res2 = amend(h, tamperedSwap);
+    assert.equal(res2.ok, false);
+    assert.equal(res2.error.code, 'IDEMPOTENCY_MISMATCH');
+  }
+
+  // Case 5: Changed targetEventId in reversal
+  {
+    // Make an amendment to reverse
+    const amendOp = makeAmendOp({ periodId, expectedRevision: 5, date: '2030-07-04' });
+    const amendRes = amend(h, amendOp);
+
+    const revOp = makeReversalOp({ periodId, expectedRevision: 6, targetEventId: amendRes.eventId });
+    const revRes = amendReversal(h, revOp);
+    assert.equal(revRes.ok, true);
+
+    const tamperedRev = { ...revOp, targetEventId: crypto.randomUUID() };
+    const res2 = amendReversal(h, tamperedRev);
+    assert.equal(res2.ok, false);
+    assert.equal(res2.error.code, 'IDEMPOTENCY_MISMATCH');
+  }
+});
+
+test('32. History privacy boundary: non-admin viewer response strips private identifiers and admin metadata', () => {
+  const { h, periodId } = setupPublished();
+
+  const op1 = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person1,
+    date: '2030-07-01',
+    adminNote: 'Admin confidential internal reason 1'
+  });
+  const res1 = amend(h, op1);
+
+  const op2 = makeAmendOp({
+    periodId,
+    expectedRevision: 2,
+    personId: person2,
+    date: '2030-07-02',
+    adminNote: 'Admin confidential internal reason 2'
+  });
+  const res2 = amend(h, op2);
+
+  // Admin request: receives full metadata
+  const adminHist = amendmentHistory(h, periodId);
+  assert.equal(adminHist.isAdmin, true);
+  assert.equal(adminHist.events[0].AdminNote, 'Admin confidential internal reason 2');
+  assert.equal(adminHist.events[0].CreatedBy, 'admin@example.invalid');
+  assert.equal(adminHist.events[0].OperationId, op2.operationId);
+  assert.equal(adminHist.events[0].canReverse, true);
+
+  // Viewer request: authenticated non-admin viewer
+  const hViewer = setup({ tables: h.grids, activeEmail: 'viewer@example.invalid', adminEmail: 'admin@example.invalid' });
+  const viewerHist = amendmentHistory(hViewer, periodId);
+  assert.equal(viewerHist.isAdmin, false);
+
+  const viewerJson = JSON.stringify(viewerHist);
+
+  // Assert absence of confidential admin note
+  assert.equal(viewerJson.includes('Admin confidential internal reason'), false, 'Viewer response must not contain AdminNote');
+
+  // Assert absence of admin email
+  assert.equal(viewerJson.includes('admin@example.invalid'), false, 'Viewer response must not contain administrator email');
+
+  // Assert absence of operation IDs
+  assert.equal(viewerJson.includes(op1.operationId), false, 'Viewer response must not contain operationId 1');
+  assert.equal(viewerJson.includes(op2.operationId), false, 'Viewer response must not contain operationId 2');
+
+  // Assert each event and line has only public/safe fields
+  viewerHist.events.forEach(ev => {
+    assert.equal(ev.AdminNote, undefined);
+    assert.equal(ev.CreatedBy, undefined);
+    assert.equal(ev.OperationId, undefined);
+    assert.equal(ev.canReverse, undefined);
+    assert.equal(ev.reversalIneligibilityReason, undefined);
+    assert.ok(ev.EventId);
+    assert.ok(ev.EventType);
+    assert.ok(ev.PublicReasonCode);
+    assert.ok(ev.CreatedAt);
+    assert.equal(typeof ev.isReversed, 'boolean');
+
+    ev.lines.forEach(line => {
+      assert.equal(line.AdminNote, undefined);
+      assert.equal(line.CreatedBy, undefined);
+      assert.equal(line.OperationId, undefined);
+      assert.equal(line.ShortageReason, undefined);
+      assert.ok(line.LineId);
+      assert.ok(line.PersonId);
+      assert.ok(line.Date);
+      assert.ok(line.DutyDomain);
+      assert.ok(line.BeforeCurrentJson);
+      assert.ok(line.AfterCurrentJson);
+    });
+  });
 });

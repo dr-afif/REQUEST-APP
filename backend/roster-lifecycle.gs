@@ -750,15 +750,19 @@ function rosterLifecycleAmend_(data, actor) {
       try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
     }
     if (!result) {
+      const evRows = rosterLifecycleFindEventsByOperation_(operationId);
+      const firstEv = evRows[0] || {};
       result = {
         ok: true,
         operationId: operationId,
         periodId: periodId,
         state: 'AMENDED',
         revision: currentRevision,
+        eventId: firstEv.EventId || '',
+        lineCount: evRows.length,
         projectionChecksum: periodRecord.ProjectionChecksum,
         amendedAt: periodRecord.UpdatedAt || timestamp,
-        amendedBy: actor
+        amendedBy: firstEv.CreatedBy || actor
       };
     }
     if (existingLog) {
@@ -1053,16 +1057,22 @@ function rosterLifecycleAmendReversal_(data, actor) {
       try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
     }
     if (!result) {
+      const evRows = rosterLifecycleFindEventsByOperation_(operationId);
+      const firstEv = evRows[0] || {};
+      const allEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+      const activeCount = RosterLifecycle.countActiveAmendments(RosterLifecycle.groupEventLines(allEvents));
       result = {
         ok: true,
         operationId: operationId,
         periodId: periodId,
         state: periodRecord.State,
         revision: currentRevision,
+        reversalEventId: firstEv.EventId || '',
         targetEventId: targetEventId,
+        activeAmendmentCount: activeCount,
         projectionChecksum: periodRecord.ProjectionChecksum,
         reversedAt: periodRecord.UpdatedAt || timestamp,
-        reversedBy: actor
+        reversedBy: firstEv.CreatedBy || actor
       };
     }
     if (existingLog) {
@@ -1218,6 +1228,28 @@ function rosterLifecycleAmendReversal_(data, actor) {
   return confirmedResult;
 }
 
+function rosterLifecycleSanitizeAssignmentsForViewer_(assignmentsJson) {
+  if (!assignmentsJson) return '[]';
+  try {
+    const list = typeof assignmentsJson === 'string' ? JSON.parse(assignmentsJson) : assignmentsJson;
+    if (!Array.isArray(list)) return '[]';
+    const safeList = list.map(function(item) {
+      if (!item || typeof item !== 'object') return item;
+      return {
+        AssignmentId: item.AssignmentId || item.assignmentId,
+        PersonId: item.PersonId || item.personId,
+        Date: item.Date || item.date,
+        DutyDomain: item.DutyDomain || item.dutyDomain,
+        ShiftCode: item.ShiftCode || item.shiftCode,
+        rawShift: item.rawShift || item.RawShift || item.ShiftCode || item.shiftCode
+      };
+    });
+    return JSON.stringify(safeList);
+  } catch (_) {
+    return '[]';
+  }
+}
+
 function rosterLifecycleAmendmentHistory_(data, principal) {
   const periodId = RosterCompatibility.validatePeriod(String(data.periodId || data.period || ''));
   rosterLifecycleEnsureAllSchemas_();
@@ -1252,16 +1284,24 @@ function rosterLifecycleAmendmentHistory_(data, principal) {
       (b.EventId || '').localeCompare(a.EventId || '');
   });
 
-  // Privacy separation: omit AdminNote and CreatedBy if non-admin viewer
+  // Privacy separation: omit private fields if non-admin viewer
   const isAdmin = Boolean(principal && principal.isAdmin);
   if (!isAdmin) {
     events.forEach(function(ev) {
       delete ev.AdminNote;
       delete ev.CreatedBy;
+      delete ev.OperationId;
+      delete ev.canReverse;
+      delete ev.reversalIneligibilityReason;
       if (Array.isArray(ev.lines)) {
         ev.lines.forEach(function(l) {
           delete l.AdminNote;
           delete l.CreatedBy;
+          delete l.OperationId;
+          delete l.ShortageReason;
+          l.PlannedAssignmentJson = rosterLifecycleSanitizeAssignmentsForViewer_(l.PlannedAssignmentJson);
+          l.BeforeCurrentJson = rosterLifecycleSanitizeAssignmentsForViewer_(l.BeforeCurrentJson);
+          l.AfterCurrentJson = rosterLifecycleSanitizeAssignmentsForViewer_(l.AfterCurrentJson);
         });
       }
     });
@@ -1761,15 +1801,40 @@ function rosterLifecycleRecover_(operationId) {
   } else if (log.OperationType === 'PERIOD_AMEND' || log.OperationType === 'PERIOD_AMEND_REVERSAL') {
     if (period && (period.State === 'AMENDED' || period.State === 'PUBLISHED') && period.LastOperationId === operationId) {
       if (!log.ResultJson) {
-        log.ResultJson = JSON.stringify({
-          ok: true,
-          operationId: operationId,
-          periodId: periodId,
-          state: period.State,
-          revision: Number(period.Revision),
-          projectionChecksum: period.ProjectionChecksum,
-          updatedAt: period.UpdatedAt
-        });
+        if (log.OperationType === 'PERIOD_AMEND') {
+          const evRows = rosterLifecycleFindEventsByOperation_(operationId);
+          const firstEv = evRows[0] || {};
+          log.ResultJson = JSON.stringify({
+            ok: true,
+            operationId: operationId,
+            periodId: periodId,
+            state: period.State,
+            revision: Number(period.Revision),
+            eventId: firstEv.EventId || '',
+            lineCount: evRows.length,
+            projectionChecksum: period.ProjectionChecksum,
+            amendedAt: period.UpdatedAt || firstEv.CreatedAt || '',
+            amendedBy: firstEv.CreatedBy || ''
+          });
+        } else {
+          const evRows = rosterLifecycleFindEventsByOperation_(operationId);
+          const firstEv = evRows[0] || {};
+          const allEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+          const activeCount = RosterLifecycle.countActiveAmendments(RosterLifecycle.groupEventLines(allEvents));
+          log.ResultJson = JSON.stringify({
+            ok: true,
+            operationId: operationId,
+            periodId: periodId,
+            state: period.State,
+            revision: Number(period.Revision),
+            reversalEventId: firstEv.EventId || '',
+            targetEventId: firstEv.ReversesEventId || '',
+            activeAmendmentCount: activeCount,
+            projectionChecksum: period.ProjectionChecksum,
+            reversedAt: period.UpdatedAt || firstEv.CreatedAt || '',
+            reversedBy: firstEv.CreatedBy || ''
+          });
+        }
       }
       log.Status = 'CONFIRMED';
       log.ErrorCode = '';
