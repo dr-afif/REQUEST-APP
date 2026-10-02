@@ -127,7 +127,7 @@ function rosterV2DispatchGet_(parameters) {
   const action = String(parameters.action || '').toLowerCase();
   if (['rosterv2draft','rosterv2operation','rosterv2draftschema'].includes(action)) return rosterDraftRoute_(action, parameters);
   if (['rosterv2offpolicies','rosterv2guidanceschema'].includes(action)) return rosterGuidanceRoute_(action, parameters);
-  if (['rosterv2lifecycleschema','rosterv2periodlifecycle'].includes(action)) return rosterLifecycleRoute_(action, parameters);
+  if (['rosterv2lifecycleschema','rosterv2periodlifecycle','rosterv2amendmenthistory'].includes(action)) return rosterLifecycleRoute_(action, parameters);
   if (action === 'rosterv2schema') return createJsonResponse(rosterV2Schema_());
   if (action === 'rosterv2period') return createJsonResponse(rosterV2Period_(parameters));
   // Reserve the namespace: private/unknown v2 reads cannot fall through to legacy Requests.
@@ -139,7 +139,7 @@ function rosterV2DispatchPost_(data) {
   const action = String(data.action || '').toLowerCase();
   if (['rosterv2draftpatch','rosterv2draftrecover','rosterv2draftabandon'].includes(action)) return rosterDraftRoute_(action, data);
   if (['rosterv2offpolicy','rosterv2offpolicyrecover'].includes(action)) return rosterGuidanceRoute_(action, data);
-  if (['rosterv2publish','rosterv2close','rosterv2reopen','rosterv2lifecyclerecover'].includes(action)) return rosterLifecycleRoute_(action, data);
+  if (['rosterv2publish','rosterv2close','rosterv2reopen','rosterv2lifecyclerecover','rosterv2amend','rosterv2amendreversal'].includes(action)) return rosterLifecycleRoute_(action, data);
   rosterV2RequireAdmin_();
   throw new Error('Official v2 writes are disabled in Phase 1.');
 }

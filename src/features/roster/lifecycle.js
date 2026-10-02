@@ -99,6 +99,41 @@ const RosterLifecycle = (() => {
   const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const genUuid = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid() : '00000000-0000-4000-8000-000000000000');
 
+  // Deterministic UUID generator formatted with RFC 4122 layout (version 4, variant 8).
+  function deterministicUuid(seed, digest) {
+    if (typeof digest === 'function') {
+      const h = digest(seed);
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    }
+    let h1 = 0x811c9dc5, h2 = 0x811c9dc5, h3 = 0x811c9dc5, h4 = 0x811c9dc5;
+    for (let i = 0; i < seed.length; i++) {
+      const c = seed.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 0x01000193);
+      h2 = Math.imul(h2 ^ (c >> 2), 0x01000193);
+      h3 = Math.imul(h3 ^ (c << 2), 0x01000193);
+      h4 = Math.imul(h4 ^ (c + i), 0x01000193);
+    }
+    const hex = (h1 >>> 0).toString(16).padStart(8, '0') +
+      (h2 >>> 0).toString(16).padStart(8, '0') +
+      (h3 >>> 0).toString(16).padStart(8, '0') +
+      (h4 >>> 0).toString(16).padStart(8, '0');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  }
+
+  function deterministicEventId(operationId, eventType, ...context) {
+    const cleanOpId = String(operationId || '').trim();
+    const parts = [cleanOpId, eventType].concat(context.filter(Boolean).map(v => String(v).trim()));
+    const seed = `event:${parts.join(':')}`;
+    return deterministicUuid(seed);
+  }
+
+  function deterministicLineId(eventId, lineIndex, ...context) {
+    const cleanEventId = String(eventId || '').trim();
+    const parts = [cleanEventId, lineIndex].concat(context.filter(Boolean).map(v => String(v).trim()));
+    const seed = `line:${parts.join(':')}`;
+    return deterministicUuid(seed);
+  }
+
   // Deterministic UUID-shaped assignment identifier derived from semantic identity tuple.
   // Formatted with RFC 4122 layout (setting version 4 and variant 8) to satisfy UUID validators,
   // but explicitly documented as a deterministic assignment identifier, not a random UUID v4.
@@ -121,23 +156,7 @@ const RosterLifecycle = (() => {
       seed = `${operationId}:${personId}:${date}:${dutyDomainOrIndex}:${shiftCode}:${raw}:${occurrence}`;
       digest = maybeDigest;
     }
-    if (typeof digest === 'function') {
-      const h = digest(seed);
-      return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
-    }
-    let h1 = 0x811c9dc5, h2 = 0x811c9dc5, h3 = 0x811c9dc5, h4 = 0x811c9dc5;
-    for (let i = 0; i < seed.length; i++) {
-      const c = seed.charCodeAt(i);
-      h1 = Math.imul(h1 ^ c, 0x01000193);
-      h2 = Math.imul(h2 ^ (c >> 2), 0x01000193);
-      h3 = Math.imul(h3 ^ (c << 2), 0x01000193);
-      h4 = Math.imul(h4 ^ (c + i), 0x01000193);
-    }
-    const hex = (h1 >>> 0).toString(16).padStart(8, '0') +
-      (h2 >>> 0).toString(16).padStart(8, '0') +
-      (h3 >>> 0).toString(16).padStart(8, '0') +
-      (h4 >>> 0).toString(16).padStart(8, '0');
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+    return deterministicUuid(seed, digest);
   }
 
   function canTransition(fromState, toState, context = {}) {
@@ -1067,9 +1086,9 @@ const RosterLifecycle = (() => {
     digestFn
   }) {
     RosterCompatibility.validatePeriod(periodId);
-    const eventGroups = Array.isArray(events) && events.length > 0 && events[0]?.lines
+    const eventGroups = Array.isArray(events) && events.length > 0 && events[0]?.lines && Number.isInteger(events[0]?.BaseRevision)
       ? events
-      : groupEventLines(events);
+      : groupEventLines(events.flatMap(e => (e && e.lines) ? e.lines : [e]));
 
     // 1. Initialize Current cells from Planned assignments (pure, no mutation)
     const currentCells = new Map();
@@ -1255,6 +1274,7 @@ const RosterLifecycle = (() => {
       totalEvents: eventGroups.length,
       reversedEventIds: Array.from(reversedEventIds),
       currentAssignments,
+      assignments: currentAssignments,
       currentCells,
       masterRosterProjection,
       projectionChecksum,
@@ -1280,7 +1300,9 @@ const RosterLifecycle = (() => {
     linkedPersonIds = [],
     shortageAccepted = false,
     shortageReason = '',
-    timestamp = new Date().toISOString()
+    timestamp = new Date().toISOString(),
+    eventId: explicitEventId,
+    lineId: explicitLineId
   }) {
     RosterCompatibility.validatePeriod(periodId);
     if (!operationId || !isUuid(operationId)) {
@@ -1303,8 +1325,8 @@ const RosterLifecycle = (() => {
     }
     const reason = validatePublicReasonCode(publicReasonCode);
 
-    const eventId = genUuid();
-    const lineId = genUuid();
+    const eventId = explicitEventId || deterministicEventId(operationId, eventType, cleanPersonId, cleanDate, dutyDomain.trim());
+    const lineId = explicitLineId || deterministicLineId(eventId, 0, cleanPersonId, cleanDate, dutyDomain.trim());
 
     const line = {
       EventId: eventId,
@@ -1333,6 +1355,17 @@ const RosterLifecycle = (() => {
 
     return {
       eventId,
+      EventId: eventId,
+      EventType: line.EventType,
+      OperationId: line.OperationId,
+      PeriodId: line.PeriodId,
+      BaseRevision: line.BaseRevision,
+      ResultRevision: line.ResultRevision,
+      ReversesEventId: line.ReversesEventId,
+      PublicReasonCode: line.PublicReasonCode,
+      AdminNote: line.AdminNote,
+      CreatedAt: line.CreatedAt,
+      CreatedBy: line.CreatedBy,
       lines: [line]
     };
   }
@@ -1347,7 +1380,10 @@ const RosterLifecycle = (() => {
     adminNote = '',
     person1,
     person2,
-    timestamp = new Date().toISOString()
+    timestamp = new Date().toISOString(),
+    eventId: explicitEventId,
+    line1Id: explicitLine1Id,
+    line2Id: explicitLine2Id
   }) {
     RosterCompatibility.validatePeriod(periodId);
     if (!operationId || !isUuid(operationId)) {
@@ -1371,11 +1407,13 @@ const RosterLifecycle = (() => {
     }
     const reason = validatePublicReasonCode(publicReasonCode);
 
-    const eventId = genUuid();
+    const eventId = explicitEventId || deterministicEventId(operationId, 'SWAP', String(person1.personId).trim(), String(person2.personId).trim());
+    const line1Id = explicitLine1Id || deterministicLineId(eventId, 0, String(person1.personId).trim(), String(person1.date).trim(), String(person1.dutyDomain).trim());
+    const line2Id = explicitLine2Id || deterministicLineId(eventId, 1, String(person2.personId).trim(), String(person2.date).trim(), String(person2.dutyDomain).trim());
 
     const line1 = {
       EventId: eventId,
-      LineId: genUuid(),
+      LineId: line1Id,
       EventType: AMENDMENT_EVENT_TYPES.SWAP,
       OperationId: operationId,
       PeriodId: periodId,
@@ -1400,7 +1438,7 @@ const RosterLifecycle = (() => {
 
     const line2 = {
       EventId: eventId,
-      LineId: genUuid(),
+      LineId: line2Id,
       EventType: AMENDMENT_EVENT_TYPES.SWAP,
       OperationId: operationId,
       PeriodId: periodId,
@@ -1425,6 +1463,17 @@ const RosterLifecycle = (() => {
 
     return {
       eventId,
+      EventId: eventId,
+      EventType: line1.EventType,
+      OperationId: line1.OperationId,
+      PeriodId: line1.PeriodId,
+      BaseRevision: line1.BaseRevision,
+      ResultRevision: line1.ResultRevision,
+      ReversesEventId: line1.ReversesEventId,
+      PublicReasonCode: line1.PublicReasonCode,
+      AdminNote: line1.AdminNote,
+      CreatedAt: line1.CreatedAt,
+      CreatedBy: line1.CreatedBy,
       lines: [line1, line2]
     };
   }
@@ -1437,7 +1486,8 @@ const RosterLifecycle = (() => {
     actor,
     publicReasonCode,
     adminNote = '',
-    timestamp = new Date().toISOString()
+    timestamp = new Date().toISOString(),
+    eventId: explicitEventId
   }) {
     if (!targetEvent || !targetEvent.EventId || !Array.isArray(targetEvent.lines) || targetEvent.lines.length === 0) {
       throw fail(LIFECYCLE_ERRORS.VALIDATION_FAILED, 'Valid targetEvent with lines is required for reversal');
@@ -1465,10 +1515,10 @@ const RosterLifecycle = (() => {
       }
     }
 
-    const eventId = genUuid();
-    const lines = targetEvent.lines.map(tgtLine => ({
+    const eventId = explicitEventId || deterministicEventId(operationId, 'REVERSAL', targetEvent.EventId);
+    const lines = targetEvent.lines.map((tgtLine, idx) => ({
       EventId: eventId,
-      LineId: genUuid(),
+      LineId: deterministicLineId(eventId, idx, tgtLine.PersonId, tgtLine.Date, tgtLine.DutyDomain),
       EventType: AMENDMENT_EVENT_TYPES.REVERSAL,
       OperationId: operationId,
       PeriodId: tgtLine.PeriodId,
@@ -1491,8 +1541,20 @@ const RosterLifecycle = (() => {
       CreatedBy: cleanActor
     }));
 
+    const head = lines[0];
     return {
       eventId,
+      EventId: eventId,
+      EventType: head.EventType,
+      OperationId: head.OperationId,
+      PeriodId: head.PeriodId,
+      BaseRevision: head.BaseRevision,
+      ResultRevision: head.ResultRevision,
+      ReversesEventId: head.ReversesEventId,
+      PublicReasonCode: head.PublicReasonCode,
+      AdminNote: head.AdminNote,
+      CreatedAt: head.CreatedAt,
+      CreatedBy: head.CreatedBy,
       lines
     };
   }
@@ -1504,12 +1566,16 @@ const RosterLifecycle = (() => {
     ROSTER_LIFECYCLE_SCHEMAS,
     AMENDMENT_EVENT_TYPES,
     PUBLIC_REASON_CODES,
+    deterministicUuid,
+    deterministicEventId,
+    deterministicLineId,
     deterministicAssignmentId,
     makeCellKey,
     parseCellKey,
     isValidPublicReasonCode,
     validatePublicReasonCode,
     groupEventLines,
+    groupEventRows: groupEventLines,
     countActiveAmendments,
     determineReopenTarget,
     canReverseEvent,

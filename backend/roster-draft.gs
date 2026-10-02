@@ -25,7 +25,7 @@ function rosterDraftLogs_() {
   logs.forEach(function(r) {
     const meaningValid = (r.OperationType === 'DRAFT_PATCH' && typeof r.EntityKey === 'string' && /^draft:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey)) ||
       (r.OperationType === 'OFF_POLICY_UPSERT' && r.EntityKey === 'off-policies') ||
-      (['PERIOD_PUBLISH', 'PERIOD_CLOSE', 'PERIOD_REOPEN'].includes(r.OperationType) && typeof r.EntityKey === 'string' && /^period:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey));
+      (['PERIOD_PUBLISH', 'PERIOD_CLOSE', 'PERIOD_REOPEN', 'PERIOD_AMEND', 'PERIOD_AMEND_REVERSAL'].includes(r.OperationType) && typeof r.EntityKey === 'string' && /^period:(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(r.EntityKey));
     DraftProtocol.ensure(DraftProtocol.uuid(r.OperationId) && !ids.has(r.OperationId) &&
       DraftProtocol.uuid(r.ClientId) && DraftProtocol.uuid(r.TabId) && meaningValid &&
       typeof r.PayloadHash === 'string' && /^[0-9a-f]{64}$/.test(r.PayloadHash) && revision(r.ExpectedRevision) &&
@@ -75,7 +75,7 @@ function rosterDraftStatus_(id) {
   let result = null;
   if (log.Status === 'CONFIRMED') {
     if(log.OperationType==='OFF_POLICY_UPSERT')return rosterGuidanceStatus_(id);
-    if(['PERIOD_PUBLISH','PERIOD_CLOSE','PERIOD_REOPEN'].includes(log.OperationType))return rosterLifecycleStatus_(id);
+    if(['PERIOD_PUBLISH','PERIOD_CLOSE','PERIOD_REOPEN','PERIOD_AMEND','PERIOD_AMEND_REVERSAL'].includes(log.OperationType))return rosterLifecycleStatus_(id);
     rosterDraftState_(log.EntityKey);const stored = JSON.parse(log.ResultJson);
     result = {ok:true,operationId:stored.operationId,entityKey:stored.entityKey,revision:stored.revision,checksum:stored.checksum,patches:stored.patches};
   }
@@ -120,7 +120,7 @@ function rosterDraftRecover_(id) {
   const log = rosterDraftLogs_().find(function(r) { return r.OperationId === id; });
   DraftProtocol.ensure(log,'ENTITY_NOT_FOUND');
   if(log.OperationType==='OFF_POLICY_UPSERT')return rosterGuidanceRecover_(id);
-  if(['PERIOD_PUBLISH','PERIOD_CLOSE','PERIOD_REOPEN'].includes(log.OperationType))return rosterLifecycleRecover_(id);
+  if(['PERIOD_PUBLISH','PERIOD_CLOSE','PERIOD_REOPEN','PERIOD_AMEND','PERIOD_AMEND_REVERSAL'].includes(log.OperationType))return rosterLifecycleRecover_(id);
   if (['CONFIRMED','FAILED'].includes(log.Status)) return rosterDraftStatus_(id);
   const state = rosterDraftState_(log.EntityKey), rows = rosterDraftTable_('RosterDraftPatches').filter(function(r) { return r.OperationId === id; });
   if (!rows.length) {

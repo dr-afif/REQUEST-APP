@@ -214,6 +214,138 @@ function rosterLifecycleWriteLog_(logRecord) {
   SpreadsheetApp.flush();
 }
 
+function rosterLifecycleGetPrincipalSafe_() {
+  try {
+    const allowed = String(PropertiesService.getScriptProperties().getProperty('ROSTER_V2_ADMIN_EMAIL') || '').trim().toLowerCase();
+    const caller = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
+    if (allowed && caller && allowed === caller) {
+      return { isAdmin: true, email: caller };
+    }
+    return { isAdmin: false, email: caller };
+  } catch (_) {
+    return { isAdmin: false, email: '' };
+  }
+}
+
+function rosterLifecycleGetPeople_() {
+  const table = rosterV2ReadTable_('RosterPeople');
+  if (!table.exists) return [];
+  return rosterV2Records_(table, ['PersonId', 'DirectoryType', 'CurrentDisplayName', 'LegacyNamesJson', 'Active']);
+}
+
+function rosterLifecycleGetConfirmedOperationIds_(periodId) {
+  const table = rosterV2ReadTable_('OperationLog');
+  const confirmed = new Set();
+  if (!table.exists) return confirmed;
+  const eKeyIdx = table.headers.indexOf('EntityKey');
+  const statusIdx = table.headers.indexOf('Status');
+  const opIdIdx = table.headers.indexOf('OperationId');
+  const expectedKey = 'period:' + periodId;
+  for (let i = 0; i < table.rows.length; i++) {
+    const row = table.rows[i];
+    if (row[eKeyIdx] === expectedKey && row[statusIdx] === 'CONFIRMED') {
+      confirmed.add(row[opIdIdx]);
+    }
+  }
+  return confirmed;
+}
+
+function rosterLifecycleFindConfirmedEventsByPeriod_(periodId, currentOperationIdToInclude) {
+  const allEvents = rosterLifecycleFindEventsByPeriod_(periodId);
+  const confirmedOpIds = rosterLifecycleGetConfirmedOperationIds_(periodId);
+  return allEvents.filter(function(event) {
+    if (confirmedOpIds.has(event.OperationId)) return true;
+    if (currentOperationIdToInclude && event.OperationId === currentOperationIdToInclude) return true;
+    return false;
+  });
+}
+
+function rosterLifecycleWriteMasterRoster_(mergedRows) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let masterSheet = ss.getSheetByName('MasterRoster');
+  if (!masterSheet) {
+    masterSheet = ss.insertSheet('MasterRoster');
+  }
+  masterSheet.getDataRange().clearContent();
+  const masterMatrix = [['Name', 'Date', 'Shift']].concat(
+    mergedRows.map(function(r) { return [r.Name || '', r.Date || '', r.Shift || '']; })
+  );
+  masterSheet.getRange(1, 1, masterMatrix.length, 3).setValues(masterMatrix);
+  SpreadsheetApp.flush();
+}
+
+function rosterLifecyclePersistEventsIdempotently_(canonicalLines) {
+  if (!canonicalLines || canonicalLines.length === 0) return;
+  const existingRows = rosterLifecycleGetRecords_('RosterEvents');
+  const existingByLineId = {};
+  existingRows.forEach(function(r) {
+    if (r.LineId) existingByLineId[r.LineId] = r;
+  });
+
+  const linesToAppend = [];
+  const immutableFields = [
+    'EventType', 'OperationId', 'PeriodId', 'PersonId', 'Date', 'DutyDomain',
+    'BeforeCurrentJson', 'AfterCurrentJson', 'PlannedAssignmentJson', 'PublicReasonCode',
+    'ShortageAccepted', 'ShortageReason', 'GoffTransactionIdsJson'
+  ];
+
+  canonicalLines.forEach(function(line) {
+    const existing = existingByLineId[line.LineId];
+    if (existing) {
+      for (let i = 0; i < immutableFields.length; i++) {
+        const field = immutableFields[i];
+        const existVal = existing[field] === undefined ? '' : String(existing[field]);
+        const lineVal = line[field] === undefined ? '' : String(line[field]);
+        if (existVal !== lineVal) {
+          throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH', {
+            message: 'Existing event line ' + line.LineId + ' field ' + field + ' differs: existing="' + existVal + '", proposed="' + lineVal + '"'
+          });
+        }
+      }
+    } else {
+      linesToAppend.push(line);
+    }
+  });
+
+  if (linesToAppend.length > 0) {
+    rosterLifecycleAppendRows_('RosterEvents', linesToAppend);
+  }
+}
+
+function rosterLifecycleAdaptAssignmentsToCell_(assignments, targetPersonId, targetDate, targetDutyDomain) {
+  if (!Array.isArray(assignments)) {
+    if (assignments && typeof assignments === 'object') assignments = [assignments];
+    else if (typeof assignments === 'string' && assignments.trim()) {
+      try {
+        const parsed = JSON.parse(assignments);
+        assignments = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (_) {
+        assignments = [{ shiftCode: assignments }];
+      }
+    } else return [];
+  }
+  return assignments.map(function(a) {
+    if (typeof a === 'string') {
+      return {
+        PersonId: targetPersonId,
+        Date: targetDate,
+        DutyDomain: targetDutyDomain,
+        ShiftCode: a,
+        rawShift: a
+      };
+    }
+    const raw = a._rawShift || a.rawShift || a.ShiftCode || a.shiftCode || '';
+    const shiftCode = a.ShiftCode || a.shiftCode || raw;
+    return {
+      PersonId: targetPersonId,
+      Date: targetDate,
+      DutyDomain: targetDutyDomain,
+      ShiftCode: shiftCode,
+      rawShift: raw || shiftCode
+    };
+  });
+}
+
 function rosterLifecyclePublish_(data, actor) {
   const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
   const operationId = String(data.operationId || '').trim();
@@ -509,6 +641,641 @@ function rosterLifecyclePublish_(data, actor) {
   return confirmedResult;
 }
 
+function rosterLifecycleAmend_(data, actor) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
+  const operationId = String(data.operationId || '').trim();
+  if (!DraftProtocol.uuid(operationId)) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Valid operationId UUID is required' });
+  }
+
+  const clientId = String(data.clientId || operationId);
+  const tabId = String(data.tabId || operationId);
+  const entityKey = 'period:' + periodId;
+  const expectedRevision = Number(data.expectedRevision !== undefined ? data.expectedRevision : (data.payload && data.payload.expectedRevision !== undefined ? data.payload.expectedRevision : 0));
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  const payload = data.payload || data;
+  const eventType = String(payload.eventType || (payload.person1 ? 'SWAP' : 'ADMIN_CORRECTION')).toUpperCase();
+  const publicReasonCode = payload.publicReasonCode || (eventType === 'SWAP' ? 'SHIFT_SWAP' : 'ADMIN_CORRECTION');
+  const adminNote = String(payload.adminNote || '').trim();
+
+  let semanticPayload;
+  if (eventType === 'SWAP') {
+    const p1 = payload.person1;
+    const p2 = payload.person2;
+    if (!p1 || !p2 || !p1.personId || !p2.personId || !p1.date || !p2.date || !p1.dutyDomain || !p2.dutyDomain) {
+      throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'SWAP requires person1 and person2 with personId, date, and dutyDomain' });
+    }
+    semanticPayload = {
+      periodId: periodId,
+      eventType: 'SWAP',
+      person1: {
+        personId: String(p1.personId).trim(),
+        date: String(p1.date).trim(),
+        dutyDomain: String(p1.dutyDomain).trim()
+      },
+      person2: {
+        personId: String(p2.personId).trim(),
+        date: String(p2.date).trim(),
+        dutyDomain: String(p2.dutyDomain).trim()
+      },
+      publicReasonCode: publicReasonCode,
+      adminNote: adminNote
+    };
+  } else {
+    const personId = String(payload.personId || '').trim();
+    const date = String(payload.date || '').trim();
+    const dutyDomain = String(payload.dutyDomain || '').trim();
+    if (!personId || !date || !dutyDomain) {
+      throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Amendment requires personId, date, and dutyDomain' });
+    }
+    const afterAssignments = payload.afterAssignments !== undefined ? payload.afterAssignments : (payload.shiftCode !== undefined ? [{ shiftCode: payload.shiftCode }] : []);
+    semanticPayload = {
+      periodId: periodId,
+      eventType: eventType,
+      personId: personId,
+      date: date,
+      dutyDomain: dutyDomain,
+      afterAssignments: afterAssignments,
+      publicReasonCode: publicReasonCode,
+      adminNote: adminNote
+    };
+  }
+
+  const meaning = {
+    operationId: operationId,
+    clientId: clientId,
+    tabId: tabId,
+    operationType: 'PERIOD_AMEND',
+    entityKey: entityKey,
+    expectedRevision: expectedRevision,
+    payload: semanticPayload
+  };
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(meaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found' });
+  }
+
+  const currentState = String(periodRecord.State || '').toUpperCase();
+  if (currentState !== 'PUBLISHED' && currentState !== 'AMENDED') {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot be amended' });
+  }
+
+  const currentRevision = Number(periodRecord.Revision || 0);
+
+  // Critical recovery window check: if period was already updated with this operationId
+  if (periodRecord.LastOperationId === operationId) {
+    let result = null;
+    if (existingLog && existingLog.ResultJson) {
+      try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
+    }
+    if (!result) {
+      result = {
+        ok: true,
+        operationId: operationId,
+        periodId: periodId,
+        state: 'AMENDED',
+        revision: currentRevision,
+        projectionChecksum: periodRecord.ProjectionChecksum,
+        amendedAt: periodRecord.UpdatedAt || timestamp,
+        amendedBy: actor
+      };
+    }
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = currentRevision;
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = periodRecord.UpdatedAt || timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  if (expectedRevision !== currentRevision) {
+    throw DraftProtocol.fail('REVISION_CONFLICT', {
+      entityKey: entityKey,
+      currentRevision: currentRevision,
+      expectedRevision: expectedRevision
+    });
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'PERIOD_AMEND',
+      EntityKey: entityKey,
+      ExpectedRevision: expectedRevision,
+      ResultRevision: expectedRevision + 1,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  // Load immutable Planned rows
+  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+  DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+  // Load confirmed amendment/reversal events (excluding unconfirmed operations)
+  const confirmedRows = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+  const priorConfirmedRows = confirmedRows.filter(function(r) { return r.OperationId !== operationId; });
+  const priorConfirmedEvents = RosterLifecycle.groupEventLines(priorConfirmedRows);
+
+  // Resolve authoritative current roster before this amendment
+  const authoritativeCurrent = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: priorConfirmedEvents,
+    people: rosterLifecycleGetPeople_(),
+    digestFn: rosterV2Digest_
+  });
+
+  // Construct canonical event lines server-side
+  let canonicalEvent;
+  if (eventType === 'SWAP') {
+    const p1 = semanticPayload.person1;
+    const p2 = semanticPayload.person2;
+    const cellKey1 = RosterLifecycle.makeCellKey(p1.personId, p1.date, p1.dutyDomain);
+    const cellKey2 = RosterLifecycle.makeCellKey(p2.personId, p2.date, p2.dutyDomain);
+
+    const cell1 = authoritativeCurrent.currentCells ? authoritativeCurrent.currentCells.get(cellKey1) : null;
+    const cell2 = authoritativeCurrent.currentCells ? authoritativeCurrent.currentCells.get(cellKey2) : null;
+    const cell1Assignments = cell1 || [];
+    const cell2Assignments = cell2 || [];
+
+    const planned1 = plannedAssignments.filter(function(a) {
+      return a.PersonId === p1.personId && a.Date === p1.date && a.DutyDomain === p1.dutyDomain;
+    });
+    const planned2 = plannedAssignments.filter(function(a) {
+      return a.PersonId === p2.personId && a.Date === p2.date && a.DutyDomain === p2.dutyDomain;
+    });
+
+    const after1 = rosterLifecycleAdaptAssignmentsToCell_(cell2Assignments, p1.personId, p1.date, p1.dutyDomain);
+    const after2 = rosterLifecycleAdaptAssignmentsToCell_(cell1Assignments, p2.personId, p2.date, p2.dutyDomain);
+
+    canonicalEvent = RosterLifecycle.createSwapEvent({
+      periodId: periodId,
+      baseRevision: currentRevision,
+      resultRevision: currentRevision + 1,
+      operationId: operationId,
+      actor: actor,
+      publicReasonCode: semanticPayload.publicReasonCode,
+      adminNote: semanticPayload.adminNote,
+      person1: {
+        personId: p1.personId,
+        date: p1.date,
+        dutyDomain: p1.dutyDomain,
+        beforeAssignments: cell1Assignments,
+        afterAssignments: after1,
+        plannedAssignments: planned1
+      },
+      person2: {
+        personId: p2.personId,
+        date: p2.date,
+        dutyDomain: p2.dutyDomain,
+        beforeAssignments: cell2Assignments,
+        afterAssignments: after2,
+        plannedAssignments: planned2
+      },
+      timestamp: timestamp
+    });
+  } else {
+    const pId = semanticPayload.personId;
+    const d = semanticPayload.date;
+    const dom = semanticPayload.dutyDomain;
+    const cellKey = RosterLifecycle.makeCellKey(pId, d, dom);
+
+    const cell = authoritativeCurrent.currentCells ? authoritativeCurrent.currentCells.get(cellKey) : null;
+    const beforeAssignments = cell || [];
+
+    const planned = plannedAssignments.filter(function(a) {
+      return a.PersonId === pId && a.Date === d && a.DutyDomain === dom;
+    });
+
+    const normalizedAfter = rosterLifecycleAdaptAssignmentsToCell_(semanticPayload.afterAssignments, pId, d, dom);
+
+    canonicalEvent = RosterLifecycle.createAmendmentEvent({
+      periodId: periodId,
+      baseRevision: currentRevision,
+      resultRevision: currentRevision + 1,
+      operationId: operationId,
+      actor: actor,
+      eventType: eventType,
+      publicReasonCode: semanticPayload.publicReasonCode,
+      adminNote: semanticPayload.adminNote,
+      personId: pId,
+      date: d,
+      dutyDomain: dom,
+      beforeAssignments: beforeAssignments,
+      afterAssignments: normalizedAfter,
+      plannedAssignments: planned,
+      timestamp: timestamp
+    });
+  }
+
+  // Validate event contract
+  RosterLifecycle.groupEventLines(canonicalEvent.lines);
+
+  // Persist event rows idempotently
+  rosterLifecyclePersistEventsIdempotently_(canonicalEvent.lines);
+
+  // Compute intended Current
+  const intendedEvents = priorConfirmedEvents.concat([canonicalEvent]);
+  const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: intendedEvents,
+    people: rosterLifecycleGetPeople_(),
+    digestFn: rosterV2Digest_
+  });
+
+  // Project to MasterRoster and write
+  const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || intendedCurrent.assignments || []);
+  const masterTable = rosterV2ReadTable_('MasterRoster');
+  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+  rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+  // Read back and verify projection checksum
+  const readbackTable = rosterV2ReadTable_('MasterRoster');
+  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+  const targetMonthPersistedRows = readbackRows.filter(function(r) {
+    const ld = RosterCompatibility.localDate(r.Date);
+    return ld && ld.slice(0, 7) === periodId;
+  });
+
+  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+  if (actualChecksum !== expectedChecksum) {
+    existingLog.Status = 'RECOVERY_REQUIRED';
+    existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+    rosterLifecycleWriteLog_(existingLog);
+    throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
+      actual: actualChecksum,
+      expected: expectedChecksum
+    });
+  }
+
+  // Update RosterPeriods
+  const updatedPeriod = Object.assign({}, periodRecord, {
+    State: 'AMENDED',
+    Revision: currentRevision + 1,
+    ProjectionChecksum: actualChecksum,
+    LastOperationId: operationId,
+    UpdatedAt: timestamp
+  });
+  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+  // Confirm OperationLog
+  const confirmedResult = {
+    ok: true,
+    operationId: operationId,
+    periodId: periodId,
+    state: 'AMENDED',
+    revision: currentRevision + 1,
+    eventId: canonicalEvent.EventId,
+    lineCount: canonicalEvent.lines.length,
+    projectionChecksum: actualChecksum,
+    amendedAt: timestamp,
+    amendedBy: actor
+  };
+  existingLog.Status = 'CONFIRMED';
+  existingLog.ResultRevision = currentRevision + 1;
+  existingLog.ResultJson = JSON.stringify(confirmedResult);
+  existingLog.CompletedAt = new Date().toISOString();
+  existingLog.ErrorCode = '';
+  rosterLifecycleWriteLog_(existingLog);
+
+  return confirmedResult;
+}
+
+function rosterLifecycleAmendReversal_(data, actor) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
+  const operationId = String(data.operationId || '').trim();
+  if (!DraftProtocol.uuid(operationId)) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Valid operationId UUID is required' });
+  }
+
+  const clientId = String(data.clientId || operationId);
+  const tabId = String(data.tabId || operationId);
+  const entityKey = 'period:' + periodId;
+  const expectedRevision = Number(data.expectedRevision !== undefined ? data.expectedRevision : (data.payload && data.payload.expectedRevision !== undefined ? data.payload.expectedRevision : 0));
+  const targetEventId = String(data.targetEventId || (data.payload && data.payload.targetEventId) || '').trim();
+  const adminNote = String(data.adminNote || (data.payload && data.payload.adminNote) || '').trim();
+  const publicReasonCode = String(data.publicReasonCode || (data.payload && data.payload.publicReasonCode) || 'REVERSAL').trim();
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!targetEventId) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'targetEventId is required for reversal' });
+  }
+
+  const meaning = {
+    operationId: operationId,
+    clientId: clientId,
+    tabId: tabId,
+    operationType: 'PERIOD_AMEND_REVERSAL',
+    entityKey: entityKey,
+    expectedRevision: expectedRevision,
+    payload: {
+      periodId: periodId,
+      targetEventId: targetEventId,
+      publicReasonCode: publicReasonCode,
+      adminNote: adminNote
+    }
+  };
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(meaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found' });
+  }
+
+  const currentState = String(periodRecord.State || '').toUpperCase();
+  if (currentState !== 'AMENDED' && currentState !== 'PUBLISHED') {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot have amendments reversed; must be AMENDED or PUBLISHED' });
+  }
+
+  const currentRevision = Number(periodRecord.Revision || 0);
+
+  // Critical recovery window check: if period was already updated with this operationId
+  if (periodRecord.LastOperationId === operationId) {
+    let result = null;
+    if (existingLog && existingLog.ResultJson) {
+      try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
+    }
+    if (!result) {
+      result = {
+        ok: true,
+        operationId: operationId,
+        periodId: periodId,
+        state: periodRecord.State,
+        revision: currentRevision,
+        targetEventId: targetEventId,
+        projectionChecksum: periodRecord.ProjectionChecksum,
+        reversedAt: periodRecord.UpdatedAt || timestamp,
+        reversedBy: actor
+      };
+    }
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = currentRevision;
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = periodRecord.UpdatedAt || timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  if (expectedRevision !== currentRevision) {
+    throw DraftProtocol.fail('REVISION_CONFLICT', {
+      entityKey: entityKey,
+      currentRevision: currentRevision,
+      expectedRevision: expectedRevision
+    });
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'PERIOD_AMEND_REVERSAL',
+      EntityKey: entityKey,
+      ExpectedRevision: expectedRevision,
+      ResultRevision: expectedRevision + 1,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  // Load confirmed amendment/reversal events
+  const confirmedRows = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+  const priorConfirmedRows = confirmedRows.filter(function(r) { return r.OperationId !== operationId; });
+  const priorConfirmedEvents = RosterLifecycle.groupEventLines(priorConfirmedRows);
+
+  // Locate canonical target event
+  const targetEvent = priorConfirmedEvents.find(function(e) { return e.EventId === targetEventId; });
+  if (!targetEvent) {
+    throw DraftProtocol.fail('EVENT_NOT_FOUND', { message: 'Target event ' + targetEventId + ' not found in confirmed events' });
+  }
+
+  // Validate reversal eligibility using pure canReverseEvent
+  const revCheck = RosterLifecycle.canReverseEvent(targetEventId, priorConfirmedEvents);
+  if (!revCheck.canReverse) {
+    throw DraftProtocol.fail(revCheck.code || 'REVERSAL_DEPENDENCY_CONFLICT', { message: revCheck.reason });
+  }
+
+  // Construct reversal compensating event
+  const reversalEvent = RosterLifecycle.createReversalEvent({
+    targetEvent: targetEvent,
+    baseRevision: currentRevision,
+    resultRevision: currentRevision + 1,
+    operationId: operationId,
+    actor: actor,
+    publicReasonCode: publicReasonCode,
+    adminNote: adminNote,
+    timestamp: timestamp
+  });
+
+  // Persist reversal event rows idempotently
+  rosterLifecyclePersistEventsIdempotently_(reversalEvent.lines);
+
+  // Load immutable Planned rows
+  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+  DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+  // Compute intended Current
+  const intendedEvents = priorConfirmedEvents.concat([reversalEvent]);
+  const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: intendedEvents,
+    people: rosterLifecycleGetPeople_(),
+    digestFn: rosterV2Digest_
+  });
+
+  // Determine next lifecycle state based on active amendments
+  const activeCount = RosterLifecycle.countActiveAmendments(intendedEvents);
+  const nextState = activeCount > 0 ? 'AMENDED' : 'PUBLISHED';
+
+  // Project to MasterRoster and write
+  const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || intendedCurrent.assignments || []);
+  const masterTable = rosterV2ReadTable_('MasterRoster');
+  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+  rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+  // Read back and verify projection checksum
+  const readbackTable = rosterV2ReadTable_('MasterRoster');
+  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+  const targetMonthPersistedRows = readbackRows.filter(function(r) {
+    const ld = RosterCompatibility.localDate(r.Date);
+    return ld && ld.slice(0, 7) === periodId;
+  });
+
+  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+  if (actualChecksum !== expectedChecksum) {
+    existingLog.Status = 'RECOVERY_REQUIRED';
+    existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+    rosterLifecycleWriteLog_(existingLog);
+    throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
+      actual: actualChecksum,
+      expected: expectedChecksum
+    });
+  }
+
+  // Update RosterPeriods
+  const updatedPeriod = Object.assign({}, periodRecord, {
+    State: nextState,
+    Revision: currentRevision + 1,
+    ProjectionChecksum: actualChecksum,
+    LastOperationId: operationId,
+    UpdatedAt: timestamp
+  });
+  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+  // Confirm OperationLog
+  const confirmedResult = {
+    ok: true,
+    operationId: operationId,
+    periodId: periodId,
+    state: nextState,
+    revision: currentRevision + 1,
+    reversalEventId: reversalEvent.EventId,
+    targetEventId: targetEventId,
+    activeAmendmentCount: activeCount,
+    projectionChecksum: actualChecksum,
+    reversedAt: timestamp,
+    reversedBy: actor
+  };
+  existingLog.Status = 'CONFIRMED';
+  existingLog.ResultRevision = currentRevision + 1;
+  existingLog.ResultJson = JSON.stringify(confirmedResult);
+  existingLog.CompletedAt = new Date().toISOString();
+  existingLog.ErrorCode = '';
+  rosterLifecycleWriteLog_(existingLog);
+
+  return confirmedResult;
+}
+
+function rosterLifecycleAmendmentHistory_(data, principal) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || data.period || ''));
+  rosterLifecycleEnsureAllSchemas_();
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found' });
+  }
+
+  const confirmedRows = rosterLifecycleFindConfirmedEventsByPeriod_(periodId);
+  const amendmentRows = confirmedRows.filter(function(r) {
+    return !['PUBLISH', 'CLOSE', 'REOPEN'].includes(r.EventType);
+  });
+  const events = RosterLifecycle.groupEventLines(amendmentRows);
+
+  const allConfirmedGroups = RosterLifecycle.groupEventLines(confirmedRows);
+  const reversedIds = new Set();
+  allConfirmedGroups.forEach(function(g) {
+    if (g.EventType === 'REVERSAL' && g.ReversesEventId) reversedIds.add(g.ReversesEventId);
+  });
+
+  events.forEach(function(ev) {
+    ev.isReversed = reversedIds.has(ev.EventId);
+    const revCheck = RosterLifecycle.canReverseEvent(ev.EventId, allConfirmedGroups);
+    ev.canReverse = revCheck.canReverse;
+    if (!revCheck.canReverse) ev.reversalIneligibilityReason = revCheck.reason;
+  });
+
+  // Reverse chronological ordering
+  events.sort(function(a, b) {
+    return (b.CreatedAt || '').localeCompare(a.CreatedAt || '') ||
+      (b.ResultRevision || 0) - (a.ResultRevision || 0) ||
+      (b.EventId || '').localeCompare(a.EventId || '');
+  });
+
+  // Privacy separation: omit AdminNote and CreatedBy if non-admin viewer
+  const isAdmin = Boolean(principal && principal.isAdmin);
+  if (!isAdmin) {
+    events.forEach(function(ev) {
+      delete ev.AdminNote;
+      delete ev.CreatedBy;
+      if (Array.isArray(ev.lines)) {
+        ev.lines.forEach(function(l) {
+          delete l.AdminNote;
+          delete l.CreatedBy;
+        });
+      }
+    });
+  }
+
+  return {
+    ok: true,
+    periodId: periodId,
+    events: events,
+    count: events.length,
+    isAdmin: isAdmin
+  };
+}
+
 function rosterLifecycleClose_(data, actor) {
   const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
   const operationId = String(data.operationId || '').trim();
@@ -589,7 +1356,7 @@ function rosterLifecycleClose_(data, actor) {
     }
     throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' is already CLOSED' });
   }
-  if (currentState !== 'PUBLISHED') {
+  if (currentState !== 'PUBLISHED' && currentState !== 'AMENDED') {
     throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot be closed' });
   }
 
@@ -623,6 +1390,7 @@ function rosterLifecycleClose_(data, actor) {
       actor: actor,
       isManual: true,
       currentRevision: currentRevision,
+      phase: 5,
       reconciliation: {
         ok: pendingCount === 0 && failedCount === 0,
         pendingOperationsCount: pendingCount,
@@ -756,7 +1524,7 @@ function rosterLifecycleReopen_(data, actor) {
   }
 
   const currentState = String(periodRecord.State || '').toUpperCase();
-  if (currentState === 'PUBLISHED') {
+  if (currentState === 'PUBLISHED' || currentState === 'AMENDED') {
     if (periodRecord.LastOperationId === operationId) {
       let result = null;
       if (existingLog && existingLog.ResultJson) {
@@ -767,7 +1535,7 @@ function rosterLifecycleReopen_(data, actor) {
           ok: true,
           operationId: operationId,
           periodId: periodId,
-          state: 'PUBLISHED',
+          state: currentState,
           revision: Number(periodRecord.Revision),
           reopenedAt: periodRecord.UpdatedAt,
           reopenedBy: actor,
@@ -784,7 +1552,7 @@ function rosterLifecycleReopen_(data, actor) {
       }
       return result;
     }
-    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' is already PUBLISHED' });
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' is already ' + currentState });
   }
   if (currentState !== 'CLOSED') {
     throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot be reopened' });
@@ -799,12 +1567,18 @@ function rosterLifecycleReopen_(data, actor) {
     });
   }
 
+  const confirmedRows = rosterLifecycleFindConfirmedEventsByPeriod_(periodId);
+  const activeCount = RosterLifecycle.countActiveAmendments(confirmedRows);
+  const targetState = RosterLifecycle.determineReopenTarget(activeCount);
+
   try {
-    RosterLifecycle.validateTransition(currentState, 'PUBLISHED', {
+    RosterLifecycle.validateTransition(currentState, targetState, {
       actor: actor,
       reason: reason,
       isManual: true,
-      currentRevision: currentRevision
+      currentRevision: currentRevision,
+      phase: 5,
+      activeAmendmentCount: activeCount
     });
   } catch (err) {
     throw DraftProtocol.fail(err.code || 'VALIDATION_FAILED', { message: err.message });
@@ -846,7 +1620,7 @@ function rosterLifecycleReopen_(data, actor) {
   }
 
   const updatedPeriod = Object.assign({}, periodRecord, {
-    State: 'PUBLISHED',
+    State: targetState,
     Revision: currentRevision + 1,
     ClosedAt: '',
     ClosedBy: '',
@@ -859,7 +1633,7 @@ function rosterLifecycleReopen_(data, actor) {
     ok: true,
     operationId: operationId,
     periodId: periodId,
-    state: 'PUBLISHED',
+    state: targetState,
     revision: currentRevision + 1,
     reopenedAt: timestamp,
     reopenedBy: actor,
@@ -967,14 +1741,34 @@ function rosterLifecycleRecover_(operationId) {
     }
     return rosterLifecycleStatus_(operationId);
   } else if (log.OperationType === 'PERIOD_REOPEN') {
-    if (period && period.State === 'PUBLISHED' && period.LastOperationId === operationId) {
+    if (period && (period.State === 'PUBLISHED' || period.State === 'AMENDED') && period.LastOperationId === operationId) {
       if (!log.ResultJson) {
         log.ResultJson = JSON.stringify({
           ok: true,
           operationId: operationId,
           periodId: periodId,
-          state: 'PUBLISHED',
+          state: period.State,
           revision: Number(period.Revision)
+        });
+      }
+      log.Status = 'CONFIRMED';
+      log.ErrorCode = '';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+    return rosterLifecycleStatus_(operationId);
+  } else if (log.OperationType === 'PERIOD_AMEND' || log.OperationType === 'PERIOD_AMEND_REVERSAL') {
+    if (period && (period.State === 'AMENDED' || period.State === 'PUBLISHED') && period.LastOperationId === operationId) {
+      if (!log.ResultJson) {
+        log.ResultJson = JSON.stringify({
+          ok: true,
+          operationId: operationId,
+          periodId: periodId,
+          state: period.State,
+          revision: Number(period.Revision),
+          projectionChecksum: period.ProjectionChecksum,
+          updatedAt: period.UpdatedAt
         });
       }
       log.Status = 'CONFIRMED';
@@ -992,20 +1786,20 @@ function rosterLifecycleRecover_(operationId) {
 function rosterLifecycleRoute_(action, data) {
   let lock, acquired = false, principal;
   try {
-    try {
-      principal = rosterV2RequireAdmin_();
-    } catch (error) {
-      throw DraftProtocol.fail('AUTHORIZATION_REQUIRED');
-    }
-
     const settings = rosterDraftSettings_();
     const switches = RosterCompatibility.featureSwitches(settings);
-    const writeActions = ['rosterv2publish', 'rosterv2close', 'rosterv2reopen', 'rosterv2lifecyclerecover'];
+    const writeActions = ['rosterv2publish', 'rosterv2close', 'rosterv2reopen', 'rosterv2lifecyclerecover', 'rosterv2amend', 'rosterv2amendreversal'];
     const isWrite = writeActions.includes(action);
 
     if (isWrite) {
+      try {
+        principal = rosterV2RequireAdmin_();
+      } catch (error) {
+        throw DraftProtocol.fail('AUTHORIZATION_REQUIRED');
+      }
       DraftProtocol.ensure(switches.roster_v2_write_enabled, 'FEATURE_DISABLED');
     } else {
+      principal = rosterLifecycleGetPrincipalSafe_();
       DraftProtocol.ensure(switches.roster_v2_read_enabled, 'FEATURE_DISABLED');
     }
 
@@ -1047,6 +1841,18 @@ function rosterLifecycleRoute_(action, data) {
       });
     }
 
+    if (action === 'rosterv2amendmenthistory') {
+      return createJsonResponse(rosterLifecycleAmendmentHistory_(data, principal));
+    }
+
+    if (action === 'rosterv2amend') {
+      return createJsonResponse(rosterLifecycleAmend_(data, principal.email));
+    }
+
+    if (action === 'rosterv2amendreversal') {
+      return createJsonResponse(rosterLifecycleAmendReversal_(data, principal.email));
+    }
+
     if (action === 'rosterv2publish') {
       return createJsonResponse(rosterLifecyclePublish_(data, principal.email));
     }
@@ -1069,7 +1875,11 @@ function rosterLifecycleRoute_(action, data) {
       'SNAPSHOT_IMMUTABLE', 'IMMUTABLE_SNAPSHOT_VIOLATION',
       'INVALID_STATE', 'INVALID_LIFECYCLE_STATE', 'INVALID_LIFECYCLE_TRANSITION',
       'CHECKSUM_MISMATCH', 'RECONCILIATION_FAILED', 'REOPEN_REASON_REQUIRED',
-      'AMENDED_RESERVED_PHASE5', 'TRANSITION_BLOCKED'
+      'AMENDED_RESERVED_PHASE5', 'TRANSITION_BLOCKED',
+      'MALFORMED_EVENT', 'INCOMPLETE_SWAP', 'EVENT_ALREADY_REVERSED',
+      'REVERSAL_DEPENDENCY_CONFLICT', 'CANNOT_REVERSE_LIFECYCLE_EVENT',
+      'CANNOT_REVERSE_REVERSAL', 'IDEMPOTENCY_MISMATCH', 'REVISION_CONFLICT',
+      'DUTY_DOMAIN_REQUIRED', 'EVENT_NOT_FOUND', 'INVALID_OPERATOR'
     ];
     const code = (DraftProtocol.errors.includes(error.code) ||
       (RosterLifecycle.LIFECYCLE_ERRORS && RosterLifecycle.LIFECYCLE_ERRORS[error.code]) ||
