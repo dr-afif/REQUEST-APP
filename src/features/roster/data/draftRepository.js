@@ -29,6 +29,34 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
       const reason=op.payload?.reason||op.reason||'';
       return {...base,reason,payload:{periodId,reason}};
     }
+    if(op.operationType==='PERIOD_AMEND'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        eventType:semanticPayload.eventType,
+        personId:semanticPayload.personId,
+        date:semanticPayload.date,
+        dutyDomain:semanticPayload.dutyDomain,
+        afterAssignments:semanticPayload.afterAssignments,
+        person1:semanticPayload.person1,
+        person2:semanticPayload.person2,
+        publicReasonCode:semanticPayload.publicReasonCode,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='PERIOD_AMEND_REVERSAL'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        targetEventId:semanticPayload.targetEventId,
+        publicReasonCode:semanticPayload.publicReasonCode,
+        adminNote:semanticPayload.adminNote
+      };
+    }
     return {...base,payload:op.payload};
   };
   return {
@@ -43,6 +71,9 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
     publish:op=>request('rosterv2publish',lifecycleWire(op),true),
     close:op=>request('rosterv2close',lifecycleWire(op),true),
     reopen:op=>request('rosterv2reopen',lifecycleWire(op),true),
-    recoverLifecycle:operationId=>request('rosterv2lifecyclerecover',{operationId},true)
+    recoverLifecycle:operationId=>request('rosterv2lifecyclerecover',{operationId},true),
+    amend:op=>request('rosterv2amend',lifecycleWire(op),true),
+    reverseAmendment:op=>request('rosterv2amendreversal',lifecycleWire(op),true),
+    getAmendmentHistory:periodId=>request('rosterv2amendmenthistory',typeof periodId==='object'?periodId:{periodId})
   };
 }

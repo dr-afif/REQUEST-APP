@@ -16,6 +16,7 @@ export class DraftQueue {
   emit(){this.guard(this.unsafe.size>0||!!this.localError);for(const fn of this.listeners)fn();}
   async start(){const generation=++this.generation;this.stopped=false;clearInterval(this.timer);this.clientId=await this.store.clientId();await this.reload();if(generation!==this.generation||this.stopped||!this.enabled())return;
     this.timer=setInterval(()=>this.tick().catch(e=>{this.localError=e.message;this.emit();}),250);
+    if(this.timer&&typeof this.timer.unref==='function')this.timer.unref();
     await this.tick();
   }
   stop(){this.generation++;this.stopped=true;clearInterval(this.timer);this.bus?.close();this.guard(this.unsafe.size>0||!!this.localError);}
@@ -100,6 +101,10 @@ export class DraftQueue {
         response = await this.repository.close(op);
       } else if (op.operationType === 'PERIOD_REOPEN') {
         response = await this.repository.reopen(op);
+      } else if (op.operationType === 'PERIOD_AMEND') {
+        response = await this.repository.amend(op);
+      } else if (op.operationType === 'PERIOD_AMEND_REVERSAL') {
+        response = await this.repository.reverseAmendment(op);
       } else {
         response = await this.repository.write(op);
       }
@@ -115,7 +120,7 @@ export class DraftQueue {
     if (!op) return;
 
     if (op.operationClass === 'LIFECYCLE') {
-      const isConfirmed = response.ok && (response.status === 'CONFIRMED' || ['PUBLISHED','CLOSED'].includes(response.state));
+      const isConfirmed = response.ok && (response.status === 'CONFIRMED' || ['PUBLISHED','CLOSED','AMENDED'].includes(response.state));
       if (isConfirmed) {
         const result = response.result || response;
         if (response.operationId && response.operationId !== id) throw new Error('INVALID_CONFIRMATION');
@@ -192,13 +197,15 @@ export class DraftQueue {
     if(!frozen.payloadHash){const hash=await sha256(protocol.canonical(protocol.payload(frozen)));await this.change(key,e=>{e.operations.find(o=>o.operationId===id).payloadHash=hash;return e;});}
     try{
       let response;
-      if (frozen.operationClass === 'LIFECYCLE' && frozen.status === 'RECOVERY_REQUIRED' && frozen.lastError !== 'CHECKSUM_MISMATCH') {
+      if (frozen.operationClass === 'LIFECYCLE' && frozen.status === 'RECOVERY_REQUIRED' && frozen.lastError !== 'CHECKSUM_MISMATCH' && frozen.operationType !== 'PERIOD_AMEND' && frozen.operationType !== 'PERIOD_AMEND_REVERSAL') {
         response = await this.repository.recoverLifecycle(id);
       } else {
         response = await this.repository.status(id);
       }
       if(response.ok&&response.status==='NOT_FOUND'){
         await this.change(key,e=>{const op=e.operations.find(o=>o.operationId===id);op.status='RETRY_SCHEDULED';return e;});await this.send(key,id);
+      }else if(response.ok&&['PENDING','RECOVERY_REQUIRED'].includes(response.status)&&(frozen.operationType==='PERIOD_AMEND'||frozen.operationType==='PERIOD_AMEND_REVERSAL')){
+        await this.change(key,e=>{const op=e.operations.find(o=>o.operationId===id);op.status='RETRY_SCHEDULED';op.nextRetryAt=0;return e;});await this.send(key,id);
       }else if(!response.ok&&['LOCK_BUSY','TRANSIENT_BACKEND'].includes(response.error?.code)){
         await this.change(key,e=>{e.operations.find(o=>o.operationId===id).attemptCount++;return e;});await this.schedule(key,id,response.error.code);
       }else await this.handle(key,id,response);
@@ -207,9 +214,14 @@ export class DraftQueue {
   async retry(key,id){if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');return this.locks.request(this.store.name+':'+key,async()=>{
     const current=await this.validateStored(await this.store.read(key)),op=current.operations.find(o=>o.operationId===id);if(!op||terminal(op))return;
     if(current.operations.find(o=>!terminal(o))?.operationId!==id)throw protocol.fail('REVISION_CONFLICT',{reason:'EARLIER_OPERATION_UNRESOLVED'});
-    if(['VALIDATION_FAILED','AUTHORIZATION_REQUIRED','IDEMPOTENCY_MISMATCH','REVISION_CONFLICT','FEATURE_DISABLED','PERMANENT_FAILURE','RECONCILIATION_FAILED','REOPEN_REASON_REQUIRED','AMENDED_RESERVED_PHASE5'].includes(op.lastError))throw protocol.fail(op.lastError);
+    if(['VALIDATION_FAILED','AUTHORIZATION_REQUIRED','IDEMPOTENCY_MISMATCH','REVISION_CONFLICT','FEATURE_DISABLED','PERMANENT_FAILURE','RECONCILIATION_FAILED','REOPEN_REASON_REQUIRED','AMENDED_RESERVED_PHASE5','EVENT_ALREADY_REVERSED','REVERSAL_DEPENDENCY_CONFLICT','CANNOT_REVERSE_LIFECYCLE_EVENT','CANNOT_REVERSE_REVERSAL','INVALID_STATE','INVALID_LIFECYCLE_STATE'].includes(op.lastError))throw protocol.fail(op.lastError);
     if(op.status==='RECOVERY_REQUIRED'){
       if(op.operationClass==='LIFECYCLE'){
+        if(op.operationType==='PERIOD_AMEND'||op.operationType==='PERIOD_AMEND_REVERSAL'){
+          await this.change(key,e=>{const o=e.operations.find(x=>x.operationId===id);o.attemptCount=0;o.nextRetryAt=0;o.status='RETRY_SCHEDULED';return e;});
+          await this.send(key,id);
+          return;
+        }
         const rec=await this.repository.recoverLifecycle(id);
         if(rec.ok&&rec.status==='CONFIRMED'){
           await this.handle(key,id,rec);
@@ -364,7 +376,7 @@ export class DraftQueue {
         if(existingConfirmed)return current.lifecycle;
         throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is already CLOSED`});
       }
-      if(currentState!=='PUBLISHED'){
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
         throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot be closed`});
       }
 
@@ -384,7 +396,7 @@ export class DraftQueue {
         await this.change(key,e=>{
           const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
           if(st==='CLOSED')throw protocol.fail('INVALID_STATE');
-          if(st!=='PUBLISHED')throw protocol.fail('INVALID_STATE');
+          if(st!=='PUBLISHED'&&st!=='AMENDED')throw protocol.fail('INVALID_STATE');
           const existingOp=e.operations.find(o=>o.operationType==='PERIOD_CLOSE'&&!terminal(o));
           if(existingOp){id=existingOp.operationId;return e;}
           const base={operationId:id,clientId:this.clientId,tabId:this.tabId,operationType:'PERIOD_CLOSE',entityKey:key,expectedRevision,payload:{periodId,adminNote}};
@@ -465,5 +477,203 @@ export class DraftQueue {
       if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
       return {ok:true,operationId:id,status:targetOp.status,pending:true};
     });
+  }
+  async amend(periodId,payload,options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot be amended`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot be amended`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot be amended`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='PERIOD_AMEND'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='PERIOD_AMEND'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'PERIOD_AMEND',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+  async reverseAmendment(periodId,payloadOrTargetEventId,options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    const payload=typeof payloadOrTargetEventId==='string'
+      ?{targetEventId:payloadOrTargetEventId,...(options.payload||{}),adminNote:options.adminNote||'',publicReasonCode:options.publicReasonCode||'REVERSAL'}
+      :(payloadOrTargetEventId||{});
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot have amendments reversed`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot have amendments reversed`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot have amendments reversed`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='PERIOD_AMEND_REVERSAL'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='PERIOD_AMEND_REVERSAL'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'PERIOD_AMEND_REVERSAL',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+  async getAmendmentHistory(periodId){
+    RosterCompatibility.validatePeriod(periodId);
+    return this.repository.getAmendmentHistory(periodId);
   }
 }

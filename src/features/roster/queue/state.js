@@ -86,7 +86,13 @@ export function mergeLifecycle(entity, result, confirmedId=null) {
     ...(result?.plannedSnapshotId ? { plannedSnapshotId: result.plannedSnapshotId } : {}),
     ...(result?.projectionChecksum ? { projectionChecksum: result.projectionChecksum } : {}),
     ...(result?.closedAt ? { closedAt: result.closedAt, closedBy: result.closedBy } : {}),
-    ...(result?.reopenedAt ? { reopenedAt: result.reopenedAt, reopenedBy: result.reopenedBy, reason: result.reason } : {})
+    ...(result?.reopenedAt ? { reopenedAt: result.reopenedAt, reopenedBy: result.reopenedBy, reason: result.reason } : {}),
+    ...(result?.eventId ? { eventId: result.eventId } : {}),
+    ...(result?.reversalEventId ? { reversalEventId: result.reversalEventId } : {}),
+    ...(result?.targetEventId ? { targetEventId: result.targetEventId } : {}),
+    ...(result?.activeAmendmentCount !== undefined ? { activeAmendmentCount: result.activeAmendmentCount } : {}),
+    ...(result?.amendedAt ? { amendedAt: result.amendedAt, amendedBy: result.amendedBy } : {}),
+    ...(result?.reversedAt ? { reversedAt: result.reversedAt, reversedBy: result.reversedBy } : {})
   };
   return entity;
 }

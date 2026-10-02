@@ -8,7 +8,10 @@ const DraftProtocol = (() => {
     'IDEMPOTENCY_MISMATCH','LOCK_BUSY','TRANSIENT_BACKEND','PERMANENT_FAILURE','RECOVERY_REQUIRED',
     'SNAPSHOT_IMMUTABLE','IMMUTABLE_SNAPSHOT_VIOLATION','INVALID_STATE','INVALID_LIFECYCLE_STATE',
     'INVALID_LIFECYCLE_TRANSITION','CHECKSUM_MISMATCH','RECONCILIATION_FAILED','REOPEN_REASON_REQUIRED',
-    'AMENDED_RESERVED_PHASE5','TRANSITION_BLOCKED','LIFECYCLE_OPERATION_PENDING'
+    'AMENDED_RESERVED_PHASE5','TRANSITION_BLOCKED','LIFECYCLE_OPERATION_PENDING',
+    'MALFORMED_EVENT','INCOMPLETE_SWAP','EVENT_ALREADY_REVERSED','REVERSAL_DEPENDENCY_CONFLICT',
+    'CANNOT_REVERSE_LIFECYCLE_EVENT','CANNOT_REVERSE_REVERSAL','DUTY_DOMAIN_REQUIRED','EVENT_NOT_FOUND',
+    'INVALID_OPERATOR','REVERSAL_CONFLICT','ALREADY_REVERSED','CANNOT_REVERSE','INVALID_AMENDMENT_TYPE'
   ];
   const fail = (code, details = {}) => Object.assign(new Error(code), { code, details });
   const ensure = (ok, code = 'VALIDATION_FAILED') => { if (!ok) throw fail(code); };
@@ -99,6 +102,95 @@ const DraftProtocol = (() => {
         payload: {
           periodId: periodId,
           reason: reason
+        }
+      };
+    }
+
+    if (operation.operationType === 'PERIOD_AMEND') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || {};
+      const eventType = String(payload.eventType || operation.eventType || 'ADMIN_CORRECTION').toUpperCase();
+      const publicReasonCode = String(payload.publicReasonCode || operation.publicReasonCode || 'CLINICAL_SERVICE_CONTINUITY').trim();
+      const adminNote = String(payload.adminNote || operation.adminNote || '').trim();
+
+      let semanticPayload;
+      if (eventType === 'SWAP') {
+        const p1 = payload.person1 || operation.person1;
+        const p2 = payload.person2 || operation.person2;
+        ensure(p1 && p2 && p1.personId && p2.personId && p1.date && p2.date && p1.dutyDomain && p2.dutyDomain, 'VALIDATION_FAILED');
+        semanticPayload = {
+          periodId: periodId,
+          eventType: 'SWAP',
+          person1: {
+            personId: String(p1.personId).trim(),
+            date: String(p1.date).trim(),
+            dutyDomain: String(p1.dutyDomain).trim()
+          },
+          person2: {
+            personId: String(p2.personId).trim(),
+            date: String(p2.date).trim(),
+            dutyDomain: String(p2.dutyDomain).trim()
+          },
+          publicReasonCode: publicReasonCode,
+          adminNote: adminNote
+        };
+      } else {
+        const personId = String(payload.personId || operation.personId || '').trim();
+        const date = String(payload.date || operation.date || '').trim();
+        const dutyDomain = String(payload.dutyDomain || operation.dutyDomain || '').trim();
+        ensure(personId && date && dutyDomain, 'VALIDATION_FAILED');
+        const afterAssignments = payload.afterAssignments !== undefined
+          ? payload.afterAssignments
+          : (operation.afterAssignments !== undefined
+              ? operation.afterAssignments
+              : (payload.shiftCode !== undefined
+                  ? [{ shiftCode: payload.shiftCode }]
+                  : (operation.shiftCode !== undefined ? [{ shiftCode: operation.shiftCode }] : [])));
+        semanticPayload = {
+          periodId: periodId,
+          eventType: eventType,
+          personId: personId,
+          date: date,
+          dutyDomain: dutyDomain,
+          afterAssignments: afterAssignments,
+          publicReasonCode: publicReasonCode,
+          adminNote: adminNote
+        };
+      }
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'PERIOD_AMEND',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: semanticPayload
+      };
+    }
+
+    if (operation.operationType === 'PERIOD_AMEND_REVERSAL') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || {};
+      const targetEventId = String(payload.targetEventId || operation.targetEventId || '').trim();
+      ensure(targetEventId.length > 0, 'VALIDATION_FAILED');
+      const adminNote = String(payload.adminNote || operation.adminNote || '').trim();
+      const publicReasonCode = String(payload.publicReasonCode || operation.publicReasonCode || 'REVERSAL').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'PERIOD_AMEND_REVERSAL',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          targetEventId: targetEventId,
+          publicReasonCode: publicReasonCode,
+          adminNote: adminNote
         }
       };
     }
