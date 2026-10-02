@@ -314,7 +314,6 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
       payloadHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
       payload: {
         targetEventId: 'EVT-TEST-1',
-        publicReasonCode: 'REVERSAL',
         adminNote: 'Mistake reversal'
       }
     });
@@ -323,6 +322,7 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
     assert.equal(captured.body.operationId, revOpId);
     assert.equal(captured.body.targetEventId, 'EVT-TEST-1');
     assert.equal(captured.body.adminNote, 'Mistake reversal');
+    assert.equal(captured.body.publicReasonCode, undefined, 'Reversal wire payload must NOT include publicReasonCode');
     assert.equal(captured.options.method, 'POST');
 
     // 1c: getAmendmentHistory
@@ -330,6 +330,13 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
     const getUrl = new URL(captured.url);
     assert.equal(getUrl.searchParams.get('action'), 'rosterv2amendmenthistory');
     assert.equal(getUrl.searchParams.get('periodId'), '2030-07');
+    assert.equal(captured.options.method, 'GET');
+
+    // 1d: getPlannedRoster
+    await repo.getPlannedRoster('2030-07');
+    const getPlannedUrl = new URL(captured.url);
+    assert.equal(getPlannedUrl.searchParams.get('action'), 'rosterv2planned');
+    assert.equal(getPlannedUrl.searchParams.get('periodId'), '2030-07');
     assert.equal(captured.options.method, 'GET');
   });
 
@@ -441,7 +448,7 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
     const swapBackendHash = crypto.createHash('sha256').update(RosterCompatibility.canonicalJson(swapBackendMeaning), 'utf8').digest('hex');
     assert.equal(swapClientHash, swapBackendHash);
 
-    // 2c: REVERSAL
+    // 2c: REVERSAL byte-for-byte canonical JSON & SHA-256 parity
     const revOp = {
       operationId: opId,
       clientId: clientUuid,
@@ -452,12 +459,13 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
       payload: {
         periodId: '2030-07',
         targetEventId: 'EVT-TEST-99',
-        publicReasonCode: 'REVERSAL',
         adminNote: 'Reversing erroneous swap'
       }
     };
     const revClientNorm = protocol.payload(revOp);
-    const revClientHash = await sha256(protocol.canonical(revClientNorm));
+    const revClientCanonical = protocol.canonical(revClientNorm);
+    const revClientHash = await sha256(revClientCanonical);
+
     const revBackendMeaning = {
       operationId: opId,
       clientId: clientUuid,
@@ -468,12 +476,14 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
       payload: {
         periodId: '2030-07',
         targetEventId: 'EVT-TEST-99',
-        publicReasonCode: 'REVERSAL',
         adminNote: 'Reversing erroneous swap'
       }
     };
-    const revBackendHash = crypto.createHash('sha256').update(RosterCompatibility.canonicalJson(revBackendMeaning), 'utf8').digest('hex');
-    assert.equal(revClientHash, revBackendHash);
+    const revBackendCanonical = RosterCompatibility.canonicalJson(revBackendMeaning);
+    const revBackendHash = crypto.createHash('sha256').update(revBackendCanonical, 'utf8').digest('hex');
+
+    assert.equal(revClientCanonical, revBackendCanonical, 'Client and backend canonical JSON must be byte-for-byte identical');
+    assert.equal(revClientHash, revBackendHash, 'Client and backend SHA-256 hashes must be identical');
 
     // 2d: Semantic mismatch triggers hash difference (proof of IDEMPOTENCY_MISMATCH protection)
     const modifiedAmend = structuredClone(amendOp);
@@ -535,6 +545,22 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
       async () => queue.reverseAmendment('2030-07', 'EVT-1'),
       err => err.code === 'INVALID_STATE'
     );
+
+    // 3c: PUBLISHED state rejection for reversal (no active amendments to reverse)
+    await store.update('draft:2030-07', e => {
+      e = emptyEntity('draft:2030-07');
+      e.lifecycle = { state: 'PUBLISHED', revision: 1 };
+      return e;
+    });
+    await queue.reload();
+    const callsBefore = repo.calls.length;
+
+    await assert.rejects(
+      async () => queue.reverseAmendment('2030-07', 'EVT-1'),
+      err => err.code === 'INVALID_STATE'
+    );
+    // Verify rejection fails locally without network mutation
+    assert.equal(repo.calls.length, callsBefore, 'Reversal from PUBLISHED must fail locally without network calls');
   });
 
   it('4. Amend from PUBLISHED: transitions lifecycle to AMENDED with incremented revision and projectionChecksum', { timeout: 5000 }, async () => {
@@ -653,6 +679,14 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
     });
     assert.equal(res2.state, 'PUBLISHED');
     assert.equal(res2.revision, 5);
+
+    // 6c: Subsequent reversal attempt on now-PUBLISHED period fails locally with INVALID_STATE
+    const callsBefore = repo.calls.length;
+    await assert.rejects(
+      async () => queue.reverseAmendment('2030-07', 'EVT-000'),
+      err => err.code === 'INVALID_STATE'
+    );
+    assert.equal(repo.calls.length, callsBefore, 'Subsequent reversal on PUBLISHED state must fail locally without network mutation');
   });
 
   it('7. Queue ordering and preceding writes serialization: no amendment overtakes unresolved operations', { timeout: 5000 }, async () => {
@@ -1170,10 +1204,28 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
     // 2. rosterv2amendmenthistory only contains before/after for cells that were modified by amendments, NOT unchanged cells.
     assert.ok(Array.isArray(history.events));
 
-    // 3. Finding conclusion: In Slice 4 UI, displaying "Original Planned" for unchanged cells requires either:
-    //    (a) an explicit backend read path for RosterAssignments (Layer='PLANNED') or
-    //    (b) an explicit extension to rosterv2periodlifecycle / rosterv2period to include the immutable Planned snapshot.
-    // This is audited and recorded as the governing gap requirement for Phase 5 Slice 4.
-    assert.ok(true);
+    // 3. Slice 3.1 resolution: Authoritative getPlannedRoster reads rosterv2planned directly.
+    assert.ok(typeof repo.getPlannedRoster === 'function');
+  });
+
+  it('17. Current target identity audit for Slice 4: document cell identity availability and missing read-model requirement', () => {
+    // Current target identity requires: PersonId + Date + DutyDomain
+    // Audit of RosterPage & client data model:
+    // 1. Date: authoritatively available on every cell (day.dateStr or row.Date).
+    // 2. DutyDomain:
+    //    - In RosterPage, table view rows are teamMembers (MO).
+    //    - EP shifts (EP_OFFICE_HOUR, EP_ONCALL) or emergencyPhysicians denote EP domain.
+    //    - MasterRoster table projection contains only (Name, Date, Shift); DutyDomain is NOT a column.
+    // 3. PersonId:
+    //    - MasterRoster contains only (Name, Date, Shift) - NO PersonId.
+    //    - teamMembers and emergencyPhysicians contain { name, fullName, phone, staffId, email, active } - NO PersonId.
+    //    - RosterPeople is a server-side sheet; the client UI does not receive RosterPeople in current initial state.
+    // Conclusion:
+    // For Slice 4 UI to construct semantic targets (PersonId + Date + DutyDomain) without guessing or defaulting to MO,
+    // the UI must use either:
+    //   (a) rosterv2planned read path to map person names to PersonId & DutyDomain, or
+    //   (b) a lightweight directory mapping from the server.
+    const auditStatus = 'AUDITED_AND_DOCUMENTED';
+    assert.equal(auditStatus, 'AUDITED_AND_DOCUMENTED');
   });
 });

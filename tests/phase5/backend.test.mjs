@@ -208,7 +208,6 @@ function makeReversalOp({
   periodId = '2030-07',
   expectedRevision = 2,
   targetEventId,
-  publicReasonCode = 'ADMIN_CORRECTION',
   adminNote = 'Reversing amendment',
   ...rest
 } = {}) {
@@ -225,7 +224,6 @@ function makeReversalOp({
     payload: {
       periodId,
       targetEventId,
-      publicReasonCode,
       adminNote
     }
   };
@@ -237,7 +235,6 @@ function makeReversalOp({
     periodId,
     expectedRevision,
     targetEventId,
-    publicReasonCode,
     adminNote,
     payloadHash,
     ...rest
@@ -315,6 +312,7 @@ function makeReopenOp({
 const amend = (h, op) => h.post({ action: 'rosterv2amend', ...op });
 const amendReversal = (h, op) => h.post({ action: 'rosterv2amendreversal', ...op });
 const amendmentHistory = (h, periodId, params = {}) => h.get('rosterv2amendmenthistory', { periodId, ...params });
+const plannedRoster = (h, periodId, params = {}) => h.get('rosterv2planned', { periodId, ...params });
 const close = (h, op) => h.post({ action: 'rosterv2close', ...op });
 const reopen = (h, op) => h.post({ action: 'rosterv2reopen', ...op });
 const status = (h, opId) => h.get('rosterv2operation', { operationId: opId });
@@ -743,15 +741,19 @@ test('14. REVERSAL: remaining active amendment keeps lifecycle state AMENDED', (
 
 test('15. REVERSAL: double reversal rejected with EVENT_ALREADY_REVERSED', () => {
   const { h, periodId } = setupPublished();
-  const amendOp = makeAmendOp({ periodId, expectedRevision: 1 });
-  const amendRes = amend(h, amendOp);
+  const amendOp1 = makeAmendOp({ periodId, expectedRevision: 1, personId: person1, date: `${periodId}-01`, afterAssignments: [{ shiftCode: 'PM' }] });
+  const amendRes1 = amend(h, amendOp1);
+  const amendOp2 = makeAmendOp({ periodId, expectedRevision: 2, personId: person2, date: `${periodId}-02`, afterAssignments: [{ shiftCode: 'PM' }] });
+  const amendRes2 = amend(h, amendOp2);
 
-  const revOp1 = makeReversalOp({ periodId, expectedRevision: 2, targetEventId: amendRes.eventId });
+  // Reverse amendment 2: amendment 1 remains active, so state stays AMENDED
+  const revOp1 = makeReversalOp({ periodId, expectedRevision: 3, targetEventId: amendRes2.eventId });
   const revRes1 = amendReversal(h, revOp1);
   assert.equal(revRes1.ok, true);
+  assert.equal(revRes1.state, 'AMENDED');
 
-  // Attempt to reverse the same target event again
-  const revOp2 = makeReversalOp({ periodId, expectedRevision: 3, targetEventId: amendRes.eventId });
+  // Attempt to reverse the same target event again while state is AMENDED
+  const revOp2 = makeReversalOp({ periodId, expectedRevision: 4, targetEventId: amendRes2.eventId });
   const revRes2 = amendReversal(h, revOp2);
   assert.equal(revRes2.ok, false);
   assert.equal(revRes2.error.code, 'EVENT_ALREADY_REVERSED');
@@ -1565,4 +1567,280 @@ test('32. History privacy boundary: non-admin viewer response strips private ide
       assert.ok(line.AfterCurrentJson);
     });
   });
+});
+
+test('33. Reversal state guard: fresh reversal rejected on PUBLISHED period with INVALID_STATE, idempotent replay allowed', () => {
+  const { h, periodId } = setupPublished();
+
+  // Fresh reversal on PUBLISHED period must reject with INVALID_STATE
+  const freshRevOp = makeReversalOp({
+    periodId,
+    expectedRevision: 1,
+    targetEventId: crypto.randomUUID()
+  });
+  const res = amendReversal(h, freshRevOp);
+  assert.equal(res.ok, false);
+  assert.equal(res.error.code, 'INVALID_STATE');
+  assert.match(res.error.message, /must be AMENDED/i);
+
+  // Now create an amendment, then reverse it (transitions to PUBLISHED)
+  const amendOp = makeAmendOp({ periodId, expectedRevision: 1 });
+  const amendRes = amend(h, amendOp);
+  assert.equal(amendRes.ok, true);
+  assert.equal(amendRes.state, 'AMENDED');
+
+  const validRevOp = makeReversalOp({
+    periodId,
+    expectedRevision: 2,
+    targetEventId: amendRes.eventId
+  });
+  const validRevRes = amendReversal(h, validRevOp);
+  assert.equal(validRevRes.ok, true);
+  assert.equal(validRevRes.state, 'PUBLISHED');
+
+  // Idempotent replay of the SAME reversal operation that set state to PUBLISHED must succeed!
+  const replayRes = amendReversal(h, validRevOp);
+  assert.equal(replayRes.ok, true);
+  assert.equal(replayRes.state, 'PUBLISHED');
+  assert.equal(replayRes.reversalEventId, validRevRes.reversalEventId);
+});
+
+test('34. Authoritative Planned baseline: at publication, rosterv2planned matches immutable snapshot', () => {
+  const { h, periodId, pubOp } = setupPublished();
+
+  const plannedRes = plannedRoster(h, periodId);
+  assert.equal(plannedRes.ok, true);
+  assert.equal(plannedRes.periodId, periodId);
+  assert.ok(plannedRes.plannedSnapshotId);
+  assert.equal(plannedRes.count, 5); // 5 draft cells in setupPublished
+  assert.equal(plannedRes.assignments.length, 5);
+
+  // Assert expected assignments
+  const p1Day1 = plannedRes.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  assert.ok(p1Day1);
+  assert.equal(p1Day1.shiftCode, 'AM');
+  assert.equal(p1Day1.dutyDomain, 'MO');
+  assert.equal(p1Day1.personNameSnapshot, 'Dr. Ali');
+
+  // Verify MasterRoster projection matches Planned at publication
+  const masterRows = h.grids.MasterRoster.slice(1).filter(r => r[1].startsWith(periodId));
+  assert.equal(masterRows.length, 5);
+});
+
+test('35. Planned integrity: Planned endpoint unchanged after ADMIN_CORRECTION while Current reflects amended assignment', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = plannedRoster(h, periodId);
+  assert.equal(plannedBefore.ok, true);
+
+  const amendOp = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person1,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    afterAssignments: [{ shiftCode: 'PM', rawShift: 'PM' }]
+  });
+  const amendRes = amend(h, amendOp);
+  assert.equal(amendRes.ok, true);
+  assert.equal(amendRes.state, 'AMENDED');
+
+  // 1. Current / MasterRoster reflects amended assignment PM
+  const masterRows = h.grids.MasterRoster.slice(1);
+  const p1Day1Master = masterRows.find(r => r[0] === 'Dr. Ali' && r[1] === `${periodId}-01`);
+  assert.equal(p1Day1Master[2], 'PM', 'Current MasterRoster must reflect amended shift PM');
+
+  // 2. Authoritative Planned endpoint still returns original assignment AM!
+  const plannedAfter = plannedRoster(h, periodId);
+  assert.equal(plannedAfter.ok, true);
+  assert.deepEqual(plannedAfter.assignments, plannedBefore.assignments, 'Planned assignments must remain byte-identical');
+  const p1Day1Planned = plannedAfter.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  assert.equal(p1Day1Planned.shiftCode, 'AM', 'Planned must still be AM');
+});
+
+test('36. Planned integrity: Planned remains original for both targets after SWAP while Current reflects swapped assignments', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = plannedRoster(h, periodId);
+
+  // Before swap: person1 Day 1 is AM, person2 Day 1 is PM
+  const swapOp = makeSwapOp({
+    periodId,
+    expectedRevision: 1,
+    person1Target: { personId: person1, date: `${periodId}-01`, dutyDomain: 'MO' },
+    person2Target: { personId: person2, date: `${periodId}-01`, dutyDomain: 'MO' }
+  });
+  const swapRes = amend(h, swapOp);
+  assert.equal(swapRes.ok, true);
+
+  // Current MasterRoster reflects swapped shifts
+  const masterRows = h.grids.MasterRoster.slice(1);
+  const p1Day1Master = masterRows.find(r => r[0] === 'Dr. Ali' && r[1] === `${periodId}-01`);
+  const p2Day1Master = masterRows.find(r => r[0] === 'Dr. Siti' && r[1] === `${periodId}-01`);
+  assert.equal(p1Day1Master[2], 'PM', 'Dr. Ali must now have PM');
+  assert.equal(p2Day1Master[2], 'AM', 'Dr. Siti must now have AM');
+
+  // Planned endpoint returns unchanged original assignments: Dr. Ali is AM, Dr. Siti is PM
+  const plannedAfter = plannedRoster(h, periodId);
+  assert.deepEqual(plannedAfter.assignments, plannedBefore.assignments, 'Planned assignments must not change after SWAP');
+  const p1Planned = plannedAfter.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  const p2Planned = plannedAfter.assignments.find(a => a.personId === person2 && a.date === `${periodId}-01`);
+  assert.equal(p1Planned.shiftCode, 'AM');
+  assert.equal(p2Planned.shiftCode, 'PM');
+});
+
+test('37. Planned integrity: Planned unchanged after REVERSAL while Current returns to effective state', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBaseline = plannedRoster(h, periodId);
+
+  const amendOp = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person1,
+    date: `${periodId}-01`,
+    afterAssignments: [{ shiftCode: 'PM' }]
+  });
+  const amendRes = amend(h, amendOp);
+
+  const revOp = makeReversalOp({
+    periodId,
+    expectedRevision: 2,
+    targetEventId: amendRes.eventId
+  });
+  const revRes = amendReversal(h, revOp);
+  assert.equal(revRes.ok, true);
+  assert.equal(revRes.state, 'PUBLISHED');
+
+  // Planned is still identical to baseline
+  const plannedAfter = plannedRoster(h, periodId);
+  assert.deepEqual(plannedAfter.assignments, plannedBaseline.assignments, 'Planned remains identical through amendment and reversal');
+});
+
+test('38. Planned integrity: Planned remains byte-identical across multiple sequential amendments', () => {
+  const { h, periodId } = setupPublished();
+  const baselineJson = JSON.stringify(plannedRoster(h, periodId));
+
+  for (let i = 1; i <= 3; i++) {
+    const op = makeAmendOp({
+      periodId,
+      expectedRevision: i,
+      personId: person1,
+      date: `${periodId}-0${i}`,
+      afterAssignments: [{ shiftCode: 'ND' }]
+    });
+    const res = amend(h, op);
+    assert.equal(res.ok, true);
+
+    const currentPlannedJson = JSON.stringify(plannedRoster(h, periodId));
+    assert.equal(currentPlannedJson, baselineJson, `Planned snapshot must be byte-identical after amendment ${i}`);
+  }
+});
+
+test('39. Planned integrity: Planned remains unchanged through Close and Reopen lifecycle state transitions', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBaseline = plannedRoster(h, periodId);
+
+  // Close period
+  const closeOp = makeCloseOp({ periodId, expectedRevision: 1 });
+  const closeRes = close(h, closeOp);
+  assert.equal(closeRes.ok, true);
+  assert.equal(closeRes.state, 'CLOSED');
+
+  // Planned is available and identical in CLOSED state
+  const plannedClosed = plannedRoster(h, periodId);
+  assert.deepEqual(plannedClosed.assignments, plannedBaseline.assignments, 'Planned must remain identical in CLOSED state');
+
+  // Reopen period
+  const reopenOp = makeReopenOp({
+    periodId,
+    expectedRevision: 2,
+    reason: 'Auditing planned changes'
+  });
+  const reopenRes = reopen(h, reopenOp);
+  assert.equal(reopenRes.ok, true);
+
+  // Planned is available and identical in REOPENED state
+  const plannedReopened = plannedRoster(h, periodId);
+  assert.deepEqual(plannedReopened.assignments, plannedBaseline.assignments, 'Planned must remain identical after Reopen');
+});
+
+test('40. Snapshot consistency: foreign SnapshotId and duplicate AssignmentId fail safely with CORRUPT_DATA', () => {
+  const { h, periodId } = setupPublished();
+
+  // 40a: Inject foreign SnapshotId row into RosterAssignments
+  const foreignRow = [
+    crypto.randomUUID(), periodId, 'PLANNED', 'FOREIGN-SNAPSHOT-ID',
+    person1, 'Dr. Ali', `${periodId}-05`, 'MO', 'AM', '{}', 1, 'LEGACY', crypto.randomUUID(), new Date().toISOString(), 'admin@example.invalid'
+  ];
+  h.grids.RosterAssignments.push(foreignRow);
+
+  const resForeign = plannedRoster(h, periodId);
+  assert.equal(resForeign.ok, false);
+  assert.equal(resForeign.error.code, 'CORRUPT_DATA');
+  assert.match(resForeign.error.message, /Foreign snapshot rows/i);
+
+  // Remove foreign row
+  h.grids.RosterAssignments.pop();
+
+  // 40b: Duplicate AssignmentId in snapshot
+  const validPlannedRows = h.grids.RosterAssignments.filter(r => r[2] === 'PLANNED');
+  const duplicateRow = [...validPlannedRows[0]]; // identical AssignmentId
+  h.grids.RosterAssignments.push(duplicateRow);
+
+  const resDuplicate = plannedRoster(h, periodId);
+  assert.equal(resDuplicate.ok, false);
+  assert.equal(resDuplicate.error.code, 'CORRUPT_DATA');
+  assert.match(resDuplicate.error.message, /Duplicate or missing AssignmentId/i);
+});
+
+test('41. Deterministic response ordering: planned endpoint returns stable canonical sort order across sheet row permutations', () => {
+  const { h, periodId } = setupPublished();
+  const planned1 = plannedRoster(h, periodId);
+
+  // Permute RosterAssignments rows (reverse the non-header rows)
+  const headers = h.grids.RosterAssignments[0];
+  const dataRows = h.grids.RosterAssignments.slice(1);
+  dataRows.reverse();
+  h.grids.RosterAssignments = [headers, ...dataRows];
+
+  const planned2 = plannedRoster(h, periodId);
+  assert.deepEqual(planned2.assignments, planned1.assignments, 'Permuted rows must yield byte-identical canonical assignments');
+});
+
+test('42. Viewer-safe Planned DTO: strips internal metadata and rejects unenrolled periods', () => {
+  const { h, periodId } = setupPublished();
+
+  const res = plannedRoster(h, periodId);
+  assert.equal(res.ok, true);
+
+  // Top level fields
+  assert.ok(res.periodId);
+  assert.ok(res.plannedSnapshotId);
+  assert.equal(typeof res.count, 'number');
+  assert.ok(Array.isArray(res.assignments));
+
+  // No internal/private metadata leaked
+  const json = JSON.stringify(res);
+  assert.equal(json.includes('OperationId'), false, 'DTO must not expose OperationId');
+  assert.equal(json.includes('CreatedBy'), false, 'DTO must not expose CreatedBy');
+  assert.equal(json.includes('_row'), false, 'DTO must not expose _row');
+  assert.equal(json.includes('DraftRevision'), false, 'DTO must not expose DraftRevision');
+  assert.equal(json.includes('admin@example.invalid'), false, 'DTO must not expose admin email');
+
+  // Assignment items have only display-safe fields
+  res.assignments.forEach(a => {
+    assert.ok(a.assignmentId);
+    assert.ok(a.personId);
+    assert.ok(a.personNameSnapshot);
+    assert.ok(a.date);
+    assert.ok(a.dutyDomain);
+    assert.ok(a.shiftCode);
+    assert.ok(typeof a.modifiers === 'object');
+    assert.equal(a.OperationId, undefined);
+    assert.equal(a.CreatedBy, undefined);
+    assert.equal(a._row, undefined);
+  });
+
+  // Unenrolled period rejects with ENTITY_NOT_FOUND
+  const unenrolledRes = plannedRoster(h, '1999-01');
+  assert.equal(unenrolledRes.ok, false);
+  assert.equal(unenrolledRes.error.code, 'ENTITY_NOT_FOUND');
 });

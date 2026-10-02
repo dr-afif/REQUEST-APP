@@ -177,7 +177,6 @@ const DraftProtocol = (() => {
       const targetEventId = String(payload.targetEventId || operation.targetEventId || '').trim();
       ensure(targetEventId.length > 0, 'VALIDATION_FAILED');
       const adminNote = String(payload.adminNote || operation.adminNote || '').trim();
-      const publicReasonCode = String(payload.publicReasonCode || operation.publicReasonCode || 'REVERSAL').trim();
 
       return {
         operationId: operation.operationId,
@@ -189,7 +188,6 @@ const DraftProtocol = (() => {
         payload: {
           periodId: periodId,
           targetEventId: targetEventId,
-          publicReasonCode: publicReasonCode,
           adminNote: adminNote
         }
       };

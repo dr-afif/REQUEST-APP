@@ -53,7 +53,6 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
         payloadHash:op.payloadHash,
         payload:semanticPayload,
         targetEventId:semanticPayload.targetEventId,
-        publicReasonCode:semanticPayload.publicReasonCode,
         adminNote:semanticPayload.adminNote
       };
     }
@@ -74,6 +73,20 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
     recoverLifecycle:operationId=>request('rosterv2lifecyclerecover',{operationId},true),
     amend:op=>request('rosterv2amend',lifecycleWire(op),true),
     reverseAmendment:op=>request('rosterv2amendreversal',lifecycleWire(op),true),
-    getAmendmentHistory:periodId=>request('rosterv2amendmenthistory',typeof periodId==='object'?periodId:{periodId})
+    getAmendmentHistory:periodId=>request('rosterv2amendmenthistory',typeof periodId==='object'?periodId:{periodId}),
+    getPlannedRoster:async periodId=>{
+      const param=typeof periodId==='object'?periodId:{periodId};
+      const res=await request('rosterv2planned',param);
+      if(res&&Array.isArray(res.assignments)){
+        res.assignments.sort((a,b)=>
+          (a.date||'').localeCompare(b.date||'')||
+          (a.dutyDomain||'').localeCompare(b.dutyDomain||'')||
+          (a.personId||'').localeCompare(b.personId||'')||
+          (a.shiftCode||'').localeCompare(b.shiftCode||'')||
+          (a.assignmentId||'').localeCompare(b.assignmentId||'')
+        );
+      }
+      return res;
+    }
   };
 }

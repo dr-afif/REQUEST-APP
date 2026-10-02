@@ -997,7 +997,6 @@ function rosterLifecycleAmendReversal_(data, actor) {
   const expectedRevision = Number(data.expectedRevision !== undefined ? data.expectedRevision : (data.payload && data.payload.expectedRevision !== undefined ? data.payload.expectedRevision : 0));
   const targetEventId = String(data.targetEventId || (data.payload && data.payload.targetEventId) || '').trim();
   const adminNote = String(data.adminNote || (data.payload && data.payload.adminNote) || '').trim();
-  const publicReasonCode = String(data.publicReasonCode || (data.payload && data.payload.publicReasonCode) || 'REVERSAL').trim();
   const timestamp = data.timestamp || new Date().toISOString();
 
   if (!targetEventId) {
@@ -1014,7 +1013,6 @@ function rosterLifecycleAmendReversal_(data, actor) {
     payload: {
       periodId: periodId,
       targetEventId: targetEventId,
-      publicReasonCode: publicReasonCode,
       adminNote: adminNote
     }
   };
@@ -1044,8 +1042,10 @@ function rosterLifecycleAmendReversal_(data, actor) {
   }
 
   const currentState = String(periodRecord.State || '').toUpperCase();
-  if (currentState !== 'AMENDED' && currentState !== 'PUBLISHED') {
-    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot have amendments reversed; must be AMENDED or PUBLISHED' });
+  if (currentState !== 'AMENDED') {
+    if (!(currentState === 'PUBLISHED' && periodRecord.LastOperationId === operationId)) {
+      throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot have amendments reversed; must be AMENDED' });
+    }
   }
 
   const currentRevision = Number(periodRecord.Revision || 0);
@@ -1139,7 +1139,7 @@ function rosterLifecycleAmendReversal_(data, actor) {
     resultRevision: currentRevision + 1,
     operationId: operationId,
     actor: actor,
-    publicReasonCode: publicReasonCode,
+    publicReasonCode: targetEvent.PublicReasonCode,
     adminNote: adminNote,
     timestamp: timestamp
   });
@@ -1313,6 +1313,82 @@ function rosterLifecycleAmendmentHistory_(data, principal) {
     events: events,
     count: events.length,
     isAdmin: isAdmin
+  };
+}
+
+function rosterLifecycleGetPlanned_(data) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || data.period || ''));
+  rosterLifecycleEnsureAllSchemas_();
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found or not enrolled' });
+  }
+
+  const plannedSnapshotId = String(periodRecord.PlannedSnapshotId || '').trim();
+  if (!plannedSnapshotId) {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' has no authoritative Planned snapshot' });
+  }
+
+  const allPeriodAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedRows = allPeriodAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+
+  if (plannedRows.length === 0) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+  }
+
+  // Snapshot consistency checks:
+  // 1. Verify only the period's authoritative PlannedSnapshotId is present (no foreign snapshot rows mixed in)
+  const foreignSnapshotRows = plannedRows.filter(function(r) { return r.SnapshotId !== plannedSnapshotId; });
+  if (foreignSnapshotRows.length > 0) {
+    throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Foreign snapshot rows detected in Planned layer for period ' + periodId });
+  }
+
+  // 2. Duplicate / contradictory snapshot rows fail safely
+  const seenAssignmentIds = new Set();
+  for (let i = 0; i < plannedRows.length; i++) {
+    const id = String(plannedRows[i].AssignmentId || '').trim();
+    if (!id || seenAssignmentIds.has(id)) {
+      throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Duplicate or missing AssignmentId in Planned snapshot for period ' + periodId });
+    }
+    seenAssignmentIds.add(id);
+  }
+
+  // 3. Deterministic canonical ordering across sheet row permutations
+  plannedRows.sort(function(a, b) {
+    return (a.Date || '').localeCompare(b.Date || '') ||
+      (a.DutyDomain || '').localeCompare(b.DutyDomain || '') ||
+      (a.PersonId || '').localeCompare(b.PersonId || '') ||
+      (a.ShiftCode || '').localeCompare(b.ShiftCode || '') ||
+      (a.AssignmentId || '').localeCompare(b.AssignmentId || '');
+  });
+
+  // 4. Safe viewer DTO: omit OperationId, CreatedBy, internal row numbers, hashes, admin notes
+  const assignments = plannedRows.map(function(r) {
+    let modifiers = {};
+    if (r.ModifiersJson) {
+      if (typeof r.ModifiersJson === 'string') {
+        try { modifiers = JSON.parse(r.ModifiersJson); } catch (_) { modifiers = {}; }
+      } else if (typeof r.ModifiersJson === 'object' && r.ModifiersJson !== null) {
+        modifiers = r.ModifiersJson;
+      }
+    }
+    return {
+      assignmentId: String(r.AssignmentId || ''),
+      personId: String(r.PersonId || ''),
+      personNameSnapshot: String(r.PersonNameSnapshot || ''),
+      date: String(r.Date || ''),
+      dutyDomain: String(r.DutyDomain || ''),
+      shiftCode: String(r.ShiftCode || ''),
+      modifiers: modifiers
+    };
+  });
+
+  return {
+    ok: true,
+    periodId: periodId,
+    plannedSnapshotId: plannedSnapshotId,
+    count: assignments.length,
+    assignments: assignments
   };
 }
 
@@ -1910,6 +1986,10 @@ function rosterLifecycleRoute_(action, data) {
       return createJsonResponse(rosterLifecycleAmendmentHistory_(data, principal));
     }
 
+    if (action === 'rosterv2planned') {
+      return createJsonResponse(rosterLifecycleGetPlanned_(data));
+    }
+
     if (action === 'rosterv2amend') {
       return createJsonResponse(rosterLifecycleAmend_(data, principal.email));
     }
@@ -1944,7 +2024,8 @@ function rosterLifecycleRoute_(action, data) {
       'MALFORMED_EVENT', 'INCOMPLETE_SWAP', 'EVENT_ALREADY_REVERSED',
       'REVERSAL_DEPENDENCY_CONFLICT', 'CANNOT_REVERSE_LIFECYCLE_EVENT',
       'CANNOT_REVERSE_REVERSAL', 'IDEMPOTENCY_MISMATCH', 'REVISION_CONFLICT',
-      'DUTY_DOMAIN_REQUIRED', 'EVENT_NOT_FOUND', 'INVALID_OPERATOR'
+      'DUTY_DOMAIN_REQUIRED', 'EVENT_NOT_FOUND', 'INVALID_OPERATOR',
+      'CORRUPT_DATA'
     ];
     const code = (DraftProtocol.errors.includes(error.code) ||
       (RosterLifecycle.LIFECYCLE_ERRORS && RosterLifecycle.LIFECYCLE_ERRORS[error.code]) ||

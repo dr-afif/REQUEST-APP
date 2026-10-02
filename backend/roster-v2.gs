@@ -127,7 +127,7 @@ function rosterV2DispatchGet_(parameters) {
   const action = String(parameters.action || '').toLowerCase();
   if (['rosterv2draft','rosterv2operation','rosterv2draftschema'].includes(action)) return rosterDraftRoute_(action, parameters);
   if (['rosterv2offpolicies','rosterv2guidanceschema'].includes(action)) return rosterGuidanceRoute_(action, parameters);
-  if (['rosterv2lifecycleschema','rosterv2periodlifecycle','rosterv2amendmenthistory'].includes(action)) return rosterLifecycleRoute_(action, parameters);
+  if (['rosterv2lifecycleschema','rosterv2periodlifecycle','rosterv2amendmenthistory','rosterv2planned'].includes(action)) return rosterLifecycleRoute_(action, parameters);
   if (action === 'rosterv2schema') return createJsonResponse(rosterV2Schema_());
   if (action === 'rosterv2period') return createJsonResponse(rosterV2Period_(parameters));
   // Reserve the namespace: private/unknown v2 reads cannot fall through to legacy Requests.

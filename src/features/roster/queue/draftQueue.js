@@ -582,7 +582,7 @@ export class DraftQueue {
     await this.waitForDraftSettled(periodId);
 
     const payload=typeof payloadOrTargetEventId==='string'
-      ?{targetEventId:payloadOrTargetEventId,...(options.payload||{}),adminNote:options.adminNote||'',publicReasonCode:options.publicReasonCode||'REVERSAL'}
+      ?{targetEventId:payloadOrTargetEventId,...(options.payload||{}),adminNote:options.adminNote||''}
       :(payloadOrTargetEventId||{});
 
     return this.locks.request(this.store.name+':'+key,async()=>{
@@ -596,7 +596,10 @@ export class DraftQueue {
       if(currentState==='CLOSED'){
         throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot have amendments reversed`});
       }
-      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+      if(currentState==='PUBLISHED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in PUBLISHED state and has no active amendments to reverse`});
+      }
+      if(currentState!=='AMENDED'){
         throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot have amendments reversed`});
       }
 
