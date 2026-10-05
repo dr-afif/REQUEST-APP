@@ -542,11 +542,39 @@ export default function App() {
   };
 
   // Handle Excel Baseline Uploads
-  const handleUploadBaseline = async (rows) => {
-    const previousMasterRoster = [...masterRoster];
+  const handleUploadBaseline = async (rows, targetMonth) => {
+    const trimmedTargetMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
+    let canonicalMonth = trimmedTargetMonth;
+    if (!canonicalMonth && Array.isArray(rows) && rows.length > 0) {
+      const monthsInRows = new Set();
+      for (const r of rows) {
+        const iso = toIsoDate(r?.date || r?.Date);
+        if (iso && /^\d{4}-(0[1-9]|1[0-2])$/.test(iso.slice(0, 7))) {
+          monthsInRows.add(iso.slice(0, 7));
+        }
+      }
+      if (monthsInRows.size === 1) {
+        canonicalMonth = [...monthsInRows][0];
+      }
+    }
+
+    if (!canonicalMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      console.error('Missing or invalid targetMonth for roster upload:', targetMonth);
+      addToast('❌ Upload failed: targetMonth is required in YYYY-MM format for roster upload.. Reverted.', 'error', 5000);
+      return;
+    }
+
+    const monthScopedRows = Array.isArray(rows)
+      ? rows.filter((r) => {
+          const iso = toIsoDate(r?.date || r?.Date);
+          return iso ? iso.startsWith(canonicalMonth) : String(r?.date || r?.Date || '').startsWith(canonicalMonth);
+        })
+      : [];
+
+    let previousMonthRows = [];
     
-    // Optimistically update masterRoster state immediately
-    const validatedRows = rows.map((r) => ({
+    // Optimistically update masterRoster state preserving other months
+    const validatedRows = monthScopedRows.map((r) => ({
       Name: r.name,
       name: r.name,
       Date: r.date,
@@ -554,13 +582,22 @@ export default function App() {
       Shift: r.shift,
       shift: r.shift,
     }));
-    setMasterRoster(validatedRows);
+
+    setMasterRoster((prev) => {
+      const isMonthMatch = (r) => {
+        const iso = toIsoDate(r.date || r.Date);
+        return iso ? iso.startsWith(canonicalMonth) : String(r.date || r.Date || '').startsWith(canonicalMonth);
+      };
+      previousMonthRows = prev.filter(isMonthMatch);
+      const otherMonths = prev.filter((r) => !isMonthMatch(r));
+      return [...otherMonths, ...validatedRows];
+    });
 
     const toastId = addToast('🔄 Uploading roster baseline to Google Sheets...', 'info', Infinity);
     
     (async () => {
       try {
-        await uploadMasterRoster(rows);
+        await uploadMasterRoster(monthScopedRows, canonicalMonth);
         updateToast(toastId, {
           message: '✅ Roster baseline uploaded successfully!',
           type: 'success',
@@ -571,7 +608,14 @@ export default function App() {
         await loadAllData();
       } catch (err) {
         console.error('Failed to upload baseline:', err);
-        setMasterRoster(previousMasterRoster);
+        setMasterRoster((prev) => {
+          const isMonthMatch = (r) => {
+            const iso = toIsoDate(r.date || r.Date);
+            return iso ? iso.startsWith(canonicalMonth) : String(r.date || r.Date || '').startsWith(canonicalMonth);
+          };
+          const otherMonths = prev.filter((r) => !isMonthMatch(r));
+          return [...otherMonths, ...previousMonthRows];
+        });
         updateToast(toastId, {
           message: `❌ Upload failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',

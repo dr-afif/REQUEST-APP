@@ -105,8 +105,12 @@ export async function fetchAllData() {
   return request({ query: { action: 'alldata' } });
 }
 
-export async function uploadMasterRoster(rows) {
-  return request({ method: 'POST', body: { action: 'uploadmasterroster', rows } });
+export async function uploadMasterRoster(rows, targetMonth) {
+  const trimmedMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
+  if (!trimmedMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmedMonth) || trimmedMonth.startsWith('0000')) {
+    throw new Error('targetMonth is required in YYYY-MM format for roster upload.');
+  }
+  return request({ method: 'POST', body: { action: 'uploadmasterroster', rows, targetMonth: trimmedMonth } });
 }
 
 export async function updateRequestApproval(id, approvalStatus) {
