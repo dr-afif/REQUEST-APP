@@ -1082,6 +1082,8 @@ const RosterLifecycle = (() => {
     periodId,
     plannedAssignments = [],
     events = [],
+    absences = [],
+    replacements = [],
     people = [],
     digestFn
   }) {
@@ -1241,6 +1243,113 @@ const RosterLifecycle = (() => {
       }
     }
 
+    // 3b. Apply active Phase 6 Absences (operational state reflects unavailable staff)
+    const activeAbsences = (absences || []).filter(a =>
+      a && (a.Status === 'ACTIVE' || a.status === 'ACTIVE') &&
+      (!a.PeriodId || a.PeriodId === periodId || (a.StartDate && a.StartDate.slice(0, 7) <= periodId && a.EndDate && a.EndDate.slice(0, 7) >= periodId))
+    );
+
+    for (const absence of activeAbsences) {
+      const domain = absence.DutyDomain || absence.dutyDomain || 'MO';
+      const personId = absence.PersonId || absence.personId;
+      const startDate = absence.StartDate || absence.startDate;
+      const endDate = absence.EndDate || absence.endDate;
+      const absenceType = absence.AbsenceType || absence.absenceType;
+
+      for (const [key, items] of currentCells.entries()) {
+        const parsed = parseCellKey(key);
+        if (parsed.personId !== personId || parsed.dutyDomain !== domain) continue;
+        if (parsed.date < startDate || parsed.date > endDate) continue;
+
+        for (const item of items) {
+          if (item.ShiftCode !== 'OFF') {
+            item.OriginalShiftCode = item.OriginalShiftCode || item.ShiftCode;
+            item.OriginalAssignmentId = item.OriginalAssignmentId || item.AssignmentId;
+            item.ShiftCode = absenceType;
+            item._rawShift = absenceType;
+            item.Source = 'ABSENCE';
+            item.AbsenceId = absence.AbsenceId || absence.absenceId;
+            item.CoverageStatus = 'UNCOVERED';
+          }
+        }
+      }
+    }
+
+    // 3c. Apply active Phase 6 Replacements (operational state reflects covering staff)
+    const activeReplacements = (replacements || []).filter(r =>
+      r && (r.Status === 'ACTIVE' || r.status === 'ACTIVE')
+    );
+
+    const peopleLookup = new Map();
+    for (const p of people) {
+      if (p.PersonId) peopleLookup.set(p.PersonId, p.CurrentDisplayName || p.MemberName || '');
+    }
+
+    for (const repl of activeReplacements) {
+      const absenceId = repl.AbsenceId || repl.absenceId;
+      const domain = repl.DutyDomain || repl.dutyDomain || 'MO';
+      const replDate = repl.Date || repl.date;
+      const replShift = repl.ShiftCode || repl.shiftCode;
+      const replPersonId = repl.ReplacementPersonId || repl.replacementPersonId;
+      const origAssignId = repl.OriginalAssignmentId || repl.originalAssignmentId;
+      const replId = repl.ReplacementId || repl.replacementId;
+
+      const targetAbsence = activeAbsences.find(a => (a.AbsenceId || a.absenceId) === absenceId);
+      if (!targetAbsence) continue; // Inactive or missing absence target
+
+      // Mark the absent assignment as COVERED
+      const absentPersonId = targetAbsence.PersonId || targetAbsence.personId;
+      const absentKey = makeCellKey(absentPersonId, replDate, domain);
+      const absentItems = currentCells.get(absentKey) || [];
+      for (const item of absentItems) {
+        if (item.AbsenceId === absenceId && (!origAssignId || item.OriginalAssignmentId === origAssignId)) {
+          item.CoverageStatus = 'COVERED';
+          item.ReplacementId = replId;
+        }
+      }
+
+      // Add the covering replacement assignment
+      const replKey = makeCellKey(replPersonId, replDate, domain);
+      if (!currentCells.has(replKey)) {
+        currentCells.set(replKey, []);
+      }
+
+      const replPersonName = peopleLookup.get(replPersonId) ||
+        repl.PersonNameSnapshot ||
+        repl.personNameSnapshot ||
+        plannedAssignments.find(a => a.PersonId === replPersonId)?.PersonNameSnapshot ||
+        '';
+
+      const replAssignId = repl.ReplacementAssignmentId || repl.replacementAssignmentId ||
+        deterministicAssignmentId(repl.OperationId || targetAbsence.OperationId, replPersonId, replDate, domain, replShift, 0, digestFn);
+
+      const replAssignment = {
+        AssignmentId: replAssignId,
+        PeriodId: periodId,
+        Layer: 'CURRENT',
+        SnapshotId: '',
+        PersonId: replPersonId,
+        PersonNameSnapshot: replPersonName,
+        Date: replDate,
+        DutyDomain: domain,
+        ShiftCode: replShift,
+        ModifiersJson: JSON.stringify({ extended: false, standby: false }),
+        DraftRevision: 0,
+        Source: 'REPLACEMENT',
+        CoverageStatus: 'COVERED',
+        AbsenceId: absenceId,
+        ReplacementId: replId,
+        OriginalAssignmentId: origAssignId,
+        CoveringForPersonId: absentPersonId,
+        OperationId: repl.OperationId || targetAbsence.OperationId,
+        CreatedAt: repl.CreatedAt || targetAbsence.CreatedAt,
+        CreatedBy: repl.CreatedBy || targetAbsence.CreatedBy,
+        _rawShift: replShift
+      };
+
+      currentCells.get(replKey).push(replAssignment);
+    }
+
     // 4. Flatten all current assignments and sort canonically
     const currentAssignments = [];
     for (const [_, items] of currentCells.entries()) {
@@ -1259,7 +1368,8 @@ const RosterLifecycle = (() => {
 
     // 5. Active amendments & effective state
     const activeCount = countActiveAmendments(eventGroups);
-    const effectiveState = activeCount > 0 ? LIFECYCLE_STATES.AMENDED : LIFECYCLE_STATES.PUBLISHED;
+    const hasActiveAbsence = activeAbsences.length > 0;
+    const effectiveState = (activeCount > 0 || hasActiveAbsence) ? LIFECYCLE_STATES.AMENDED : LIFECYCLE_STATES.PUBLISHED;
 
     // 6. Master roster projection & checksum
     const masterRosterProjection = generateMasterRosterProjection(currentAssignments);
@@ -1272,6 +1382,8 @@ const RosterLifecycle = (() => {
       periodId,
       effectiveState,
       activeAmendmentCount: activeCount,
+      activeAbsences,
+      activeReplacements,
       totalEvents: eventGroups.length,
       reversedEventIds: Array.from(reversedEventIds),
       currentAssignments,
