@@ -679,4 +679,12 @@ export class DraftQueue {
     RosterCompatibility.validatePeriod(periodId);
     return this.repository.getAmendmentHistory(periodId);
   }
+  async getPlannedRoster(periodId){
+    RosterCompatibility.validatePeriod(periodId);
+    return this.repository.getPlannedRoster(periodId);
+  }
+  async getCurrentRoster(periodId){
+    RosterCompatibility.validatePeriod(periodId);
+    return this.repository.getCurrentRoster(periodId);
+  }
 }

@@ -612,7 +612,7 @@ export default function LifecycleControls({
             </button>
           )}
 
-          {confirmedState === 'PUBLISHED' && (
+          {(confirmedState === 'PUBLISHED' || confirmedState === 'AMENDED') && (
             <button
               type="button"
               disabled={!mutationsEnabled}

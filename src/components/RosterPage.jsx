@@ -1,5 +1,6 @@
 import DraftQueuePanel, { rosterPanelEnabled } from '../features/roster/components/DraftQueuePanel.jsx';
 import LifecycleControls from '../features/roster/components/LifecycleControls.jsx';
+import Phase5RosterContainer from '../features/roster/components/Phase5RosterContainer.jsx';
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
@@ -745,7 +746,7 @@ export default function RosterPage({
   const isPeriodLocked = Boolean(
     lifecycleInfo.isEnrolled &&
     lifecycleInfo.period === rosterMonth &&
-    ['PUBLISHED', 'CLOSED'].includes(lifecycleInfo.state)
+    ['PUBLISHED', 'CLOSED', 'AMENDED'].includes(lifecycleInfo.state)
   );
 
   useEffect(() => {
@@ -2346,7 +2347,19 @@ export default function RosterPage({
         </div>
       </div>
 
-      {/* 🧭 Tab Control */}
+      {/* Phase 5 V2 Authoritative Roster (Current / Planned / Changes) for Enrolled Published/Amended/Closed Periods */}
+      {lifecycleInfo.isEnrolled && ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false ? (
+        <div className="mb-6">
+          <Phase5RosterContainer
+            period={rosterMonth}
+            settings={settings}
+            isAdmin={isAdmin}
+            onLifecycleStateChange={setLifecycleInfo}
+          />
+        </div>
+      ) : (
+        <>
+          {/* 🧭 Tab Control */}
       <div className="flex justify-between items-center border-b border-slate-200 mb-6 select-none">
         <div className="flex">
           <button
@@ -2398,9 +2411,11 @@ export default function RosterPage({
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 shadow-sm" role="status">
                 <span>🔒</span>
                 <span>
-                  {lifecycleInfo.state === 'PUBLISHED'
-                    ? 'Planned Snapshot Locked'
-                    : 'Period Closed (Read-Only)'}
+                  {lifecycleInfo.state === 'CLOSED'
+                    ? 'Period Closed (Read-Only)'
+                    : lifecycleInfo.state === 'AMENDED'
+                    ? 'Amended Roster'
+                    : 'Planned Snapshot Locked'}
                 </span>
               </div>
             ) : (
@@ -3363,6 +3378,8 @@ export default function RosterPage({
           <span className="text-4xl block mb-2">📅</span>
           <p className="font-semibold text-sm">No roster records detected for the selected month.</p>
         </div>
+      )}
+        </>
       )}
       {isExportModalOpen && createPortal((
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
