@@ -54,10 +54,10 @@ test('legacy POST uploadmasterroster safety hotfix: requires targetMonth and fai
   assert.equal(bad.result,'error');assert.match(bad.message,/targetMonth/);
   assert.deepEqual(h.jsonState(),before);assert.deepEqual(h.writes,[]);
 
-  const old=harness(legacySource),now=harness();
-  const fullPayload={action:'uploadmasterroster',allowFullReplacement:true,rows:[{name:'Person A',date:'2030-07-28',shift:'AM'},{name:'Person A',date:'2030-07-28',shift:'PM'}]};
-  const expected=old.post(fullPayload);assert.equal(expected.result,'success');
-  assert.deepEqual(now.post(fullPayload),expected);assert.deepEqual(now.jsonState(),old.jsonState());assert.deepEqual(now.writes,old.writes);
+  // Fail closed even if full replacement flags are passed: targetMonth is mandatory
+  const badWithFlags=h.post({action:'uploadmasterroster',allowFullReplacement:true,rows:[{name:'Person A',date:'2030-07-28',shift:'AM'}]});
+  assert.equal(badWithFlags.result,'error');assert.match(badWithFlags.message,/targetMonth/);
+  assert.deepEqual(h.jsonState(),before);assert.deepEqual(h.writes,[]);
 });
 test('missing-sheet legacy GET side effects and old Settings failure remain unchanged',()=>{
   for(const action of getActions){const old=harness(legacySource,{tables:{}}),now=harness(currentSource,{tables:{}});assert.deepEqual(now.get(action),old.get(action),action);assert.deepEqual(now.jsonState(),old.jsonState(),action);}

@@ -371,3 +371,190 @@ test('12. Repeated month-scoped calls remain idempotently safe', () => {
   assert.equal(populated3.length, 11);
   assert.deepEqual(populated3[10], ['Dr Afif', '2026-10-01', 'NIGHT']);
 });
+
+test('13. Primary write failure: simulated setValues error causes zero clear and leaves MasterRoster unchanged', () => {
+  const h = setupHarnessWithRoster();
+  const stateBefore = JSON.stringify(h.grids.MasterRoster);
+
+  // Intercept getActiveSpreadsheet to inject primary setValues error
+  const origGetActive = h.context.SpreadsheetApp.getActiveSpreadsheet;
+  h.context.SpreadsheetApp.getActiveSpreadsheet = function() {
+    const ss = origGetActive();
+    const origGetSheet = ss.getSheetByName;
+    ss.getSheetByName = function(name) {
+      const sh = origGetSheet(name);
+      if (name === 'MasterRoster') {
+        const origRange = sh.getRange;
+        sh.getRange = function(r, c, nr, nc) {
+          const rng = origRange.apply(this, arguments);
+          rng.setValues = function() {
+            throw new Error('Simulated primary setValues write failure');
+          };
+          return rng;
+        };
+      }
+      return sh;
+    };
+    return ss;
+  };
+
+  const res = h.post({
+    action: 'uploadmasterroster',
+    targetMonth: '2026-10',
+    rows: [{ name: 'Dr Judy New', date: '2026-10-20', shift: 'PM' }]
+  });
+
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /Simulated primary setValues write failure/);
+
+  // Assert NO clearContent was performed before the failed write
+  const clears = h.writes.filter(w => w.name === 'MasterRoster' && w.method === 'clearContent');
+  assert.equal(clears.length, 0, 'No clearContent must be called before or during primary write');
+
+  // Assert MasterRoster remains completely unchanged
+  assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
+});
+
+test('14. Trailing cleanup failure: simulated clearContent error leaves new roster written without historical wipe', () => {
+  // Seed a larger roster where old row count > new row count so cleanup is triggered
+  const largeRoster = createYearlyRoster(); // 12 rows (header + 9 Jan-Sep + 2 Oct)
+  largeRoster.push(['Dr Judy Extra 1', '2026-10-07', 'NIGHT']);
+  largeRoster.push(['Dr Judy Extra 2', '2026-10-08', 'AM']); // Now 14 rows (4 Oct rows)
+
+  const h = setupHarnessWithRoster(largeRoster);
+  const janSepExpected = largeRoster.slice(1, 10);
+
+  // Intercept trailing clearContent to fail
+  const origGetActive = h.context.SpreadsheetApp.getActiveSpreadsheet;
+  h.context.SpreadsheetApp.getActiveSpreadsheet = function() {
+    const ss = origGetActive();
+    const origGetSheet = ss.getSheetByName;
+    ss.getSheetByName = function(name) {
+      const sh = origGetSheet(name);
+      if (name === 'MasterRoster') {
+        const origRange = sh.getRange;
+        sh.getRange = function(r, c, nr, nc) {
+          const rng = origRange.apply(this, arguments);
+          rng.clearContent = function() {
+            throw new Error('Simulated trailing clearContent failure');
+          };
+          return rng;
+        };
+      }
+      return sh;
+    };
+    return ss;
+  };
+
+  // Upload 1 October row (new data count = 9 Jan-Sep + 1 Oct = 10 rows. Old was 13 data rows.)
+  const res = h.post({
+    action: 'uploadmasterroster',
+    targetMonth: '2026-10',
+    rows: [{ name: 'Dr Judy Replacement', date: '2026-10-25', shift: 'PM' }]
+  });
+
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /trailing row cleanup failed/);
+
+  // Assert primary write DID execute successfully
+  const setValuesWrites = h.writes.filter(w => w.name === 'MasterRoster' && w.method === 'setValues');
+  assert.ok(setValuesWrites.length > 0, 'setValues must have executed before cleanup');
+
+  // Assert new validated data is present at rows 2..11
+  const rowsInSheet = h.grids.MasterRoster.slice(1, 11);
+  assert.deepEqual(rowsInSheet.slice(0, 9), janSepExpected, 'Jan-Sep historical rows must be intact');
+  assert.deepEqual(rowsInSheet[9], ['Dr Judy Replacement', '2026-10-25', 'PM'], 'New October row must be written');
+
+  // Only defect is stale trailing rows remaining at rows 12..14, NOT a historical wipe!
+  assert.equal(h.grids.MasterRoster.length, 14);
+});
+
+test('15. Missing targetMonth fails closed even with allowFullReplacement or authorizeFullReplacement flags', () => {
+  for (const flag of [{ allowFullReplacement: true }, { authorizeFullReplacement: true }, {}]) {
+    const h = setupHarnessWithRoster();
+    const stateBefore = JSON.stringify(h.grids.MasterRoster);
+
+    const res = h.post({
+      action: 'uploadmasterroster',
+      ...flag,
+      rows: [{ name: 'Dr Rogue', date: '2026-10-01', shift: 'AM' }]
+    });
+
+    assert.equal(res.result, 'error');
+    assert.match(res.message, /targetMonth is required/);
+    assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
+    assert.equal(h.writes.filter(w => w.name === 'MasterRoster').length, 0);
+  }
+});
+
+test('16. Malformed new row date rejects and causes zero mutation', () => {
+  const h = setupHarnessWithRoster();
+  const stateBefore = JSON.stringify(h.grids.MasterRoster);
+
+  const res = h.post({
+    action: 'uploadmasterroster',
+    targetMonth: '2026-10',
+    rows: [
+      { name: 'Dr A', date: 'not-a-date', shift: 'AM' }
+    ]
+  });
+
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /does not match targetMonth/);
+  assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
+  assert.equal(h.writes.filter(w => w.name === 'MasterRoster').length, 0);
+});
+
+test('17. Missing row date in new payload rejects and causes zero mutation', () => {
+  const h = setupHarnessWithRoster();
+  const stateBefore = JSON.stringify(h.grids.MasterRoster);
+
+  const res = h.post({
+    action: 'uploadmasterroster',
+    targetMonth: '2026-10',
+    rows: [
+      { name: 'Dr A', date: '', shift: 'AM' }
+    ]
+  });
+
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /Missing date for row/);
+  assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
+  assert.equal(h.writes.filter(w => w.name === 'MasterRoster').length, 0);
+});
+
+test('18. Wrong-month row (October upload with September date) rejects and causes zero mutation', () => {
+  const h = setupHarnessWithRoster();
+  const stateBefore = JSON.stringify(h.grids.MasterRoster);
+
+  const res = h.post({
+    action: 'uploadmasterroster',
+    targetMonth: '2026-10',
+    rows: [
+      { name: 'Dr A', date: '2026-09-15', shift: 'AM' }
+    ]
+  });
+
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /does not match targetMonth/);
+  assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
+  assert.equal(h.writes.filter(w => w.name === 'MasterRoster').length, 0);
+});
+
+test('19. Missing MasterRoster sheet fails closed and does not auto-create replacement sheet', () => {
+  const tables = structuredClone(fixture.tables);
+  delete tables.MasterRoster;
+  tables.RosterPeriods = [['PeriodId', 'State', 'Status', 'SchemaVersion']];
+  const h = harness(currentSource, { tables });
+
+  const res = h.post({
+    action: 'uploadmasterroster',
+    targetMonth: '2026-10',
+    rows: [{ name: 'Dr Test', date: '2026-10-01', shift: 'AM' }]
+  });
+
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /Sheet "MasterRoster" not found/);
+  assert.equal(Object.hasOwn(h.grids, 'MasterRoster'), false);
+  assert.equal(h.writes.filter(w => w.name === 'MasterRoster').length, 0);
+});

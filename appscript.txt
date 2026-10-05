@@ -591,140 +591,145 @@ function getMonthFromValue_(val) {
 }
 
 function handleLegacyMasterRosterUpload_(data) {
-  const sheet = createSheetIfNotExist(MASTER_ROSTER_SHEET_NAME, ['Name', 'Date', 'Shift']);
-  const rawTargetMonth = data && data.targetMonth;
-  const allowFullReplacement = Boolean(data && (data.allowFullReplacement === true || data.authorizeFullReplacement === true));
-
-  // FAIL CLOSED: If targetMonth is absent, reject unless explicit authorization flag is passed
+  var rawTargetMonth = data && data.targetMonth;
   if (!rawTargetMonth || String(rawTargetMonth).trim() === '') {
-    if (!allowFullReplacement) {
-      throw new Error('targetMonth is required in YYYY-MM format for roster upload.');
-    }
+    throw new Error('targetMonth is required in YYYY-MM format for roster upload.');
   }
 
-  let targetMonth = null;
-  if (rawTargetMonth) {
-    const trimmed = String(rawTargetMonth).trim();
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmed) || trimmed.slice(0, 4) === '0000') {
-      throw new Error('Invalid targetMonth format. Expected YYYY-MM (e.g. "2026-10"). Received: ' + rawTargetMonth);
-    }
-    targetMonth = trimmed;
+  var trimmedTargetMonth = String(rawTargetMonth).trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmedTargetMonth) || trimmedTargetMonth.slice(0, 4) === '0000') {
+    throw new Error('Invalid targetMonth format. Expected YYYY-MM (e.g. "2026-10"). Received: ' + rawTargetMonth);
+  }
+  var targetMonth = trimmedTargetMonth;
+
+  // Retrieve existing sheet; fail closed if missing (do not auto-create on mutation endpoint)
+  var sheet = typeof getSheetByName === 'function'
+    ? getSheetByName(MASTER_ROSTER_SHEET_NAME)
+    : SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MASTER_ROSTER_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('Sheet "' + MASTER_ROSTER_SHEET_NAME + '" not found.');
   }
 
-  const rows = Array.isArray(data && data.rows) ? data.rows : [];
-  const newValues = rows.map(r => {
+  // Validate incoming rows: every row must have a valid date matching targetMonth
+  var rows = Array.isArray(data && data.rows) ? data.rows : [];
+  var newValues = [];
+  for (var j = 0; j < rows.length; j++) {
+    var r = rows[j];
     if (!r || typeof r !== 'object') {
-      return ['', '', ''];
+      throw new Error('Invalid row at index ' + j + ': row must be an object.');
     }
-    const name = r.name !== undefined ? r.name : (r.Name !== undefined ? r.Name : '');
-    const date = r.date !== undefined ? r.date : (r.Date !== undefined ? r.Date : '');
-    const shift = r.shift !== undefined ? r.shift : (r.Shift !== undefined ? r.Shift : '');
-    return [
-      String(name || '').trim(),
-      String(date || '').trim(),
-      String(shift || '').trim()
-    ];
-  });
+    var rawName = r.name !== undefined ? r.name : (r.Name !== undefined ? r.Name : '');
+    var rawDate = r.date !== undefined ? r.date : (r.Date !== undefined ? r.Date : '');
+    var rawShift = r.shift !== undefined ? r.shift : (r.Shift !== undefined ? r.Shift : '');
 
-  // If targetMonth is supplied, validate that new rows belong to targetMonth (or have unparseable/blank date)
-  if (targetMonth) {
-    for (let j = 0; j < newValues.length; j++) {
-      const r = newValues[j];
-      const rowMonth = getMonthFromValue_(r[1]);
-      if (rowMonth && rowMonth !== targetMonth) {
-        throw new Error('Row at index ' + j + ' date "' + r[1] + '" does not match targetMonth "' + targetMonth + '".');
+    var dateStr = String(rawDate || '').trim();
+    if (!dateStr) {
+      throw new Error('Missing date for row at index ' + j + '.');
+    }
+
+    var rowMonth = getMonthFromValue_(rawDate);
+    if (!rowMonth || rowMonth !== targetMonth) {
+      throw new Error('Row at index ' + j + ' date "' + dateStr + '" does not match targetMonth "' + targetMonth + '".');
+    }
+
+    newValues.push([
+      String(rawName || '').trim(),
+      dateStr,
+      String(rawShift || '').trim()
+    ]);
+  }
+
+  var lastRow = sheet.getLastRow();
+  var lastCol = Math.max(sheet.getLastColumn(), 3);
+  var oldDataRowCount = Math.max(0, lastRow - 1);
+
+  var preservedRows = [];
+  var targetMonthRowsCount = 0;
+
+  if (oldDataRowCount > 0) {
+    var existingValues;
+    try {
+      existingValues = sheet.getRange(2, 1, oldDataRowCount, 3).getValues();
+    } catch (readErr) {
+      throw new Error('Failed to read existing MasterRoster rows: ' + (readErr && readErr.message ? readErr.message : readErr));
+    }
+
+    if (!Array.isArray(existingValues)) {
+      throw new Error('Failed to read existing MasterRoster rows: result is not an array.');
+    }
+
+    for (var i = 0; i < existingValues.length; i++) {
+      var row = existingValues[i];
+      var dateVal = row[1];
+      var rMonth = getMonthFromValue_(dateVal);
+
+      if (rMonth === targetMonth) {
+        targetMonthRowsCount++;
+      } else {
+        // Preserve non-target months, unparseable dates, and blank rows
+        preservedRows.push([
+          row[0] !== undefined ? row[0] : '',
+          row[1] !== undefined ? row[1] : '',
+          row[2] !== undefined ? row[2] : ''
+        ]);
       }
+    }
+
+    if (preservedRows.length + targetMonthRowsCount !== existingValues.length) {
+      throw new Error('Preservation invariant failed: existing rows accounting mismatch.');
     }
   }
 
-  const lastRow = sheet.getLastRow();
-  const lastCol = Math.max(sheet.getLastColumn(), 3);
+  var expectedPreservedCount = preservedRows.length;
+  var finalValues = preservedRows.concat(newValues);
 
-  let finalValues = [];
-
-  if (targetMonth) {
-    let preservedRows = [];
-    let targetMonthRowsCount = 0;
-
-    if (lastRow > 1) {
-      // 1. Read existing rows with error handling
-      let existingValues;
-      try {
-        existingValues = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
-      } catch (readErr) {
-        throw new Error('Failed to read existing MasterRoster rows: ' + (readErr && readErr.message ? readErr.message : readErr));
-      }
-
-      if (!Array.isArray(existingValues)) {
-        throw new Error('Failed to read existing MasterRoster rows: result is not an array.');
-      }
-
-      // 2. Separate preserved vs target-month rows
-      for (let i = 0; i < existingValues.length; i++) {
-        const row = existingValues[i];
-        const dateVal = row[1];
-        const rowMonth = getMonthFromValue_(dateVal);
-
-        if (rowMonth === targetMonth) {
-          targetMonthRowsCount++;
-        } else {
-          // Preserve non-target months, unparseable dates, and blank rows
-          preservedRows.push([
-            row[0] !== undefined ? row[0] : '',
-            row[1] !== undefined ? row[1] : '',
-            row[2] !== undefined ? row[2] : ''
-          ]);
-        }
-      }
-
-      // Invariant check: row accounting
-      if (preservedRows.length + targetMonthRowsCount !== existingValues.length) {
-        throw new Error('Preservation invariant failed: existing rows accounting mismatch.');
-      }
-    }
-
-    const expectedPreservedCount = preservedRows.length;
-    finalValues = preservedRows.concat(newValues);
-
-    // 3. Preservation Invariant Guard: assert in-memory matrix before touching sheet
-    if (finalValues.length !== expectedPreservedCount + newValues.length) {
-      throw new Error('Preservation invariant failed: final matrix length mismatch.');
-    }
-
-    for (let k = 0; k < expectedPreservedCount; k++) {
-      const orig = preservedRows[k];
-      const finalRow = finalValues[k];
-      if (orig[0] !== finalRow[0] || orig[1] !== finalRow[1] || orig[2] !== finalRow[2]) {
-        throw new Error('Preservation invariant failed: preserved row at index ' + k + ' was mutated.');
-      }
-    }
-
-    for (let m = 0; m < newValues.length; m++) {
-      const newRow = newValues[m];
-      const finalRow = finalValues[expectedPreservedCount + m];
-      if (newRow[0] !== finalRow[0] || newRow[1] !== finalRow[1] || newRow[2] !== finalRow[2]) {
-        throw new Error('Preservation invariant failed: new row at index ' + m + ' was mutated.');
-      }
-    }
-  } else {
-    // Explicit full replacement authorized
-    finalValues = newValues;
+  // Preservation Invariant Guard: assert in-memory matrix before touching sheet
+  if (finalValues.length !== expectedPreservedCount + newValues.length) {
+    throw new Error('Preservation invariant failed: final matrix length mismatch.');
   }
 
-  // 4. Safe rewrite: executed ONLY after in-memory matrix construction and assertion pass
-  if (lastRow > 1) {
-    sheet.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+  for (var k = 0; k < expectedPreservedCount; k++) {
+    var orig = preservedRows[k];
+    var finalRow = finalValues[k];
+    if (orig[0] !== finalRow[0] || orig[1] !== finalRow[1] || orig[2] !== finalRow[2]) {
+      throw new Error('Preservation invariant failed: preserved row at index ' + k + ' was mutated.');
+    }
   }
 
+  for (var m = 0; m < newValues.length; m++) {
+    var newRow = newValues[m];
+    var fRow = finalValues[expectedPreservedCount + m];
+    if (newRow[0] !== fRow[0] || newRow[1] !== fRow[1] || newRow[2] !== fRow[2]) {
+      throw new Error('Preservation invariant failed: new row at index ' + m + ' was mutated.');
+    }
+  }
+
+  // WRITE-BEFORE-CLEANUP:
+  // 1. Primary write: Overwrite rows 2.. starting at row 2 with finalValues.
+  // Historical rows and new rows are written first. No clearContent occurs before this.
   if (finalValues.length > 0) {
     sheet.getRange(2, 1, finalValues.length, 3).setValues(finalValues);
+    if (typeof SpreadsheetApp.flush === 'function') {
+      SpreadsheetApp.flush();
+    }
   }
 
-  if (typeof SpreadsheetApp.flush === 'function') {
-    SpreadsheetApp.flush();
+  // 2. Trailing obsolete row cleanup:
+  // ONLY after primary write succeeds, clear any leftover rows beyond finalValues.length.
+  if (oldDataRowCount > finalValues.length) {
+    var obsoleteRowCount = oldDataRowCount - finalValues.length;
+    var cleanupStartRow = 2 + finalValues.length;
+    try {
+      sheet.getRange(cleanupStartRow, 1, obsoleteRowCount, lastCol).clearContent();
+      if (typeof SpreadsheetApp.flush === 'function') {
+        SpreadsheetApp.flush();
+      }
+    } catch (cleanupErr) {
+      throw new Error('MasterRoster written but trailing row cleanup failed: ' + (cleanupErr && cleanupErr.message ? cleanupErr.message : cleanupErr));
+    }
   }
 
-  return createJsonResponse({ result: 'success', count: rows ? rows.length : 0 });
+  return createJsonResponse({ result: 'success', count: newValues.length });
 }
 
 function handleUpdateRequestApproval(data) {
