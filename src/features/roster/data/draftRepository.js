@@ -87,6 +87,20 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
         );
       }
       return res;
+    },
+    getCurrentRoster:async periodId=>{
+      const param=typeof periodId==='object'?periodId:{periodId};
+      const res=await request('rosterv2current',param);
+      if(res&&Array.isArray(res.assignments)){
+        res.assignments.sort((a,b)=>
+          (a.date||'').localeCompare(b.date||'')||
+          (a.dutyDomain||'').localeCompare(b.dutyDomain||'')||
+          (a.personId||'').localeCompare(b.personId||'')||
+          (a.shiftCode||'').localeCompare(b.shiftCode||'')||
+          (a.assignmentId||'').localeCompare(b.assignmentId||'')
+        );
+      }
+      return res;
     }
   };
 }

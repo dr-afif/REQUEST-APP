@@ -434,16 +434,16 @@ const RosterLifecycle = (() => {
 
   function generateMasterRosterProjection(assignments = []) {
     const rows = assignments.map(a => {
-      const name = a.PersonNameSnapshot || a.Name || '';
-      const date = a.Date;
-      const shift = a._rawShift || formatRawShift(a.ShiftCode, a.ModifiersJson);
+      const name = a.PersonNameSnapshot || a.personNameSnapshot || a.Name || a.name || '';
+      const date = a.Date || a.date || '';
+      const shift = a._rawShift || a.rawShift || formatRawShift(a.ShiftCode || a.shiftCode, a.ModifiersJson || a.modifiers);
       return { Name: name, Date: date, Shift: shift };
     });
 
     rows.sort((a, b) =>
-      a.Date.localeCompare(b.Date) ||
-      a.Name.localeCompare(b.Name) ||
-      a.Shift.localeCompare(b.Shift)
+      (a.Date || '').localeCompare(b.Date || '') ||
+      (a.Name || '').localeCompare(b.Name || '') ||
+      (a.Shift || '').localeCompare(b.Shift || '')
     );
 
     return rows;
@@ -1250,10 +1250,11 @@ const RosterLifecycle = (() => {
     }
 
     currentAssignments.sort((a, b) =>
-      a.Date.localeCompare(b.Date) ||
-      (a.PersonNameSnapshot || '').localeCompare(b.PersonNameSnapshot || '') ||
-      a.ShiftCode.localeCompare(b.ShiftCode) ||
-      a.AssignmentId.localeCompare(b.AssignmentId)
+      (a.Date || '').localeCompare(b.Date || '') ||
+      (a.DutyDomain || '').localeCompare(b.DutyDomain || '') ||
+      (a.PersonId || '').localeCompare(b.PersonId || '') ||
+      (a.ShiftCode || '').localeCompare(b.ShiftCode || '') ||
+      (a.AssignmentId || '').localeCompare(b.AssignmentId || '')
     );
 
     // 5. Active amendments & effective state

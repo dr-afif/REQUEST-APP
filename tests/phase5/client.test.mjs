@@ -338,6 +338,13 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
     assert.equal(getPlannedUrl.searchParams.get('action'), 'rosterv2planned');
     assert.equal(getPlannedUrl.searchParams.get('periodId'), '2030-07');
     assert.equal(captured.options.method, 'GET');
+
+    // 1e: getCurrentRoster
+    await repo.getCurrentRoster('2030-07');
+    const getCurrentUrl = new URL(captured.url);
+    assert.equal(getCurrentUrl.searchParams.get('action'), 'rosterv2current');
+    assert.equal(getCurrentUrl.searchParams.get('periodId'), '2030-07');
+    assert.equal(captured.options.method, 'GET');
   });
 
   it('2. Exact protocol/payloadHash parity: client payloadHash matches backend canonical SHA-256 for ADMIN_CORRECTION, SWAP, and REVERSAL', { timeout: 5000 }, async () => {
@@ -1227,5 +1234,55 @@ describe('Phase 5 Slice 3: Client Amendment Queue, Concurrency & Transport Integ
     //   (b) a lightweight directory mapping from the server.
     const auditStatus = 'AUDITED_AND_DOCUMENTED';
     assert.equal(auditStatus, 'AUDITED_AND_DOCUMENTED');
+  });
+
+  it('18. Authoritative Current read model repository integration: getCurrentRoster verifies client sort & transport contract', async () => {
+    const unsortedAssignments = [
+      { assignmentId: 'id-3', personId: 'p-2', date: '2030-07-02', dutyDomain: 'MO', shiftCode: 'AM' },
+      { assignmentId: 'id-1', personId: 'p-1', date: '2030-07-01', dutyDomain: 'MO', shiftCode: 'AM' },
+      { assignmentId: 'id-2', personId: 'p-1', date: '2030-07-01', dutyDomain: 'EP', shiftCode: 'EP_ONCALL' }
+    ];
+
+    const mockFetcher = async (url) => {
+      const u = new URL(url);
+      if (u.searchParams.get('action') === 'rosterv2current') {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            periodId: u.searchParams.get('periodId'),
+            effectiveState: 'AMENDED',
+            activeAmendmentCount: 1,
+            totalEvents: 2,
+            count: 3,
+            assignments: [...unsortedAssignments]
+          })
+        };
+      }
+      return { ok: false, status: 500 };
+    };
+
+    const mockRepo = createDraftRepository({
+      baseUrl: 'https://script.google.com/macros/s/TEST/exec',
+      fetcher: mockFetcher
+    });
+
+    const res = await mockRepo.getCurrentRoster('2030-07');
+    assert.equal(res.ok, true);
+    assert.equal(res.periodId, '2030-07');
+    assert.equal(res.effectiveState, 'AMENDED');
+    assert.equal(res.assignments.length, 3);
+
+    // Client verifies 5-level sort: Date -> DutyDomain -> PersonId -> ShiftCode -> AssignmentId
+    assert.equal(res.assignments[0].assignmentId, 'id-2'); // 2030-07-01, EP
+    assert.equal(res.assignments[1].assignmentId, 'id-1'); // 2030-07-01, MO
+    assert.equal(res.assignments[2].assignmentId, 'id-3'); // 2030-07-02, MO
+
+    // Transport failure handling
+    const failingRepo = createDraftRepository({
+      baseUrl: 'https://script.google.com/macros/s/TEST/exec',
+      fetcher: async () => ({ ok: false, status: 502 })
+    });
+    await assert.rejects(failingRepo.getCurrentRoster('2030-07'), /DRAFT_TRANSPORT_FAILED/);
   });
 });

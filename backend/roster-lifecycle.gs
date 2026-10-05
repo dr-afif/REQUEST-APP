@@ -1392,6 +1392,145 @@ function rosterLifecycleGetPlanned_(data) {
   };
 }
 
+function rosterLifecycleGetCurrent_(data) {
+  const periodId = RosterCompatibility.validatePeriod(String(data.periodId || data.period || ''));
+  rosterLifecycleEnsureAllSchemas_();
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found or not enrolled' });
+  }
+
+  const plannedSnapshotId = String(periodRecord.PlannedSnapshotId || '').trim();
+  if (!plannedSnapshotId) {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' has no authoritative Planned snapshot' });
+  }
+
+  const allPeriodAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedRows = allPeriodAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+
+  if (plannedRows.length === 0) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+  }
+
+  // 1. Snapshot consistency checks on Planned layer
+  const foreignSnapshotRows = plannedRows.filter(function(r) { return r.SnapshotId !== plannedSnapshotId; });
+  if (foreignSnapshotRows.length > 0) {
+    throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Foreign snapshot rows detected in Planned layer for period ' + periodId });
+  }
+
+  // 2. Duplicate or missing AssignmentId or malformed required identity fields in Planned snapshot
+  const seenPlannedIds = new Set();
+  const validDomains = ['MO', 'EP'];
+  for (let i = 0; i < plannedRows.length; i++) {
+    const r = plannedRows[i];
+    const id = String(r.AssignmentId || '').trim();
+    if (!id || seenPlannedIds.has(id)) {
+      throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Duplicate or missing AssignmentId in Planned snapshot for period ' + periodId });
+    }
+    seenPlannedIds.add(id);
+
+    const personId = String(r.PersonId || '').trim();
+    const date = String(r.Date || '').trim();
+    const dutyDomain = String(r.DutyDomain || '').trim();
+    if (!personId || !date || !dutyDomain) {
+      throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Malformed required identity field in Planned assignment for period ' + periodId });
+    }
+    if (!validDomains.includes(dutyDomain)) {
+      throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Invalid DutyDomain "' + dutyDomain + '" in Planned assignment for period ' + periodId });
+    }
+  }
+
+  // 3. Read confirmed amendment/reversal events only (unconfirmed operations remain invisible)
+  const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId);
+
+  // 4. Derive Current using canonical Phase 5 resolver
+  const people = rosterLifecycleGetPeople_();
+  let resolved;
+  try {
+    resolved = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedRows,
+      events: confirmedEvents,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+  } catch (err) {
+    throw DraftProtocol.fail(err.code || 'CORRUPT_DATA', { message: err.message || 'Failed to resolve Current roster' });
+  }
+
+  // 5. Post-resolution corruption checks
+  const seenCurrentIds = new Set();
+  for (let i = 0; i < resolved.currentAssignments.length; i++) {
+    const a = resolved.currentAssignments[i];
+    const id = String(a.AssignmentId || '').trim();
+    if (!id || seenCurrentIds.has(id)) {
+      throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Duplicate or missing AssignmentId in resolved Current assignments for period ' + periodId });
+    }
+    seenCurrentIds.add(id);
+
+    const personId = String(a.PersonId || '').trim();
+    const date = String(a.Date || '').trim();
+    const dutyDomain = String(a.DutyDomain || '').trim();
+    if (!personId || !date || !dutyDomain) {
+      throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Malformed required identity field in resolved Current assignment for period ' + periodId });
+    }
+    if (!validDomains.includes(dutyDomain)) {
+      throw DraftProtocol.fail('CORRUPT_DATA', { message: 'Invalid DutyDomain "' + dutyDomain + '" in resolved Current assignment for period ' + periodId });
+    }
+  }
+
+  // 6. Deterministic sort:
+  //    1. Date
+  //    2. DutyDomain
+  //    3. PersonId
+  //    4. ShiftCode
+  //    5. AssignmentId
+  const sorted = resolved.currentAssignments.slice();
+  sorted.sort(function(a, b) {
+    return (a.Date || '').localeCompare(b.Date || '') ||
+      (a.DutyDomain || '').localeCompare(b.DutyDomain || '') ||
+      (a.PersonId || '').localeCompare(b.PersonId || '') ||
+      (a.ShiftCode || '').localeCompare(b.ShiftCode || '') ||
+      (a.AssignmentId || '').localeCompare(b.AssignmentId || '');
+  });
+
+  // 7. Viewer DTO: strip internal/private fields
+  const assignments = sorted.map(function(r) {
+    let modifiers = {};
+    if (r.ModifiersJson) {
+      if (typeof r.ModifiersJson === 'string') {
+        try { modifiers = JSON.parse(r.ModifiersJson); } catch (_) { modifiers = {}; }
+      } else if (typeof r.ModifiersJson === 'object' && r.ModifiersJson !== null) {
+        modifiers = r.ModifiersJson;
+      }
+    }
+    return {
+      assignmentId: String(r.AssignmentId || ''),
+      personId: String(r.PersonId || ''),
+      personNameSnapshot: String(r.PersonNameSnapshot || ''),
+      date: String(r.Date || ''),
+      dutyDomain: String(r.DutyDomain || ''),
+      shiftCode: String(r.ShiftCode || ''),
+      modifiers: modifiers
+    };
+  });
+
+  const isPeriodClosed = String(periodRecord.State || '').toUpperCase() === 'CLOSED';
+  const effectiveState = isPeriodClosed ? 'CLOSED' : resolved.effectiveState;
+
+  return {
+    ok: true,
+    periodId: periodId,
+    effectiveState: effectiveState,
+    lifecycleState: String(periodRecord.State || '').toUpperCase(),
+    activeAmendmentCount: resolved.activeAmendmentCount,
+    totalEvents: resolved.totalEvents,
+    count: assignments.length,
+    assignments: assignments,
+    projectionChecksum: resolved.projectionChecksum
+  };
+}
+
 function rosterLifecycleClose_(data, actor) {
   const periodId = RosterCompatibility.validatePeriod(String(data.periodId || (data.payload && data.payload.periodId) || ''));
   const operationId = String(data.operationId || '').trim();
@@ -1988,6 +2127,10 @@ function rosterLifecycleRoute_(action, data) {
 
     if (action === 'rosterv2planned') {
       return createJsonResponse(rosterLifecycleGetPlanned_(data));
+    }
+
+    if (action === 'rosterv2current') {
+      return createJsonResponse(rosterLifecycleGetCurrent_(data));
     }
 
     if (action === 'rosterv2amend') {

@@ -313,6 +313,7 @@ const amend = (h, op) => h.post({ action: 'rosterv2amend', ...op });
 const amendReversal = (h, op) => h.post({ action: 'rosterv2amendreversal', ...op });
 const amendmentHistory = (h, periodId, params = {}) => h.get('rosterv2amendmenthistory', { periodId, ...params });
 const plannedRoster = (h, periodId, params = {}) => h.get('rosterv2planned', { periodId, ...params });
+const currentRoster = (h, periodId, params = {}) => h.get('rosterv2current', { periodId, ...params });
 const close = (h, op) => h.post({ action: 'rosterv2close', ...op });
 const reopen = (h, op) => h.post({ action: 'rosterv2reopen', ...op });
 const status = (h, opId) => h.get('rosterv2operation', { operationId: opId });
@@ -1843,4 +1844,385 @@ test('42. Viewer-safe Planned DTO: strips internal metadata and rejects unenroll
   const unenrolledRes = plannedRoster(h, '1999-01');
   assert.equal(unenrolledRes.ok, false);
   assert.equal(unenrolledRes.error.code, 'ENTITY_NOT_FOUND');
+});
+
+// ==========================================
+// 8. AUTHORITATIVE CURRENT READ MODEL (SLICE 3.2)
+// ==========================================
+
+test('43. Authoritative Current baseline: at publication, rosterv2current matches Planned and reports effectiveState PUBLISHED', () => {
+  const { h, periodId, pubRes } = setupPublished();
+
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.ok, true);
+  assert.equal(currentRes.periodId, periodId);
+  assert.equal(currentRes.effectiveState, 'PUBLISHED');
+  assert.equal(currentRes.lifecycleState, 'PUBLISHED');
+  assert.equal(currentRes.activeAmendmentCount, 0);
+  assert.equal(currentRes.totalEvents, 1, 'Total events at publication is 1 (the PUBLISH event)');
+  assert.equal(currentRes.count, 5);
+  assert.equal(currentRes.assignments.length, 5);
+
+  const plannedRes = plannedRoster(h, periodId);
+  assert.equal(plannedRes.ok, true);
+  assert.deepEqual(currentRes.assignments, plannedRes.assignments, 'At publication with no amendments, Current DTO matches Planned DTO identically');
+  assert.equal(currentRes.projectionChecksum, pubRes.projectionChecksum);
+});
+
+test('44. Changed assignment: Planned amended to another shift, rosterv2current returns canonical current assignment while Planned remains unchanged', () => {
+  const { h, periodId } = setupPublished();
+
+  const amendOp = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person1,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    afterAssignments: [{ shiftCode: 'PM', rawShift: 'PM' }]
+  });
+  const amendRes = amend(h, amendOp);
+  assert.equal(amendRes.ok, true);
+
+  // 1. Authoritative Current reflects amendment
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.ok, true);
+  assert.equal(currentRes.effectiveState, 'AMENDED');
+  assert.equal(currentRes.activeAmendmentCount, 1);
+  assert.equal(currentRes.totalEvents, 2, 'Total events is 2 (1 PUBLISH + 1 AMEND)');
+
+  const p1Day1Current = currentRes.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  assert.ok(p1Day1Current);
+  assert.equal(p1Day1Current.shiftCode, 'PM');
+  assert.equal(p1Day1Current.personNameSnapshot, 'Dr. Ali');
+  assert.equal(p1Day1Current.dutyDomain, 'MO');
+
+  // Stable deterministic AssignmentId generated with the amend operationId
+  const expectedAssignmentId = lifecycle.deterministicAssignmentId(amendOp.operationId, person1, `${periodId}-01`, 'MO', 'PM', 'PM', 0, digest);
+  assert.equal(p1Day1Current.assignmentId, expectedAssignmentId);
+
+  // 2. Authoritative Planned remains completely unchanged
+  const plannedRes = plannedRoster(h, periodId);
+  const p1Day1Planned = plannedRes.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  assert.equal(p1Day1Planned.shiftCode, 'AM');
+  assert.notEqual(p1Day1Planned.assignmentId, expectedAssignmentId);
+});
+
+test('45. Added assignment: Current includes event-created assignment with authoritative PersonId', () => {
+  const { h, periodId } = setupPublished();
+
+  // person3 is not scheduled on day 2 in makePublishOp
+  const addOp = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person3,
+    date: `${periodId}-02`,
+    dutyDomain: 'MO',
+    afterAssignments: [{ shiftCode: 'AM', rawShift: 'AM' }]
+  });
+  const addRes = amend(h, addOp);
+  assert.equal(addRes.ok, true);
+
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.count, 6, 'Current count must increase to 6 (5 planned + 1 added)');
+
+  const addedAssignment = currentRes.assignments.find(a => a.personId === person3 && a.date === `${periodId}-02`);
+  assert.ok(addedAssignment, 'Added assignment must exist in Current');
+  assert.equal(addedAssignment.personId, person3);
+  assert.equal(addedAssignment.personNameSnapshot, 'Dr. Tan');
+  assert.equal(addedAssignment.shiftCode, 'AM');
+  assert.equal(addedAssignment.dutyDomain, 'MO');
+
+  // Planned still has only 5 assignments
+  const plannedRes = plannedRoster(h, periodId);
+  assert.equal(plannedRes.count, 5);
+  assert.equal(plannedRes.assignments.find(a => a.personId === person3 && a.date === `${periodId}-02`), undefined);
+});
+
+test('46. Removed assignment: Current omits removed assignment without losing Planned history', () => {
+  const { h, periodId } = setupPublished();
+
+  // Remove person2 assignment on day 2 by passing empty afterAssignments
+  const removeOp = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person2,
+    date: `${periodId}-02`,
+    dutyDomain: 'MO',
+    afterAssignments: []
+  });
+  const removeRes = amend(h, removeOp);
+  assert.equal(removeRes.ok, true);
+
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.count, 4, 'Current count must decrease to 4');
+  assert.equal(currentRes.assignments.find(a => a.personId === person2 && a.date === `${periodId}-02`), undefined);
+
+  // Planned still preserves all 5 assignments
+  const plannedRes = plannedRoster(h, periodId);
+  assert.equal(plannedRes.count, 5);
+  const p2Day2Planned = plannedRes.assignments.find(a => a.personId === person2 && a.date === `${periodId}-02`);
+  assert.ok(p2Day2Planned, 'Planned must preserve removed assignment in immutable snapshot');
+  assert.equal(p2Day2Planned.shiftCode, 'PM');
+});
+
+test('47. Reversal: Reversal restores prior/planned assignment and correct identity in Current', () => {
+  const { h, periodId } = setupPublished();
+
+  // 1. Amend person1 on day 1 to PM
+  const amendOp = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person1,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    afterAssignments: [{ shiftCode: 'PM', rawShift: 'PM' }]
+  });
+  const amendRes = amend(h, amendOp);
+  assert.equal(amendRes.ok, true);
+
+  // 2. Reverse the amendment
+  const revOp = makeReversalOp({
+    periodId,
+    expectedRevision: 2,
+    targetEventId: amendRes.eventId
+  });
+  const revRes = amendReversal(h, revOp);
+  assert.equal(revRes.ok, true);
+
+  // 3. Current is restored to baseline
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.effectiveState, 'PUBLISHED');
+  assert.equal(currentRes.activeAmendmentCount, 0);
+
+  const p1Day1Current = currentRes.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  assert.equal(p1Day1Current.shiftCode, 'AM');
+
+  // AssignmentId is restored to original planned assignmentId
+  const plannedRes = plannedRoster(h, periodId);
+  const p1Day1Planned = plannedRes.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  assert.equal(p1Day1Current.assignmentId, p1Day1Planned.assignmentId);
+});
+
+test('48. Lifecycle events: Publish, Close, Reopen events do not mutate assignment resolution; Closed state reflected', () => {
+  const { h, periodId } = setupPublished();
+
+  // Amend person1 on day 1 to PM
+  const amendOp = makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person1,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    afterAssignments: [{ shiftCode: 'PM', rawShift: 'PM' }]
+  });
+  amend(h, amendOp);
+
+  const beforeClose = currentRoster(h, periodId);
+  assert.equal(beforeClose.effectiveState, 'AMENDED');
+  assert.equal(beforeClose.lifecycleState, 'AMENDED');
+
+  // Close period
+  const closeOp = makeCloseOp({ periodId, expectedRevision: 2 });
+  const closeRes = close(h, closeOp);
+  assert.equal(closeRes.ok, true);
+
+  const duringClose = currentRoster(h, periodId);
+  assert.equal(duringClose.effectiveState, 'CLOSED');
+  assert.equal(duringClose.lifecycleState, 'CLOSED');
+  // Assignments resolution remains identical
+  assert.deepEqual(duringClose.assignments, beforeClose.assignments);
+
+  // Reopen period
+  const reopenOp = makeReopenOp({ periodId, expectedRevision: 3 });
+  const reopenRes = reopen(h, reopenOp);
+  assert.equal(reopenRes.ok, true);
+
+  const afterReopen = currentRoster(h, periodId);
+  assert.equal(afterReopen.effectiveState, 'AMENDED');
+  assert.equal(afterReopen.lifecycleState, 'AMENDED');
+  assert.deepEqual(afterReopen.assignments, beforeClose.assignments);
+});
+
+test('49. Unconfirmed events: PENDING, RECOVERY_REQUIRED, and FAILED operations remain invisible to authoritative Current', () => {
+  const { h, periodId } = setupPublished();
+
+  // Baseline current assignments
+  const baseCurrent = currentRoster(h, periodId);
+
+  // Inject an unconfirmed event into RosterEvents (operation is PENDING in OperationLog)
+  const pendingOpId = 'e1000000-0000-4000-8000-000000000001';
+  h.grids.OperationLog.push([
+    pendingOpId, 'client-test', 'tab-test', 'PERIOD_AMEND',
+    `period:${periodId}`, 1, 2, 'hash123', 'PENDING', '', '', '2030-07-01T10:00:00Z', ''
+  ]);
+
+  h.grids.RosterEvents.push([
+    'evt-pending-1', 'line-pending-1', 'ADMIN_CORRECTION', pendingOpId, periodId,
+    1, 2, person1, '[]', `${periodId}-01`, 'MO',
+    JSON.stringify([{ shiftCode: 'AM' }]),
+    JSON.stringify([{ shiftCode: 'AM' }]),
+    JSON.stringify([{ shiftCode: 'ND' }]), // Proposed shift ND
+    'ADMIN_CORRECTION', 'Pending note', 'admin@example.invalid', '2030-07-01T10:00:00Z',
+    false, '', '', '', '', ''
+  ]);
+
+  // Current must ignore the unconfirmed event
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.ok, true);
+  assert.deepEqual(currentRes.assignments, baseCurrent.assignments, 'Unconfirmed PENDING event must be completely invisible to Current');
+
+  const p1Day1 = currentRes.assignments.find(a => a.personId === person1 && a.date === `${periodId}-01`);
+  assert.equal(p1Day1.shiftCode, 'AM', 'Shift must remain AM, not ND');
+});
+
+test('50. MasterRoster projection equivalence check: authoritative Current matches MasterRoster sheet projection', () => {
+  const { h, periodId } = setupPublished();
+
+  // Amend person1 day 1 to PM and add person3 day 2 AM
+  amend(h, makeAmendOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person1,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    afterAssignments: [{ shiftCode: 'PM', rawShift: 'PM' }]
+  }));
+
+  amend(h, makeAmendOp({
+    periodId,
+    expectedRevision: 2,
+    personId: person3,
+    date: `${periodId}-02`,
+    dutyDomain: 'MO',
+    afterAssignments: [{ shiftCode: 'AM', rawShift: 'AM' }]
+  }));
+
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.ok, true);
+
+  // Generate projection from authoritative Current assignments
+  const derivedProjection = lifecycle.generateMasterRosterProjection(currentRes.assignments);
+
+  // Read actual MasterRoster sheet rows for the target period
+  const masterSheetRows = h.grids.MasterRoster.slice(1).filter(r => r[1].startsWith(periodId));
+  const masterSheetObjects = masterSheetRows.map(r => ({ Name: r[0], Date: r[1], Shift: r[2] }));
+
+  assert.equal(derivedProjection.length, masterSheetObjects.length);
+  assert.deepEqual(derivedProjection, masterSheetObjects, 'Authoritative Current projection must match MasterRoster sheet rows');
+
+  // Checksum equivalence
+  const derivedChecksum = lifecycle.computeProjectionChecksum(derivedProjection, digest);
+  assert.equal(currentRes.projectionChecksum, derivedChecksum);
+});
+
+test('51. Corruption behavior: fail closed when authoritative data is corrupt', () => {
+  const { h, periodId } = setupPublished();
+
+  // (a) Duplicate authoritative AssignmentId fails closed with CORRUPT_DATA
+  const savedAssignments = h.grids.RosterAssignments.map(r => [...r]);
+  const duplicateRow = [...savedAssignments[1]]; // Duplicate first data row
+  h.grids.RosterAssignments.push(duplicateRow);
+
+  const resDup = currentRoster(h, periodId);
+  assert.equal(resDup.ok, false);
+  assert.equal(resDup.error.code, 'CORRUPT_DATA');
+  assert.match(resDup.error.message, /Duplicate or missing AssignmentId/i);
+
+  // Restore
+  h.grids.RosterAssignments = savedAssignments.map(r => [...r]);
+
+  // (b) Invalid DutyDomain fails closed with CORRUPT_DATA
+  const domainColIdx = h.grids.RosterAssignments[0].indexOf('DutyDomain');
+  h.grids.RosterAssignments[1][domainColIdx] = 'INVALID_DOMAIN';
+
+  const resBadDomain = currentRoster(h, periodId);
+  assert.equal(resBadDomain.ok, false);
+  assert.equal(resBadDomain.error.code, 'CORRUPT_DATA');
+  assert.match(resBadDomain.error.message, /Invalid DutyDomain/i);
+
+  // Restore
+  h.grids.RosterAssignments = savedAssignments.map(r => [...r]);
+
+  // (c) Missing required identity field (empty PersonId) fails closed
+  const personColIdx = h.grids.RosterAssignments[0].indexOf('PersonId');
+  h.grids.RosterAssignments[1][personColIdx] = '';
+
+  const resMissingPerson = currentRoster(h, periodId);
+  assert.equal(resMissingPerson.ok, false);
+  assert.equal(resMissingPerson.error.code, 'CORRUPT_DATA');
+  assert.match(resMissingPerson.error.message, /Malformed required identity field/i);
+
+  // Restore
+  h.grids.RosterAssignments = savedAssignments.map(r => [...r]);
+
+  // (d) Foreign snapshot row in Planned layer fails closed
+  const foreignRow = [...savedAssignments[1]];
+  const snapColIdx = h.grids.RosterAssignments[0].indexOf('SnapshotId');
+  foreignRow[snapColIdx] = 'snapshot:2030-07:foreign-snapshot-id';
+  const idColIdx = h.grids.RosterAssignments[0].indexOf('AssignmentId');
+  foreignRow[idColIdx] = crypto.randomUUID();
+  h.grids.RosterAssignments.push(foreignRow);
+
+  const resForeign = currentRoster(h, periodId);
+  assert.equal(resForeign.ok, false);
+  assert.equal(resForeign.error.code, 'CORRUPT_DATA');
+  assert.match(resForeign.error.message, /Foreign snapshot rows/i);
+});
+
+test('52. Deterministic 5-level sort and safe viewer DTO: strips internal metadata and sorts canonically', () => {
+  const { h, periodId } = setupPublished();
+
+  // Permute RosterAssignments rows in sheet
+  const headers = h.grids.RosterAssignments[0];
+  const dataRows = h.grids.RosterAssignments.slice(1);
+  dataRows.reverse();
+  h.grids.RosterAssignments = [headers, ...dataRows];
+
+  const currentRes = currentRoster(h, periodId);
+  assert.equal(currentRes.ok, true);
+
+  // Verify deterministic 5-level sort: Date -> DutyDomain -> PersonId -> ShiftCode -> AssignmentId
+  for (let i = 0; i < currentRes.assignments.length - 1; i++) {
+    const a = currentRes.assignments[i];
+    const b = currentRes.assignments[i + 1];
+    const dateCmp = a.date.localeCompare(b.date);
+    if (dateCmp !== 0) {
+      assert.ok(dateCmp < 0, `Date sort invariant: ${a.date} <= ${b.date}`);
+      continue;
+    }
+    const domainCmp = a.dutyDomain.localeCompare(b.dutyDomain);
+    if (domainCmp !== 0) {
+      assert.ok(domainCmp < 0, `DutyDomain sort invariant: ${a.dutyDomain} <= ${b.dutyDomain}`);
+      continue;
+    }
+    const personCmp = a.personId.localeCompare(b.personId);
+    if (personCmp !== 0) {
+      assert.ok(personCmp < 0, `PersonId sort invariant: ${a.personId} <= ${b.personId}`);
+      continue;
+    }
+    const shiftCmp = a.shiftCode.localeCompare(b.shiftCode);
+    if (shiftCmp !== 0) {
+      assert.ok(shiftCmp < 0, `ShiftCode sort invariant: ${a.shiftCode} <= ${b.shiftCode}`);
+      continue;
+    }
+    assert.ok(a.assignmentId.localeCompare(b.assignmentId) <= 0);
+  }
+
+  // Verify internal metadata is stripped
+  const json = JSON.stringify(currentRes);
+  assert.equal(json.includes('OperationId'), false, 'DTO must not leak OperationId');
+  assert.equal(json.includes('CreatedBy'), false, 'DTO must not leak CreatedBy');
+  assert.equal(json.includes('_row'), false, 'DTO must not leak _row');
+  assert.equal(json.includes('DraftRevision'), false, 'DTO must not leak DraftRevision');
+  assert.equal(json.includes('Source'), false, 'DTO must not leak Source');
+
+  currentRes.assignments.forEach(a => {
+    assert.ok(a.assignmentId);
+    assert.ok(a.personId);
+    assert.ok(a.personNameSnapshot);
+    assert.ok(a.date);
+    assert.ok(a.dutyDomain);
+    assert.ok(a.shiftCode);
+    assert.ok(typeof a.modifiers === 'object');
+  });
 });

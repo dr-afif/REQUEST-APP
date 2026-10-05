@@ -1695,3 +1695,265 @@ test('30. Current assignment identity behavior & stability (Section F)', () => {
   });
   assert.deepStrictEqual(run1.currentAssignments, runShuffled.currentAssignments);
 });
+
+test('31. Duplicate display names: two different PersonIds with identical personNameSnapshot preserve distinct PersonId identity', () => {
+  const peopleWithDuplicates = [
+    { PersonId: 'p-lee-1', MemberName: 'Dr Lee', CurrentDisplayName: 'Dr Lee', DirectoryType: 'MO' },
+    { PersonId: 'p-lee-2', MemberName: 'Dr Lee', CurrentDisplayName: 'Dr Lee', DirectoryType: 'MO' }
+  ];
+
+  const plannedAssignments = [
+    {
+      AssignmentId: 'a-lee-1-planned',
+      PeriodId: '2026-07',
+      Layer: 'PLANNED',
+      SnapshotId: 'snap-dup-1',
+      PersonId: 'p-lee-1',
+      PersonNameSnapshot: 'Dr Lee',
+      Date: '2026-07-04',
+      DutyDomain: 'MO',
+      ShiftCode: 'AM',
+      ModifiersJson: '{}'
+    },
+    {
+      AssignmentId: 'a-lee-2-planned',
+      PeriodId: '2026-07',
+      Layer: 'PLANNED',
+      SnapshotId: 'snap-dup-1',
+      PersonId: 'p-lee-2',
+      PersonNameSnapshot: 'Dr Lee',
+      Date: '2026-07-04',
+      DutyDomain: 'MO',
+      ShiftCode: 'PM',
+      ModifiersJson: '{}'
+    }
+  ];
+
+  // Amend ONLY p-lee-1 from AM to ON1
+  const amendOpId = 'b1000000-0000-4000-8000-000000000001';
+  const ev = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: amendOpId,
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-lee-1',
+    date: '2026-07-04',
+    dutyDomain: 'MO',
+    beforeAssignments: [plannedAssignments[0]],
+    afterAssignments: [{ ShiftCode: 'ON1' }]
+  });
+
+  const res = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments,
+    events: ev.lines,
+    people: peopleWithDuplicates,
+    digestFn
+  });
+
+  assert.equal(res.currentAssignments.length, 2);
+
+  const currentLee1 = res.currentAssignments.find(a => a.PersonId === 'p-lee-1');
+  const currentLee2 = res.currentAssignments.find(a => a.PersonId === 'p-lee-2');
+
+  assert.ok(currentLee1, 'p-lee-1 must be found by authoritative PersonId');
+  assert.ok(currentLee2, 'p-lee-2 must be found by authoritative PersonId');
+
+  // p-lee-1 was amended to ON1
+  assert.equal(currentLee1.ShiftCode, 'ON1');
+  assert.equal(currentLee1.PersonNameSnapshot, 'Dr Lee');
+
+  // p-lee-2 remained PM completely unaffected
+  assert.equal(currentLee2.ShiftCode, 'PM');
+  assert.equal(currentLee2.PersonNameSnapshot, 'Dr Lee');
+  assert.equal(currentLee2.AssignmentId, 'a-lee-2-planned');
+});
+
+test('32. Multi-domain identity: same PersonId + same Date across different DutyDomains resolves without cross-domain collision', () => {
+  const multiDomainPlanned = [
+    {
+      AssignmentId: 'a-siti-mo',
+      PeriodId: '2026-07',
+      Layer: 'PLANNED',
+      SnapshotId: 'snap-multi-1',
+      PersonId: 'p-siti',
+      PersonNameSnapshot: 'Dr Siti',
+      Date: '2026-07-10',
+      DutyDomain: 'MO',
+      ShiftCode: 'AM',
+      ModifiersJson: '{}'
+    },
+    {
+      AssignmentId: 'a-siti-ep',
+      PeriodId: '2026-07',
+      Layer: 'PLANNED',
+      SnapshotId: 'snap-multi-1',
+      PersonId: 'p-siti',
+      PersonNameSnapshot: 'Dr Siti',
+      Date: '2026-07-10',
+      DutyDomain: 'EP',
+      ShiftCode: 'EP_ONCALL',
+      ModifiersJson: '{}'
+    }
+  ];
+
+  // Amend ONLY MO domain from AM to PM
+  const opId = 'b2000000-0000-4000-8000-000000000001';
+  const ev = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: opId,
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-siti',
+    date: '2026-07-10',
+    dutyDomain: 'MO',
+    beforeAssignments: [multiDomainPlanned[0]],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+
+  const res = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: multiDomainPlanned,
+    events: ev.lines,
+    people: TEST_PEOPLE,
+    digestFn
+  });
+
+  assert.equal(res.currentAssignments.length, 2);
+
+  // Both domains preserved with correct shifts
+  const mo = res.currentAssignments.find(a => a.DutyDomain === 'MO');
+  const ep = res.currentAssignments.find(a => a.DutyDomain === 'EP');
+
+  assert.equal(mo.ShiftCode, 'PM');
+  assert.equal(ep.ShiftCode, 'EP_ONCALL');
+  assert.equal(ep.AssignmentId, 'a-siti-ep', 'EP assignment ID must remain unchanged');
+
+  // Deterministic 5-level sort orders 'EP' before 'MO'
+  assert.equal(res.currentAssignments[0].DutyDomain, 'EP');
+  assert.equal(res.currentAssignments[1].DutyDomain, 'MO');
+});
+
+test('33. Lifecycle events neutrality: Publish, Close, Reopen events do not alter Current assignment resolution', () => {
+  const baseSnap = createBasePlannedSnapshot();
+  const amendOpId = 'b3000000-0000-4000-8000-000000000001';
+
+  const evAmend = RosterLifecycle.createAmendmentEvent({
+    periodId: '2026-07',
+    baseRevision: 1,
+    resultRevision: 2,
+    operationId: amendOpId,
+    actor: 'admin',
+    publicReasonCode: RosterLifecycle.PUBLIC_REASON_CODES.ADMIN_CORRECTION,
+    personId: 'p-siti',
+    date: '2026-07-01',
+    dutyDomain: 'MO',
+    beforeAssignments: [{ ShiftCode: 'AM' }],
+    afterAssignments: [{ ShiftCode: 'PM' }]
+  });
+
+  const resAmendOnly = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: baseSnap.assignments,
+    events: evAmend.lines,
+    people: TEST_PEOPLE,
+    digestFn
+  });
+
+  // Inject PUBLISH, CLOSE, and REOPEN lifecycle events into the event history
+  const lifecycleEvents = [
+    { EventId: 'e-pub', LineId: 'l-pub', EventType: 'PUBLISH', OperationId: 'op-pub', PeriodId: '2026-07', BaseRevision: 0, ResultRevision: 1, DutyDomain: '', PersonId: '', Date: '' },
+    ...evAmend.lines,
+    { EventId: 'e-cls', LineId: 'l-cls', EventType: 'CLOSE', OperationId: 'op-cls', PeriodId: '2026-07', BaseRevision: 2, ResultRevision: 3, DutyDomain: '', PersonId: '', Date: '' },
+    { EventId: 'e-rop', LineId: 'l-rop', EventType: 'REOPEN', OperationId: 'op-rop', PeriodId: '2026-07', BaseRevision: 3, ResultRevision: 4, DutyDomain: '', PersonId: '', Date: '' }
+  ];
+
+  const resWithLifecycle = RosterLifecycle.resolveCurrentRoster({
+    periodId: '2026-07',
+    plannedAssignments: baseSnap.assignments,
+    events: lifecycleEvents,
+    people: TEST_PEOPLE,
+    digestFn
+  });
+
+  // Assignment resolution must be strictly identical regardless of lifecycle events
+  assert.deepStrictEqual(resWithLifecycle.currentAssignments, resAmendOnly.currentAssignments);
+  assert.equal(resWithLifecycle.activeAmendmentCount, 1);
+});
+
+test('34. Fail-closed corruption behavior: invalid DutyDomain, malformed required identity fields, or broken revision chains throw LIFECYCLE_ERRORS', () => {
+  const baseSnap = createBasePlannedSnapshot();
+
+  // 1. Missing DutyDomain on event line throws MALFORMED_EVENT
+  assert.throws(() => {
+    RosterLifecycle.resolveCurrentRoster({
+      periodId: '2026-07',
+      plannedAssignments: baseSnap.assignments,
+      events: [{
+        EventId: 'e-bad-1',
+        LineId: 'l-bad-1',
+        EventType: 'ADMIN_CORRECTION',
+        OperationId: 'op-bad-1',
+        PeriodId: '2026-07',
+        BaseRevision: 1,
+        ResultRevision: 2,
+        PersonId: 'p-siti',
+        Date: '2026-07-01',
+        DutyDomain: '', // MISSING
+        AfterCurrentJson: JSON.stringify([{ ShiftCode: 'PM' }])
+      }],
+      people: TEST_PEOPLE,
+      digestFn
+    });
+  }, err => err.code === 'MALFORMED_EVENT');
+
+  // 2. Missing PersonId on event line throws MALFORMED_EVENT
+  assert.throws(() => {
+    RosterLifecycle.resolveCurrentRoster({
+      periodId: '2026-07',
+      plannedAssignments: baseSnap.assignments,
+      events: [{
+        EventId: 'e-bad-2',
+        LineId: 'l-bad-2',
+        EventType: 'ADMIN_CORRECTION',
+        OperationId: 'op-bad-2',
+        PeriodId: '2026-07',
+        BaseRevision: 1,
+        ResultRevision: 2,
+        PersonId: '', // MISSING
+        Date: '2026-07-01',
+        DutyDomain: 'MO',
+        AfterCurrentJson: JSON.stringify([{ ShiftCode: 'PM' }])
+      }],
+      people: TEST_PEOPLE,
+      digestFn
+    });
+  }, err => err.code === 'MALFORMED_EVENT');
+
+  // 3. Corrupt JSON in AfterCurrentJson throws MALFORMED_EVENT
+  assert.throws(() => {
+    RosterLifecycle.resolveCurrentRoster({
+      periodId: '2026-07',
+      plannedAssignments: baseSnap.assignments,
+      events: [{
+        EventId: 'e-bad-3',
+        LineId: 'l-bad-3',
+        EventType: 'ADMIN_CORRECTION',
+        OperationId: 'op-bad-3',
+        PeriodId: '2026-07',
+        BaseRevision: 1,
+        ResultRevision: 2,
+        PersonId: 'p-siti',
+        Date: '2026-07-01',
+        DutyDomain: 'MO',
+        AfterCurrentJson: 'NOT_VALID_JSON{['
+      }],
+      people: TEST_PEOPLE,
+      digestFn
+    });
+  }, err => err.code === 'MALFORMED_EVENT');
+});
