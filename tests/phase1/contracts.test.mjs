@@ -42,11 +42,22 @@ for(const action of getActions)test(`legacy GET ${action||'(default)'} payload a
   const old=harness(legacySource),now=harness();
   assert.deepEqual(now.get(action),old.get(action));assert.deepEqual(now.jsonState(),old.jsonState());assert.deepEqual(now.writes,old.writes);
 });
-for(const payload of posts)test(`legacy POST ${payload.action} success and error contracts match Version 1`,()=>{
+for(const payload of posts.filter(p=>p.action!=='uploadmasterroster'))test(`legacy POST ${payload.action} success and error contracts match Version 1`,()=>{
   const old=harness(legacySource),now=harness();
   const expected=old.post(payload);assert.equal(expected.result,'success',JSON.stringify(expected));assert.deepEqual(now.post(payload),expected);
   assert.deepEqual(now.jsonState(),old.jsonState());assert.deepEqual(now.writes,old.writes);
   const badOld=harness(legacySource),badNow=harness();assert.deepEqual(badNow.post({action:payload.action}),badOld.post({action:payload.action}));assert.deepEqual(badNow.jsonState(),badOld.jsonState());
+});
+test('legacy POST uploadmasterroster safety hotfix: requires targetMonth and fails closed on missing targetMonth',()=>{
+  const h=harness();const before=h.jsonState();
+  const bad=h.post({action:'uploadmasterroster',rows:[{name:'Person A',date:'2030-07-28',shift:'AM'}]});
+  assert.equal(bad.result,'error');assert.match(bad.message,/targetMonth/);
+  assert.deepEqual(h.jsonState(),before);assert.deepEqual(h.writes,[]);
+
+  const old=harness(legacySource),now=harness();
+  const fullPayload={action:'uploadmasterroster',allowFullReplacement:true,rows:[{name:'Person A',date:'2030-07-28',shift:'AM'},{name:'Person A',date:'2030-07-28',shift:'PM'}]};
+  const expected=old.post(fullPayload);assert.equal(expected.result,'success');
+  assert.deepEqual(now.post(fullPayload),expected);assert.deepEqual(now.jsonState(),old.jsonState());assert.deepEqual(now.writes,old.writes);
 });
 test('missing-sheet legacy GET side effects and old Settings failure remain unchanged',()=>{
   for(const action of getActions){const old=harness(legacySource,{tables:{}}),now=harness(currentSource,{tables:{}});assert.deepEqual(now.get(action),old.get(action),action);assert.deepEqual(now.jsonState(),old.jsonState(),action);}
@@ -106,8 +117,9 @@ test('enrolled periods block ANY old global upload, including omitted months and
 });
 test('empty foundation tables keep legacy upload working; lock failure cannot clear data',()=>{
   const tables=structuredClone(fixture.tables);tables.RosterPeriods=[core.schemas.RosterPeriods];
-  const h=harness(currentSource,{tables});assert.equal(h.post(posts[3]).result,'success');
-  const locked=harness(currentSource,{failLock:true}),before=locked.jsonState();assert.equal(locked.post(posts[3]).result,'error');assert.deepEqual(locked.jsonState(),before);assert.deepEqual(locked.writes,[]);
+  const payloadWithMonth={...posts[3],targetMonth:'2030-07'};
+  const h=harness(currentSource,{tables});assert.equal(h.post(payloadWithMonth).result,'success');
+  const locked=harness(currentSource,{failLock:true}),before=locked.jsonState();assert.equal(locked.post(payloadWithMonth).result,'error');assert.deepEqual(locked.jsonState(),before);assert.deepEqual(locked.writes,[]);
 });
 test('stored semantic catalog drift is reported and never silently changes rule 1',()=>{
   const h=harness();h.grids.ShiftSemantics=[core.schemas.ShiftSemantics,...h.context.rosterV2CatalogRows_()];
