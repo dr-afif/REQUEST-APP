@@ -657,6 +657,7 @@ export default function RosterPage({
   onDeleteRequest,
   settings = {},
   onUpdateSetting,
+  rosterMonth: propRosterMonth,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCommentDetail, setActiveCommentDetail] = useState(null);
@@ -718,13 +719,22 @@ export default function RosterPage({
     localStorage.setItem('rosterTallyThresholds', JSON.stringify(tallyThresholds));
   }, [tallyThresholds]);
 
-  // 1. Set the initial roster month to the current month (YYYY-MM)
+  // 1. Set the initial roster month to propRosterMonth or current month (YYYY-MM)
   const [rosterMonth, setRosterMonth] = useState(() => {
+    if (propRosterMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(propRosterMonth)) {
+      return propRosterMonth;
+    }
     const d = new Date();
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     return `${yyyy}-${mm}`;
   });
+
+  useEffect(() => {
+    if (propRosterMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(propRosterMonth)) {
+      setRosterMonth(propRosterMonth);
+    }
+  }, [propRosterMonth]);
 
   // Phase 4 Roster Lifecycle State
   const [lifecycleInfo, setLifecycleInfo] = useState({
@@ -1172,6 +1182,7 @@ export default function RosterPage({
       const shiftVal = row.Shift || row.shift;
 
       if (!dateStr || !nameRaw || !shiftVal) return;
+      if (!dateStr.startsWith(rosterMonth)) return;
       const name = String(nameRaw).trim();
       const shiftRaw = String(shiftVal).trim().toUpperCase();
 
@@ -1439,6 +1450,12 @@ export default function RosterPage({
     const { doctorName, dateStr } = activeCommentDetail;
     const normalizedTargetName = normalizeForComparison(doctorName);
     const targetDate = dateStr;
+    const canonicalMonth = (targetDate && toIsoDate(targetDate)?.slice(0, 7)) || rosterMonth;
+
+    if (!canonicalMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      console.error('Invalid targetMonth for direct shift reassignment:', canonicalMonth);
+      return;
+    }
     
     setIsReassigning(true);
 
@@ -1454,7 +1471,7 @@ export default function RosterPage({
       masterRoster.forEach((row) => {
         const rawDate = row.Date || row.date;
         const iso = toIsoDate(rawDate);
-        if (iso && iso.startsWith(rosterMonth)) {
+        if (iso && iso.startsWith(canonicalMonth)) {
           const rowName = normalizeForComparison(row.Name || row.name || '');
           if (rowName === normalizedTargetName && iso === targetDate) {
             return;
@@ -1475,7 +1492,7 @@ export default function RosterPage({
         });
       }
 
-      await onUploadMasterRoster(currentMonthRows, rosterMonth);
+      await onUploadMasterRoster(currentMonthRows, canonicalMonth);
 
       setActiveCommentDetail((prev) => {
         if (!prev) return null;
@@ -2178,9 +2195,17 @@ export default function RosterPage({
 
   const handleSave = async () => {
     if (isPeriodLocked) return;
+
+    const canonicalMonth = rosterMonth;
+    if (!canonicalMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      alert('Invalid roster month for saving.');
+      return;
+    }
+
     const flatRows = [];
     Object.keys(editedGrid).forEach((dateStr) => {
-      Object.keys(editedGrid[dateStr]).forEach((shift) => {
+      if (!dateStr.startsWith(canonicalMonth)) return;
+      Object.keys(editedGrid[dateStr] || {}).forEach((shift) => {
         const namesStr = editedGrid[dateStr][shift];
         if (namesStr) {
           namesStr.split(/[\n,]+/).forEach(n => {
@@ -2197,7 +2222,7 @@ export default function RosterPage({
        return;
     }
     
-    onUploadMasterRoster(flatRows, rosterMonth);
+    onUploadMasterRoster(flatRows, canonicalMonth);
     setIsEditMode(false);
     setIsStandbyEditMode(false);
     setIsExtendedEditMode(false);

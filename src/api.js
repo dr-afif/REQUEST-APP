@@ -106,8 +106,11 @@ export async function fetchAllData() {
 }
 
 export async function uploadMasterRoster(rows, targetMonth) {
-  const payload = { action: 'uploadmasterroster', rows };
-  if (targetMonth) payload.targetMonth = targetMonth;
+  const trimmedMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
+  if (!trimmedMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmedMonth) || trimmedMonth.startsWith('0000')) {
+    throw new Error('targetMonth is required in YYYY-MM format for roster upload.');
+  }
+  const payload = { action: 'uploadmasterroster', rows, targetMonth: trimmedMonth };
   return request({ method: 'POST', body: payload });
 }
 

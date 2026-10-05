@@ -634,10 +634,39 @@ export default function App() {
 
   // Handle Excel Baseline Uploads
   const handleUploadBaseline = async (rows, targetMonth) => {
+    let canonicalMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
+
+    // If targetMonth is not passed, attempt deterministic extraction from rows
+    if (!canonicalMonth && Array.isArray(rows) && rows.length > 0) {
+      const uniqueMonths = new Set();
+      for (const r of rows) {
+        const d = r?.date || r?.Date;
+        const iso = toIsoDate(d) || (typeof d === 'string' ? d.trim() : '');
+        if (/^\d{4}-(0[1-9]|1[0-2])/.test(iso)) {
+          uniqueMonths.add(iso.slice(0, 7));
+        }
+      }
+      if (uniqueMonths.size === 1) {
+        canonicalMonth = [...uniqueMonths][0];
+      }
+    }
+
+    if (!canonicalMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      addToast('❌ Upload failed: targetMonth is required in YYYY-MM format for roster upload.. Reverted.', 'error', 5000);
+      return;
+    }
+
+    const monthScopedRows = Array.isArray(rows)
+      ? rows.filter((r) => {
+          const iso = toIsoDate(r?.date || r?.Date);
+          return iso ? iso.startsWith(canonicalMonth) : String(r?.date || r?.Date || '').startsWith(canonicalMonth);
+        })
+      : [];
+
     let previousMonthRows = [];
     
     // Optimistically update masterRoster state preserving other months
-    const validatedRows = rows.map((r) => ({
+    const validatedRows = monthScopedRows.map((r) => ({
       Name: r.name,
       name: r.name,
       Date: r.date,
@@ -648,17 +677,13 @@ export default function App() {
     }));
 
     setMasterRoster((prev) => {
-      if (targetMonth) {
-        const isMonthMatch = (r) => {
-          const iso = toIsoDate(r.date || r.Date);
-          return iso ? iso.startsWith(targetMonth) : String(r.date || r.Date || '').startsWith(targetMonth);
-        };
-        previousMonthRows = prev.filter(isMonthMatch);
-        const otherMonths = prev.filter((r) => !isMonthMatch(r));
-        return [...otherMonths, ...validatedRows];
-      }
-      previousMonthRows = [...prev];
-      return validatedRows;
+      const isMonthMatch = (r) => {
+        const iso = toIsoDate(r.date || r.Date);
+        return iso ? iso.startsWith(canonicalMonth) : String(r.date || r.Date || '').startsWith(canonicalMonth);
+      };
+      previousMonthRows = prev.filter(isMonthMatch);
+      const otherMonths = prev.filter((r) => !isMonthMatch(r));
+      return [...otherMonths, ...validatedRows];
     });
 
     const toastId = addToast('🔄 Uploading roster baseline...', 'info', Infinity);
@@ -666,7 +691,7 @@ export default function App() {
     inFlightMutationsRef.current++;
     (async () => {
       try {
-        await uploadMasterRoster(rows, targetMonth);
+        await uploadMasterRoster(monthScopedRows, canonicalMonth);
         updateToast(toastId, {
           message: '✅ Roster baseline uploaded successfully!',
           type: 'success',
@@ -675,15 +700,12 @@ export default function App() {
       } catch (err) {
         console.error('Failed to upload baseline:', err);
         setMasterRoster((prev) => {
-          if (targetMonth) {
-            const isMonthMatch = (r) => {
-              const iso = toIsoDate(r.date || r.Date);
-              return iso ? iso.startsWith(targetMonth) : String(r.date || r.Date || '').startsWith(targetMonth);
-            };
-            const otherMonths = prev.filter((r) => !isMonthMatch(r));
-            return [...otherMonths, ...previousMonthRows];
-          }
-          return previousMonthRows;
+          const isMonthMatch = (r) => {
+            const iso = toIsoDate(r.date || r.Date);
+            return iso ? iso.startsWith(canonicalMonth) : String(r.date || r.Date || '').startsWith(canonicalMonth);
+          };
+          const otherMonths = prev.filter((r) => !isMonthMatch(r));
+          return [...otherMonths, ...previousMonthRows];
         });
         updateToast(toastId, {
           message: `❌ Upload failed: ${err.message || 'Network error'}. Reverted.`,
