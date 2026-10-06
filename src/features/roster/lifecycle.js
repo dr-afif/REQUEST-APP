@@ -1367,9 +1367,10 @@ const RosterLifecycle = (() => {
     );
 
     // 5. Active amendments & effective state
+    // An active absence only makes the operational roster AMENDED if it actually altered at least one assignment.
     const activeCount = countActiveAmendments(eventGroups);
-    const hasActiveAbsence = activeAbsences.length > 0;
-    const effectiveState = (activeCount > 0 || hasActiveAbsence) ? LIFECYCLE_STATES.AMENDED : LIFECYCLE_STATES.PUBLISHED;
+    const hasActiveRosterAbsence = currentAssignments.some(a => a.Source === 'ABSENCE');
+    const effectiveState = (activeCount > 0 || hasActiveRosterAbsence) ? LIFECYCLE_STATES.AMENDED : LIFECYCLE_STATES.PUBLISHED;
 
     // 6. Master roster projection & checksum
     const masterRosterProjection = generateMasterRosterProjection(currentAssignments);

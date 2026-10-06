@@ -1150,3 +1150,520 @@ test('44. full domain/backend resolver equivalence', () => {
   assert.equal(bAbsent.shiftCode, dAbsent.ShiftCode);
   assert.equal(bAbsent.coverageStatus, dAbsent.CoverageStatus);
 });
+
+// ==========================================
+// 45-60. PHASE 6 SLICE 2.1 SEMANTICS & HARDENING
+// ==========================================
+
+test('45. failure window 1: error after OperationLog PENDING before entity write -> FAILED', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeAbsenceOp({ periodId, expectedRevision: 1 });
+
+  // Injected failure before RosterAbsences write
+  const origAppend = h.context.rosterLifecycleAppendRows_;
+  h.context.rosterLifecycleAppendRows_ = (sheetName, rows) => {
+    if (sheetName === 'RosterAbsences') {
+      const err = new Error('INJECTED_PRE_ABSENCE_WRITE_CRASH');
+      err.code = 'TRANSIENT_BACKEND';
+      throw err;
+    }
+    return origAppend(sheetName, rows);
+  };
+
+  const res = h.post(op);
+  assert.equal(res.ok, false);
+
+  // OperationLog status must be FAILED because 0 authoritative rows escaped
+  const logRows = h.grids.OperationLog.slice(1);
+  const opLog = logRows.find(r => r[0] === op.operationId);
+  assert.ok(opLog, 'OperationLog entry must exist');
+  assert.equal(opLog[8], 'FAILED', 'Status must be FAILED because no authoritative entity escaped');
+
+  // Verify RosterAbsences has no rows written
+  const absRows = h.grids.RosterAbsences.slice(1);
+  assert.equal(absRows.length, 0, 'No absence rows should escape');
+
+  // Period remains PUBLISHED and revision 1
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'PUBLISHED');
+  assert.equal(periodRow[2], 1);
+});
+
+test('46. failure window 2: partial absence write (error after RosterAbsences write) -> RECOVERY_REQUIRED', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeAbsenceOp({ periodId, expectedRevision: 1 });
+
+  // Inject failure during MasterRoster write (after RosterAbsences write)
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    const err = new Error('INJECTED_POST_ABSENCE_WRITE_CRASH');
+    err.code = 'TRANSIENT_BACKEND';
+    throw err;
+  };
+
+  const res = h.post(op);
+  assert.equal(res.ok, false);
+
+  // OperationLog status must be RECOVERY_REQUIRED because the absence entity was persisted
+  const logRows = h.grids.OperationLog.slice(1);
+  const opLog = logRows.find(r => r[0] === op.operationId);
+  assert.ok(opLog);
+  assert.equal(opLog[8], 'RECOVERY_REQUIRED', 'Must be RECOVERY_REQUIRED because entity escaped to RosterAbsences');
+
+  // Verify RosterAbsences contains the row
+  const absRows = h.grids.RosterAbsences.slice(1);
+  assert.equal(absRows.length, 1, 'Absence row must be in RosterAbsences');
+});
+
+test('47. failure window 3: partial replacement write (error after RosterReplacements write) -> RECOVERY_REQUIRED', () => {
+  const { h, periodId } = setupPublished();
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  assert.equal(absRes.ok, true);
+
+  const replOp = makeReplacementOp({ periodId, expectedRevision: 2, absenceId: absRes.absenceId });
+
+  // Inject failure during MasterRoster write (after RosterReplacements write)
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    const err = new Error('INJECTED_POST_REPL_WRITE_CRASH');
+    err.code = 'TRANSIENT_BACKEND';
+    throw err;
+  };
+
+  const res = h.post(replOp);
+  assert.equal(res.ok, false);
+
+  const logRows = h.grids.OperationLog.slice(1);
+  const opLog = logRows.find(r => r[0] === replOp.operationId);
+  assert.ok(opLog);
+  assert.equal(opLog[8], 'RECOVERY_REQUIRED', 'Must be RECOVERY_REQUIRED because entity escaped to RosterReplacements');
+
+  const replRows = h.grids.RosterReplacements.slice(1);
+  assert.equal(replRows.length, 1, 'Replacement row must be in RosterReplacements');
+});
+
+test('48. failure window 4: partial absence reversal (error after RosterAbsences update) -> RECOVERY_REQUIRED', () => {
+  const { h, periodId } = setupPublished();
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  assert.equal(absRes.ok, true);
+
+  const revOp = makeAbsenceReverseOp({ periodId, expectedRevision: 2, absenceId: absRes.absenceId });
+
+  // Inject failure during MasterRoster write
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    const err = new Error('INJECTED_POST_ABSENCE_REV_WRITE_CRASH');
+    err.code = 'TRANSIENT_BACKEND';
+    throw err;
+  };
+
+  const res = h.post(revOp);
+  assert.equal(res.ok, false);
+
+  const logRows = h.grids.OperationLog.slice(1);
+  const opLog = logRows.find(r => r[0] === revOp.operationId);
+  assert.ok(opLog);
+  assert.equal(opLog[8], 'RECOVERY_REQUIRED', 'Must be RECOVERY_REQUIRED because absence status was marked REVERSED');
+});
+
+test('49. failure window 5: partial replacement reversal (error after RosterReplacements update) -> RECOVERY_REQUIRED', () => {
+  const { h, periodId } = setupPublished();
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  const replRes = h.post(makeReplacementOp({ periodId, expectedRevision: 2, absenceId: absRes.absenceId }));
+  assert.equal(replRes.ok, true);
+
+  const revOp = makeReplacementReverseOp({ periodId, expectedRevision: 3, replacementId: replRes.replacementId });
+
+  // Inject failure during MasterRoster write
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    const err = new Error('INJECTED_POST_REPL_REV_WRITE_CRASH');
+    err.code = 'TRANSIENT_BACKEND';
+    throw err;
+  };
+
+  const res = h.post(revOp);
+  assert.equal(res.ok, false);
+
+  const logRows = h.grids.OperationLog.slice(1);
+  const opLog = logRows.find(r => r[0] === revOp.operationId);
+  assert.ok(opLog);
+  assert.equal(opLog[8], 'RECOVERY_REQUIRED', 'Must be RECOVERY_REQUIRED because replacement status was marked REVERSED');
+});
+
+test('50. failure window 6: error after RosterPeriods write before final OperationLog CONFIRMED -> RECOVERY_REQUIRED', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeAbsenceOp({ periodId, expectedRevision: 1 });
+
+  // Intercept writeLog: throw on CONFIRMED update
+  const origWriteLog = h.context.rosterLifecycleWriteLog_;
+  h.context.rosterLifecycleWriteLog_ = (log) => {
+    if (log.Status === 'CONFIRMED') {
+      throw new Error('INJECTED_PRE_CONFIRMED_LOG_CRASH');
+    }
+    return origWriteLog(log);
+  };
+
+  const res = h.post(op);
+  assert.equal(res.ok, false);
+
+  const logRows = h.grids.OperationLog.slice(1);
+  const opLog = logRows.find(r => r[0] === op.operationId);
+  assert.ok(opLog);
+  assert.equal(opLog[8], 'RECOVERY_REQUIRED', 'Status remains RECOVERY_REQUIRED because final confirmation failed');
+
+  // Period was already updated before confirmation crash
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'AMENDED');
+  assert.equal(periodRow[2], 2);
+  assert.equal(periodRow[11], op.operationId);
+});
+
+test('51. dedicated absence recovery completes partial write without duplication or double revision', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeAbsenceOp({ periodId, expectedRevision: 1 });
+
+  // Inject failure post entity write
+  const origMasterWrite = h.context.rosterLifecycleWriteMasterRoster_;
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    throw new Error('INJECTED_CRASH');
+  };
+  h.post(op);
+
+  // Restore normal operation
+  h.context.rosterLifecycleWriteMasterRoster_ = origMasterWrite;
+
+  // Verify RECOVERY_REQUIRED state
+  const preRecoveryLog = h.grids.OperationLog.slice(1).find(r => r[0] === op.operationId);
+  assert.equal(preRecoveryLog[8], 'RECOVERY_REQUIRED');
+
+  // Recover using dedicated endpoint
+  const recRes = h.post({ action: 'rosterv2absencerecover', operationId: op.operationId });
+  assert.equal(recRes.ok, true);
+  assert.equal(recRes.status, 'CONFIRMED');
+
+  // Check no duplication in RosterAbsences
+  const absRows = h.grids.RosterAbsences.slice(1);
+  assert.equal(absRows.length, 1, 'RosterAbsences row count must remain exactly 1 (no duplication)');
+
+  // Revision must be 2, not double-incremented
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[0] === periodId);
+  assert.equal(periodRow[2], 2, 'Revision must be incremented exactly once');
+});
+
+test('52. dedicated replacement recovery completes partial write without duplication or double revision', () => {
+  const { h, periodId } = setupPublished();
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  const replOp = makeReplacementOp({ periodId, expectedRevision: 2, absenceId: absRes.absenceId });
+
+  // Inject failure post entity write
+  const origMasterWrite = h.context.rosterLifecycleWriteMasterRoster_;
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    throw new Error('INJECTED_CRASH');
+  };
+  h.post(replOp);
+  h.context.rosterLifecycleWriteMasterRoster_ = origMasterWrite;
+
+  // Recover using dedicated replacement recovery endpoint
+  const recRes = h.post({ action: 'rosterv2replacementrecover', operationId: replOp.operationId });
+  assert.equal(recRes.ok, true);
+  assert.equal(recRes.status, 'CONFIRMED');
+
+  const replRows = h.grids.RosterReplacements.slice(1);
+  assert.equal(replRows.length, 1, 'RosterReplacements row count must remain exactly 1');
+
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[0] === periodId);
+  assert.equal(periodRow[2], 3, 'Revision must be 3 (not double-incremented to 4)');
+});
+
+test('53. dedicated absence reversal recovery completes without duplication or double revision', () => {
+  const { h, periodId } = setupPublished();
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  const revOp = makeAbsenceReverseOp({ periodId, expectedRevision: 2, absenceId: absRes.absenceId });
+
+  const origMasterWrite = h.context.rosterLifecycleWriteMasterRoster_;
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    throw new Error('INJECTED_CRASH');
+  };
+  h.post(revOp);
+  h.context.rosterLifecycleWriteMasterRoster_ = origMasterWrite;
+
+  const recRes = h.post({ action: 'rosterv2absencerecover', operationId: revOp.operationId });
+  assert.equal(recRes.ok, true);
+  assert.equal(recRes.status, 'CONFIRMED');
+
+  const absRows = h.grids.RosterAbsences.slice(1);
+  assert.equal(absRows.length, 1);
+  assert.equal(absRows[0][10], 'REVERSED');
+
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[0] === periodId);
+  assert.equal(periodRow[2], 3, 'Revision must be 3 (not double-incremented)');
+});
+
+test('54. dedicated replacement reversal recovery completes without duplication or double revision', () => {
+  const { h, periodId } = setupPublished();
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  const replRes = h.post(makeReplacementOp({ periodId, expectedRevision: 2, absenceId: absRes.absenceId }));
+  const revOp = makeReplacementReverseOp({ periodId, expectedRevision: 3, replacementId: replRes.replacementId });
+
+  const origMasterWrite = h.context.rosterLifecycleWriteMasterRoster_;
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    throw new Error('INJECTED_CRASH');
+  };
+  h.post(revOp);
+  h.context.rosterLifecycleWriteMasterRoster_ = origMasterWrite;
+
+  const recRes = h.post({ action: 'rosterv2replacementrecover', operationId: revOp.operationId });
+  assert.equal(recRes.ok, true);
+  assert.equal(recRes.status, 'CONFIRMED');
+
+  const replRows = h.grids.RosterReplacements.slice(1);
+  assert.equal(replRows.length, 1);
+  assert.equal(replRows[0][8], 'REVERSED');
+
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[0] === periodId);
+  assert.equal(periodRow[2], 4, 'Revision must be 4 (not double-incremented)');
+});
+
+test('55. same operation replay after recovery returns byte-for-byte identical result', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeAbsenceOp({ periodId, expectedRevision: 1 });
+
+  const origMasterWrite = h.context.rosterLifecycleWriteMasterRoster_;
+  h.context.rosterLifecycleWriteMasterRoster_ = () => {
+    throw new Error('INJECTED_CRASH');
+  };
+  h.post(op);
+  h.context.rosterLifecycleWriteMasterRoster_ = origMasterWrite;
+
+  // Recover
+  const recRes = h.post({ action: 'rosterv2absencerecover', operationId: op.operationId });
+  assert.equal(recRes.ok, true);
+
+  // Replay original operation with same operationId and payload
+  const replayRes = h.post(op);
+  assert.equal(replayRes.ok, true);
+  assert.equal(replayRes.operationId, op.operationId);
+  assert.equal(replayRes.revision, 2);
+  assert.equal(replayRes.state, 'AMENDED');
+  assert.equal(recRes.result.absenceId, replayRes.absenceId);
+});
+
+test('56. no-duty absence persists as active administrative record in RosterAbsences', () => {
+  const { h, periodId } = setupPublished();
+  // person4 is OFF on 2030-07-01 in MO baseline
+  const op = makeAbsenceOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person4,
+    startDate: `${periodId}-01`,
+    endDate: `${periodId}-01`,
+    dutyDomain: 'MO',
+    shortageAccepted: false // No shortage acceptance required for no-duty absence
+  });
+
+  const res = h.post(op);
+  assert.equal(res.ok, true);
+  assert.ok(res.absenceId);
+
+  // Absence record persists in RosterAbsences
+  const absRows = h.grids.RosterAbsences.slice(1);
+  const row = absRows.find(r => r[0] === res.absenceId);
+  assert.ok(row, 'No-duty absence must persist in RosterAbsences');
+  assert.equal(row[2], person4);
+  assert.equal(row[10], 'ACTIVE');
+});
+
+test('57. no-duty absence leaves Planned, Current, MasterRoster unchanged, revision unchanged, remains PUBLISHED', () => {
+  const { h, periodId } = setupPublished();
+  const plannedBefore = plannedRoster(h, periodId);
+  const currentBefore = currentRoster(h, periodId);
+  const masterBefore = JSON.stringify(h.grids.MasterRoster);
+
+  // Record absence for person4 (who is OFF on 2030-07-01)
+  const op = makeAbsenceOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person4,
+    startDate: `${periodId}-01`,
+    endDate: `${periodId}-01`,
+    dutyDomain: 'MO'
+  });
+
+  const res = h.post(op);
+  assert.equal(res.ok, true);
+  assert.equal(res.affectedAssignmentCount, 0, 'Must affect 0 duties');
+  assert.equal(res.revision, 1, 'Roster revision must NOT increment for no-duty absence');
+  assert.equal(res.state, 'PUBLISHED', 'Lifecycle state must remain PUBLISHED');
+
+  const plannedAfter = plannedRoster(h, periodId);
+  assert.deepEqual(plannedAfter.assignments, plannedBefore.assignments, 'Planned assignments unchanged');
+
+  const currentAfter = currentRoster(h, periodId);
+  assert.equal(currentAfter.effectiveState, 'PUBLISHED', 'Current effectiveState must remain PUBLISHED');
+  assert.deepEqual(currentAfter.assignments, currentBefore.assignments, 'Current assignments unchanged');
+
+  const masterAfter = JSON.stringify(h.grids.MasterRoster);
+  assert.equal(masterAfter, masterBefore, 'MasterRoster projection unchanged');
+
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[0] === periodId);
+  assert.equal(periodRow[1], 'PUBLISHED', 'RosterPeriods State remains PUBLISHED');
+  assert.equal(periodRow[2], 1, 'RosterPeriods Revision remains 1');
+});
+
+test('58. no-duty absence reopen behavior maintains PUBLISHED target state; later roster mutations do not create ambiguous absence effects', () => {
+  const { h, periodId } = setupPublished();
+  // Record no-duty absence for person4
+  h.post(makeAbsenceOp({
+    periodId,
+    expectedRevision: 1,
+    personId: person4,
+    startDate: `${periodId}-01`,
+    endDate: `${periodId}-01`,
+    dutyDomain: 'MO'
+  }));
+
+  // Close period
+  const closeMeaning = {
+    operationId: crypto.randomUUID(),
+    clientId: crypto.randomUUID(),
+    tabId: crypto.randomUUID(),
+    operationType: 'PERIOD_CLOSE',
+    entityKey: `period:${periodId}`,
+    expectedRevision: 1,
+    payload: { periodId, adminNote: 'Closed' }
+  };
+  h.post({ action: 'rosterv2close', ...closeMeaning, ...closeMeaning.payload, payloadHash: digest(protocol.canonical(closeMeaning)) });
+
+  // Reopen period
+  const reopenMeaning = {
+    operationId: crypto.randomUUID(),
+    clientId: crypto.randomUUID(),
+    tabId: crypto.randomUUID(),
+    operationType: 'PERIOD_REOPEN',
+    entityKey: `period:${periodId}`,
+    expectedRevision: 2,
+    payload: { periodId, reason: 'Reopened' }
+  };
+  const reopenRes = h.post({ action: 'rosterv2reopen', ...reopenMeaning, ...reopenMeaning.payload, payloadHash: digest(protocol.canonical(reopenMeaning)) });
+  assert.equal(reopenRes.ok, true);
+  assert.equal(reopenRes.state, 'PUBLISHED', 'Target state remains PUBLISHED because only no-duty absence exists');
+
+  // Later mutation on different doctor (person1 and person2 swap on 2030-07-02)
+  const amendMeaning = {
+    operationId: crypto.randomUUID(),
+    clientId: crypto.randomUUID(),
+    tabId: crypto.randomUUID(),
+    operationType: 'PERIOD_AMEND',
+    entityKey: `period:${periodId}`,
+    expectedRevision: 3,
+    payload: {
+      periodId,
+      eventType: 'SWAP',
+      person1: { personId: person1, date: `${periodId}-02`, dutyDomain: 'MO' },
+      person2: { personId: person2, date: `${periodId}-02`, dutyDomain: 'MO' },
+      publicReasonCode: 'SHIFT_SWAP',
+      adminNote: 'Swap shifts'
+    }
+  };
+  const amendRes = h.post({ action: 'rosterv2amend', ...amendMeaning, ...amendMeaning.payload, payloadHash: digest(protocol.canonical(amendMeaning)) });
+  assert.equal(amendRes.ok, true);
+
+  // Check current: person4 on 2030-07-01 still has no ambiguous absence effect
+  const cur = currentRoster(h, periodId);
+  const p4 = cur.assignments.find(a => a.personId === person4 && a.date === `${periodId}-01`);
+  assert.equal(p4.shiftCode, 'OFF', 'person4 remains OFF without retroactive ambiguous absence');
+  assert.equal(p4.source, undefined, 'person4 source is not ABSENCE');
+});
+
+test('59. replacement collision predicate: same person/date across DIFFERENT DutyDomain is allowed', () => {
+  const { h, periodId } = setupPublished();
+  // In setup(), personEp is 'Dr. Dave' with DirectoryType 'EP'
+  // Baseline has person1 ('Dr. Ali') on duty 'AM' in MO on 2030-07-01
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  assert.equal(absRes.ok, true);
+
+  // personEp has an EP assignment on 2030-07-01
+  // Add an EP planned assignment for personEp
+  const assignRows = h.grids.RosterAssignments;
+  assignRows.push([
+    crypto.randomUUID(), periodId, 'PLANNED', 'snap-ep',
+    personEp, 'Dr. Dave', '2030-07-01', 'EP', 'EP-ON',
+    '{}', 0, 'PLANNED', 'op-ep', new Date().toISOString(), 'admin@example.invalid'
+  ]);
+
+  // Request personEp as replacement for MO duty on same date (different domain)
+  const replOp = makeReplacementOp({
+    periodId,
+    expectedRevision: 2,
+    absenceId: absRes.absenceId,
+    replacementPersonId: personEp,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    shiftCode: 'AM'
+  });
+
+  const res = h.post(replOp);
+  assert.equal(res.ok, true, 'Cross-domain replacement on same date must NOT collide');
+  assert.equal(res.state, 'AMENDED');
+  assert.equal(res.revision, 3);
+});
+
+test('60. replacement collision predicate: same person/date/domain rejects active working duty or active absence, allows off-duty doctor', () => {
+  const { h, periodId } = setupPublished();
+  // person1 (MO) is on AM duty on 2030-07-01
+  // person2 (MO) is on PM duty on 2030-07-01 (working duty)
+  // person4 (MO) is OFF on 2030-07-01 (off-duty)
+  const absRes = h.post(makeAbsenceOp({ periodId, expectedRevision: 1 }));
+  assert.equal(absRes.ok, true);
+
+  // 1. Incompatible collision: person2 already has an active working assignment ('PM') on 2030-07-01 in MO
+  const collOp = makeReplacementOp({
+    periodId,
+    expectedRevision: 2,
+    absenceId: absRes.absenceId,
+    replacementPersonId: person2,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    shiftCode: 'AM'
+  });
+  const collRes = h.post(collOp);
+  assert.equal(collRes.ok, false);
+  assert.equal(collRes.error.code, 'INVALID_ASSIGNMENT', 'Doctor on active working shift in same domain cannot cover');
+
+  // 2. Incompatible collision: person on active absence cannot cover
+  // Place person3 on active absence on 2030-07-01
+  const absRes3 = h.post(makeAbsenceOp({
+    periodId,
+    expectedRevision: 2,
+    personId: person3,
+    startDate: `${periodId}-01`,
+    endDate: `${periodId}-01`,
+    dutyDomain: 'MO'
+  }));
+  assert.equal(absRes3.ok, true);
+
+  const absentCoverOp = makeReplacementOp({
+    periodId,
+    expectedRevision: 3,
+    absenceId: absRes.absenceId,
+    replacementPersonId: person3,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    shiftCode: 'AM'
+  });
+  const absentCoverRes = h.post(absentCoverOp);
+  assert.equal(absentCoverRes.ok, false);
+  assert.equal(absentCoverRes.error.code, 'INVALID_ASSIGNMENT', 'Doctor on active absence cannot cover');
+
+  // 3. Legitimate coverage: person4 is OFF in MO on 2030-07-01 -> allowed!
+  const validOp = makeReplacementOp({
+    periodId,
+    expectedRevision: 3,
+    absenceId: absRes.absenceId,
+    replacementPersonId: person4,
+    date: `${periodId}-01`,
+    dutyDomain: 'MO',
+    shiftCode: 'AM'
+  });
+  const validRes = h.post(validOp);
+  assert.equal(validRes.ok, true, 'Off-duty doctor is authorized to cover');
+  assert.equal(validRes.state, 'AMENDED');
+  assert.equal(validRes.revision, 4);
+});

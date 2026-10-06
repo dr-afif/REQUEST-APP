@@ -1893,9 +1893,23 @@ function rosterLifecycleReopen_(data, actor) {
   const confirmedRows = rosterLifecycleFindConfirmedEventsByPeriod_(periodId);
   const activeCount = RosterLifecycle.countActiveAmendments(confirmedRows);
   const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId);
-  const activeAbsencesCount = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; }).length;
-  const effectiveActiveCount = activeCount + activeAbsencesCount;
-  const targetState = RosterLifecycle.determineReopenTarget(effectiveActiveCount);
+  const activeAbsences = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; });
+  const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId);
+  const activeReplacements = confirmedReplacements.filter(function(r) { return r.Status === 'ACTIVE'; });
+  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+  const priorEvents = RosterLifecycle.groupEventLines(confirmedRows);
+  const cur = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: priorEvents,
+    absences: activeAbsences,
+    replacements: activeReplacements,
+    people: rosterLifecycleGetPeople_(),
+    digestFn: rosterV2Digest_
+  });
+  const targetState = cur.effectiveState || (activeCount > 0 ? 'AMENDED' : 'PUBLISHED');
+  const effectiveActiveCount = (targetState === 'AMENDED') ? Math.max(1, activeCount + activeAbsences.length) : 0;
 
   try {
     RosterLifecycle.validateTransition(currentState, targetState, {
@@ -2128,111 +2142,444 @@ function rosterLifecycleRecover_(operationId) {
       rosterLifecycleWriteLog_(log);
       return rosterLifecycleStatus_(operationId);
     }
-  } else if (log.OperationType === 'ABSENCE_CREATE') {
-    if (period && (period.State === 'AMENDED' || period.State === 'PUBLISHED') && period.LastOperationId === operationId) {
-      if (!log.ResultJson) {
-        const absences = rosterLifecycleGetRecords_('RosterAbsences');
-        const targetAbsence = absences.find(function(a) { return a.OperationId === operationId; });
-        log.ResultJson = JSON.stringify({
-          ok: true,
-          operationId: operationId,
-          periodId: periodId,
-          state: period.State,
-          revision: Number(period.Revision),
-          absenceId: targetAbsence ? targetAbsence.AbsenceId : '',
-          projectionChecksum: period.ProjectionChecksum,
-          createdAt: targetAbsence ? targetAbsence.CreatedAt : '',
-          createdBy: targetAbsence ? targetAbsence.CreatedBy : ''
-        });
-      }
-      log.Status = 'CONFIRMED';
-      log.ErrorCode = '';
-      log.CompletedAt = new Date().toISOString();
-      rosterLifecycleWriteLog_(log);
-      return rosterLifecycleStatus_(operationId);
-    }
-    return rosterLifecycleStatus_(operationId);
-  } else if (log.OperationType === 'REPLACEMENT_CREATE') {
-    if (period && (period.State === 'AMENDED' || period.State === 'PUBLISHED') && period.LastOperationId === operationId) {
-      if (!log.ResultJson) {
-        const replacements = rosterLifecycleGetRecords_('RosterReplacements');
-        const targetRepl = replacements.find(function(r) { return r.OperationId === operationId; });
-        log.ResultJson = JSON.stringify({
-          ok: true,
-          operationId: operationId,
-          periodId: periodId,
-          state: period.State,
-          revision: Number(period.Revision),
-          replacementId: targetRepl ? targetRepl.ReplacementId : '',
-          absenceId: targetRepl ? targetRepl.AbsenceId : '',
-          originalAssignmentId: targetRepl ? targetRepl.OriginalAssignmentId : '',
-          replacementAssignmentId: targetRepl ? targetRepl.ReplacementAssignmentId : '',
-          projectionChecksum: period.ProjectionChecksum,
-          createdAt: targetRepl ? targetRepl.CreatedAt : '',
-          createdBy: targetRepl ? targetRepl.CreatedBy : ''
-        });
-      }
-      log.Status = 'CONFIRMED';
-      log.ErrorCode = '';
-      log.CompletedAt = new Date().toISOString();
-      rosterLifecycleWriteLog_(log);
-      return rosterLifecycleStatus_(operationId);
-    }
-    return rosterLifecycleStatus_(operationId);
-  } else if (log.OperationType === 'ABSENCE_REVERSE') {
-    if (period && (period.State === 'AMENDED' || period.State === 'PUBLISHED') && period.LastOperationId === operationId) {
-      if (!log.ResultJson) {
-        const absences = rosterLifecycleGetRecords_('RosterAbsences');
-        const targetAbsence = absences.find(function(a) { return a.OperationId === operationId; });
-        log.ResultJson = JSON.stringify({
-          ok: true,
-          operationId: operationId,
-          periodId: periodId,
-          state: period.State,
-          revision: Number(period.Revision),
-          absenceId: targetAbsence ? targetAbsence.AbsenceId : '',
-          status: 'REVERSED',
-          projectionChecksum: period.ProjectionChecksum,
-          reversedAt: period.UpdatedAt || '',
-          reversedBy: ''
-        });
-      }
-      log.Status = 'CONFIRMED';
-      log.ErrorCode = '';
-      log.CompletedAt = new Date().toISOString();
-      rosterLifecycleWriteLog_(log);
-      return rosterLifecycleStatus_(operationId);
-    }
-    return rosterLifecycleStatus_(operationId);
-  } else if (log.OperationType === 'REPLACEMENT_REVERSE') {
-    if (period && (period.State === 'AMENDED' || period.State === 'PUBLISHED') && period.LastOperationId === operationId) {
-      if (!log.ResultJson) {
-        const replacements = rosterLifecycleGetRecords_('RosterReplacements');
-        const targetRepl = replacements.find(function(r) { return r.OperationId === operationId; });
-        log.ResultJson = JSON.stringify({
-          ok: true,
-          operationId: operationId,
-          periodId: periodId,
-          state: period.State,
-          revision: Number(period.Revision),
-          replacementId: targetRepl ? targetRepl.ReplacementId : '',
-          status: 'REVERSED',
-          coverageStatus: 'UNCOVERED',
-          projectionChecksum: period.ProjectionChecksum,
-          reversedAt: period.UpdatedAt || '',
-          reversedBy: ''
-        });
-      }
-      log.Status = 'CONFIRMED';
-      log.ErrorCode = '';
-      log.CompletedAt = new Date().toISOString();
-      rosterLifecycleWriteLog_(log);
-      return rosterLifecycleStatus_(operationId);
-    }
-    return rosterLifecycleStatus_(operationId);
+  } else if (log.OperationType === 'ABSENCE_CREATE' || log.OperationType === 'ABSENCE_REVERSE') {
+    return rosterLifecycleAbsenceRecover_(operationId, '');
+  } else if (log.OperationType === 'REPLACEMENT_CREATE' || log.OperationType === 'REPLACEMENT_REVERSE') {
+    return rosterLifecycleReplacementRecover_(operationId, '');
   }
 
   return rosterLifecycleStatus_(operationId);
+}
+
+function rosterLifecycleAbsenceRecover_(operationId, actor) {
+  const log = rosterLifecycleFindOperationLog_(operationId);
+  if (!log) throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Operation ' + operationId + ' not found' });
+  if (['CONFIRMED', 'FAILED'].includes(log.Status)) {
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  const periodId = log.EntityKey.replace(/^period:/, '');
+  const period = rosterLifecycleFindPeriod_(periodId);
+  if (!period) throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found' });
+
+  const currentRevision = Number(period.Revision || 0);
+
+  if (log.OperationType === 'ABSENCE_CREATE') {
+    const absences = rosterLifecycleGetRecords_('RosterAbsences');
+    const targetAbsence = absences.find(function(a) { return a.OperationId === operationId; });
+    if (!targetAbsence) {
+      log.Status = 'FAILED';
+      log.ErrorCode = log.ErrorCode || 'NO_PERSISTED_MUTATION';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+
+    const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+    const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+    const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+    const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+    const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+    const activeAbsences = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; });
+    if (!activeAbsences.some(function(a) { return a.AbsenceId === targetAbsence.AbsenceId; }) && targetAbsence.Status === 'ACTIVE') {
+      activeAbsences.push(targetAbsence);
+    }
+    const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+    const activeReplacements = confirmedReplacements.filter(function(r) { return r.Status === 'ACTIVE'; });
+    const people = rosterLifecycleGetPeople_();
+
+    const beforeAbsences = activeAbsences.filter(function(a) { return a.AbsenceId !== targetAbsence.AbsenceId; });
+    const authBefore = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: beforeAbsences,
+      replacements: activeReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+    const affectedDuties = (authBefore.currentAssignments || []).filter(function(a) {
+      return a.PersonId === targetAbsence.PersonId &&
+        a.DutyDomain === targetAbsence.DutyDomain &&
+        a.Date >= targetAbsence.StartDate &&
+        a.Date <= targetAbsence.EndDate &&
+        a.ShiftCode !== 'OFF' &&
+        !RosterAbsence.isValidAbsenceType(a.ShiftCode);
+    });
+    const isNoDuty = (affectedDuties.length === 0);
+
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: activeAbsences,
+      replacements: activeReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      log.Status = 'RECOVERY_REQUIRED';
+      log.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(log);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', { actual: actualChecksum, expected: expectedChecksum });
+    }
+
+    let targetRevision = currentRevision;
+    let targetState = period.State;
+
+    if (period.LastOperationId === operationId) {
+      targetRevision = currentRevision;
+      targetState = period.State;
+    } else {
+      if (isNoDuty) {
+        targetRevision = currentRevision;
+        targetState = period.State;
+      } else {
+        targetRevision = currentRevision + 1;
+        targetState = 'AMENDED';
+      }
+      const updatedPeriod = Object.assign({}, period, {
+        State: targetState,
+        Revision: targetRevision,
+        ProjectionChecksum: actualChecksum,
+        LastOperationId: operationId,
+        UpdatedAt: new Date().toISOString()
+      });
+      rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, period._row);
+    }
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      absenceId: targetAbsence.AbsenceId,
+      affectedAssignmentCount: affectedDuties.length,
+      projectionChecksum: actualChecksum,
+      createdAt: targetAbsence.CreatedAt || new Date().toISOString(),
+      createdBy: targetAbsence.CreatedBy || actor || ''
+    };
+    log.Status = 'CONFIRMED';
+    log.ResultRevision = targetRevision;
+    log.ResultJson = JSON.stringify(confirmedResult);
+    log.CompletedAt = new Date().toISOString();
+    log.ErrorCode = '';
+    rosterLifecycleWriteLog_(log);
+    return rosterLifecycleStatus_(operationId);
+
+  } else if (log.OperationType === 'ABSENCE_REVERSE') {
+    const absences = rosterLifecycleGetRecords_('RosterAbsences');
+    const targetAbsence = absences.find(function(a) { return a.OperationId === operationId && a.Status === 'REVERSED'; });
+    if (!targetAbsence) {
+      log.Status = 'FAILED';
+      log.ErrorCode = log.ErrorCode || 'NO_PERSISTED_MUTATION';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+
+    const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+    const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+    const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+    const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+    const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+    const remainingActiveAbsences = confirmedAbsences.filter(function(a) { return a.AbsenceId !== targetAbsence.AbsenceId && a.Status === 'ACTIVE'; });
+    const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+    const activeReplacements = confirmedReplacements.filter(function(r) { return r.Status === 'ACTIVE'; });
+    const people = rosterLifecycleGetPeople_();
+
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: remainingActiveAbsences,
+      replacements: activeReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      log.Status = 'RECOVERY_REQUIRED';
+      log.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(log);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', { actual: actualChecksum, expected: expectedChecksum });
+    }
+
+    let targetRevision = currentRevision;
+    const targetState = intendedCurrent.effectiveState || 'PUBLISHED';
+
+    if (period.LastOperationId === operationId) {
+      targetRevision = currentRevision;
+    } else {
+      const isNoDuty = (actualChecksum === period.ProjectionChecksum && targetState === period.State);
+      targetRevision = isNoDuty ? currentRevision : currentRevision + 1;
+      const updatedPeriod = Object.assign({}, period, {
+        State: targetState,
+        Revision: targetRevision,
+        ProjectionChecksum: actualChecksum,
+        LastOperationId: operationId,
+        UpdatedAt: new Date().toISOString()
+      });
+      rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, period._row);
+    }
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      absenceId: targetAbsence.AbsenceId,
+      status: 'REVERSED',
+      projectionChecksum: actualChecksum,
+      reversedAt: targetAbsence.ReversedAt || targetAbsence.UpdatedAt || new Date().toISOString(),
+      reversedBy: targetAbsence.ReversedBy || actor || ''
+    };
+    log.Status = 'CONFIRMED';
+    log.ResultRevision = targetRevision;
+    log.ResultJson = JSON.stringify(confirmedResult);
+    log.CompletedAt = new Date().toISOString();
+    log.ErrorCode = '';
+    rosterLifecycleWriteLog_(log);
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Unsupported absence operation type: ' + log.OperationType });
+}
+
+function rosterLifecycleReplacementRecover_(operationId, actor) {
+  const log = rosterLifecycleFindOperationLog_(operationId);
+  if (!log) throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Operation ' + operationId + ' not found' });
+  if (['CONFIRMED', 'FAILED'].includes(log.Status)) {
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  const periodId = log.EntityKey.replace(/^period:/, '');
+  const period = rosterLifecycleFindPeriod_(periodId);
+  if (!period) throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found' });
+
+  const currentRevision = Number(period.Revision || 0);
+
+  if (log.OperationType === 'REPLACEMENT_CREATE') {
+    const replacements = rosterLifecycleGetRecords_('RosterReplacements');
+    const targetRepl = replacements.find(function(r) { return r.OperationId === operationId; });
+    if (!targetRepl) {
+      log.Status = 'FAILED';
+      log.ErrorCode = log.ErrorCode || 'NO_PERSISTED_MUTATION';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+
+    const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+    const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+    const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+    const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+    const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+    const activeAbsences = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; });
+    const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+    const activeReplacements = confirmedReplacements.filter(function(r) { return r.Status === 'ACTIVE'; });
+    if (!activeReplacements.some(function(r) { return r.ReplacementId === targetRepl.ReplacementId; }) && targetRepl.Status === 'ACTIVE') {
+      activeReplacements.push(targetRepl);
+    }
+    const people = rosterLifecycleGetPeople_();
+
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: activeAbsences,
+      replacements: activeReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      log.Status = 'RECOVERY_REQUIRED';
+      log.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(log);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', { actual: actualChecksum, expected: expectedChecksum });
+    }
+
+    let targetRevision = currentRevision;
+    const targetState = 'AMENDED';
+
+    if (period.LastOperationId === operationId) {
+      targetRevision = currentRevision;
+    } else {
+      targetRevision = currentRevision + 1;
+      const updatedPeriod = Object.assign({}, period, {
+        State: targetState,
+        Revision: targetRevision,
+        ProjectionChecksum: actualChecksum,
+        LastOperationId: operationId,
+        UpdatedAt: new Date().toISOString()
+      });
+      rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, period._row);
+    }
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      replacementId: targetRepl.ReplacementId,
+      absenceId: targetRepl.AbsenceId,
+      originalAssignmentId: targetRepl.OriginalAssignmentId,
+      replacementAssignmentId: targetRepl.ReplacementAssignmentId,
+      projectionChecksum: actualChecksum,
+      createdAt: targetRepl.CreatedAt || new Date().toISOString(),
+      createdBy: targetRepl.CreatedBy || actor || ''
+    };
+    log.Status = 'CONFIRMED';
+    log.ResultRevision = targetRevision;
+    log.ResultJson = JSON.stringify(confirmedResult);
+    log.CompletedAt = new Date().toISOString();
+    log.ErrorCode = '';
+    rosterLifecycleWriteLog_(log);
+    return rosterLifecycleStatus_(operationId);
+
+  } else if (log.OperationType === 'REPLACEMENT_REVERSE') {
+    const replacements = rosterLifecycleGetRecords_('RosterReplacements');
+    const targetRepl = replacements.find(function(r) { return r.OperationId === operationId && r.Status === 'REVERSED'; });
+    if (!targetRepl) {
+      log.Status = 'FAILED';
+      log.ErrorCode = log.ErrorCode || 'NO_PERSISTED_MUTATION';
+      log.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(log);
+      return rosterLifecycleStatus_(operationId);
+    }
+
+    const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+    const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+    const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+    const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+    const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+    const activeAbsences = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; });
+    const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+    const remainingActiveReplacements = confirmedReplacements.filter(function(r) { return r.ReplacementId !== targetRepl.ReplacementId && r.Status === 'ACTIVE'; });
+    const people = rosterLifecycleGetPeople_();
+
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: activeAbsences,
+      replacements: remainingActiveReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      log.Status = 'RECOVERY_REQUIRED';
+      log.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(log);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', { actual: actualChecksum, expected: expectedChecksum });
+    }
+
+    let targetRevision = currentRevision;
+    const targetState = intendedCurrent.effectiveState || 'AMENDED';
+
+    if (period.LastOperationId === operationId) {
+      targetRevision = currentRevision;
+    } else {
+      targetRevision = currentRevision + 1;
+      const updatedPeriod = Object.assign({}, period, {
+        State: targetState,
+        Revision: targetRevision,
+        ProjectionChecksum: actualChecksum,
+        LastOperationId: operationId,
+        UpdatedAt: new Date().toISOString()
+      });
+      rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, period._row);
+    }
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      replacementId: targetRepl.ReplacementId,
+      status: 'REVERSED',
+      coverageStatus: 'UNCOVERED',
+      projectionChecksum: actualChecksum,
+      reversedAt: targetRepl.ReversedAt || targetRepl.UpdatedAt || new Date().toISOString(),
+      reversedBy: targetRepl.ReversedBy || actor || ''
+    };
+    log.Status = 'CONFIRMED';
+    log.ResultRevision = targetRevision;
+    log.ResultJson = JSON.stringify(confirmedResult);
+    log.CompletedAt = new Date().toISOString();
+    log.ErrorCode = '';
+    rosterLifecycleWriteLog_(log);
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Unsupported replacement operation type: ' + log.OperationType });
 }
 
 function rosterLifecycleAbsenceCreate_(data, actor) {
@@ -2401,6 +2748,10 @@ function rosterLifecycleAbsenceCreate_(data, actor) {
       !RosterAbsence.isValidAbsenceType(a.ShiftCode);
   });
 
+  const isNoDuty = (affectedDuties.length === 0);
+  const targetRevision = isNoDuty ? currentRevision : (currentRevision + 1);
+  const targetState = isNoDuty ? periodRecord.State : 'AMENDED';
+
   // Shortage validation: only required if active working duty is affected
   if (affectedDuties.length > 0) {
     RosterAbsence.validateShortageAcceptance({
@@ -2419,7 +2770,7 @@ function rosterLifecycleAbsenceCreate_(data, actor) {
       OperationType: 'ABSENCE_CREATE',
       EntityKey: 'period:' + periodId,
       ExpectedRevision: expectedRevision,
-      ResultRevision: expectedRevision + 1,
+      ResultRevision: targetRevision,
       PayloadHash: payloadHash,
       Status: 'PENDING',
       ResultJson: '',
@@ -2431,104 +2782,116 @@ function rosterLifecycleAbsenceCreate_(data, actor) {
     existingLog = rosterLifecycleFindOperationLog_(operationId);
   }
 
-  // 8. Persist Absence row idempotently
-  const absenceId = RosterAbsence.deterministicAbsenceId(operationId, personId, startDate, endDate, dutyDomain, rosterV2Digest_);
-  const absenceRecord = {
-    AbsenceId: absenceId,
-    PeriodId: periodId,
-    PersonId: personId,
-    PersonNameSnapshot: personNameSnapshot,
-    AbsenceType: absenceType,
-    StartDate: startDate,
-    EndDate: endDate,
-    DutyDomain: dutyDomain,
-    PublicReason: publicReason,
-    AdminNote: adminNote,
-    Status: 'ACTIVE',
-    OperationId: operationId,
-    CreatedAt: timestamp,
-    CreatedBy: actor
-  };
+  let entityPersisted = false;
+  try {
+    // 8. Persist Absence row idempotently
+    const absenceId = RosterAbsence.deterministicAbsenceId(operationId, personId, startDate, endDate, dutyDomain, rosterV2Digest_);
+    const absenceRecord = {
+      AbsenceId: absenceId,
+      PeriodId: periodId,
+      PersonId: personId,
+      PersonNameSnapshot: personNameSnapshot,
+      AbsenceType: absenceType,
+      StartDate: startDate,
+      EndDate: endDate,
+      DutyDomain: dutyDomain,
+      PublicReason: publicReason,
+      AdminNote: adminNote,
+      Status: 'ACTIVE',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
 
-  const existingAbsences = rosterLifecycleGetRecords_('RosterAbsences');
-  const existingAbsence = existingAbsences.find(function(a) { return a.AbsenceId === absenceId; });
-  if (existingAbsence) {
-    rosterLifecycleWriteRow_('RosterAbsences', Object.assign({}, existingAbsence, absenceRecord), existingAbsence._row);
-  } else {
-    rosterLifecycleAppendRows_('RosterAbsences', [absenceRecord]);
-  }
+    const existingAbsences = rosterLifecycleGetRecords_('RosterAbsences');
+    const existingAbsence = existingAbsences.find(function(a) { return a.AbsenceId === absenceId; });
+    if (existingAbsence) {
+      rosterLifecycleWriteRow_('RosterAbsences', Object.assign({}, existingAbsence, absenceRecord), existingAbsence._row);
+    } else {
+      rosterLifecycleAppendRows_('RosterAbsences', [absenceRecord]);
+    }
+    entityPersisted = true;
 
-  // 9. Compute intended Current with the new absence
-  const intendedAbsences = priorAbsences.concat([absenceRecord]);
-  const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
-    periodId: periodId,
-    plannedAssignments: plannedAssignments,
-    events: priorEvents,
-    absences: intendedAbsences,
-    replacements: priorReplacements,
-    people: people,
-    digestFn: rosterV2Digest_
-  });
-
-  // 10. Project to MasterRoster and write
-  const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
-  const masterTable = rosterV2ReadTable_('MasterRoster');
-  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
-  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
-  rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
-
-  // 11. Read back and verify projection checksum
-  const readbackTable = rosterV2ReadTable_('MasterRoster');
-  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
-  const targetMonthPersistedRows = readbackRows.filter(function(r) {
-    const ld = RosterCompatibility.localDate(r.Date);
-    return ld && ld.slice(0, 7) === periodId;
-  });
-
-  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
-  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
-
-  if (actualChecksum !== expectedChecksum) {
-    existingLog.Status = 'RECOVERY_REQUIRED';
-    existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
-    rosterLifecycleWriteLog_(existingLog);
-    throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
-      actual: actualChecksum,
-      expected: expectedChecksum
+    // 9. Compute intended Current with the new absence
+    const intendedAbsences = priorAbsences.concat([absenceRecord]);
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: intendedAbsences,
+      replacements: priorReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
     });
+
+    // 10. Project to MasterRoster and write
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    // 11. Read back and verify projection checksum
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      existingLog.Status = 'RECOVERY_REQUIRED';
+      existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(existingLog);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
+        actual: actualChecksum,
+        expected: expectedChecksum
+      });
+    }
+
+    // 12. Update RosterPeriods
+    const updatedPeriod = Object.assign({}, periodRecord, {
+      State: targetState,
+      Revision: targetRevision,
+      ProjectionChecksum: actualChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    });
+    rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+    // 13. Confirm OperationLog
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      absenceId: absenceId,
+      affectedAssignmentCount: affectedDuties.length,
+      projectionChecksum: actualChecksum,
+      createdAt: timestamp,
+      createdBy: actor
+    };
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = targetRevision;
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
   }
-
-  // 12. Update RosterPeriods
-  const updatedPeriod = Object.assign({}, periodRecord, {
-    State: 'AMENDED',
-    Revision: currentRevision + 1,
-    ProjectionChecksum: actualChecksum,
-    LastOperationId: operationId,
-    UpdatedAt: timestamp
-  });
-  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
-
-  // 13. Confirm OperationLog
-  const confirmedResult = {
-    ok: true,
-    operationId: operationId,
-    periodId: periodId,
-    state: 'AMENDED',
-    revision: currentRevision + 1,
-    absenceId: absenceId,
-    affectedAssignmentCount: affectedDuties.length,
-    projectionChecksum: actualChecksum,
-    createdAt: timestamp,
-    createdBy: actor
-  };
-  existingLog.Status = 'CONFIRMED';
-  existingLog.ResultRevision = currentRevision + 1;
-  existingLog.ResultJson = JSON.stringify(confirmedResult);
-  existingLog.CompletedAt = new Date().toISOString();
-  existingLog.ErrorCode = '';
-  rosterLifecycleWriteLog_(existingLog);
-
-  return confirmedResult;
 }
 
 function rosterLifecycleReplacementCreate_(data, actor) {
@@ -2661,10 +3024,6 @@ function rosterLifecycleReplacementCreate_(data, actor) {
   if (replacementPersonId === absenceRecord.PersonId) {
     throw DraftProtocol.fail('INVALID_PERSON_IDENTITY', { message: 'Replacement person cannot be the same as the absent person' });
   }
-  if (replPerson.DirectoryType && replPerson.DirectoryType !== dutyDomain) {
-    throw DraftProtocol.fail('DUTY_DOMAIN_MISMATCH', { message: 'Replacement person directory type ' + replPerson.DirectoryType + ' does not match DutyDomain ' + dutyDomain });
-  }
-
   // 2. Load prior state and verify target duty is genuinely affected
   const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
   const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
@@ -2676,6 +3035,17 @@ function rosterLifecycleReplacementCreate_(data, actor) {
   const priorAbsences = confirmedAbsences.filter(function(a) { return a.OperationId !== operationId && a.Status === 'ACTIVE'; });
   const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
   const priorReplacements = confirmedReplacements.filter(function(r) { return r.OperationId !== operationId && r.Status === 'ACTIVE'; });
+
+  // Replacement person cannot be on active absence on this date in this duty domain
+  const replPersonAbsence = priorAbsences.find(function(a) {
+    return a.PersonId === replacementPersonId &&
+      a.DutyDomain === dutyDomain &&
+      a.StartDate <= date &&
+      a.EndDate >= date;
+  });
+  if (replPersonAbsence) {
+    throw DraftProtocol.fail('INVALID_ASSIGNMENT', { message: 'Replacement person ' + replacementPersonId + ' is on active absence (' + replPersonAbsence.AbsenceType + ') on date ' + date });
+  }
 
   const authoritativeBefore = RosterLifecycle.resolveCurrentRoster({
     periodId: periodId,
@@ -2706,7 +3076,7 @@ function rosterLifecycleReplacementCreate_(data, actor) {
 
   const effectiveOrigAssignId = originalAssignmentId || targetAbsentAssignment.OriginalAssignmentId || targetAbsentAssignment.AssignmentId;
 
-  // Collision check: replacement person cannot already have an active working assignment on this date
+  // Collision check: replacement person cannot already have an active working assignment on this date in this DutyDomain
   const replPersonCurrentOnDate = (authoritativeBefore.currentAssignments || []).filter(function(a) {
     return a.PersonId === replacementPersonId &&
       a.Date === date &&
@@ -2738,106 +3108,118 @@ function rosterLifecycleReplacementCreate_(data, actor) {
     existingLog = rosterLifecycleFindOperationLog_(operationId);
   }
 
-  // 3. Persist Replacement row idempotently
-  const replacementId = RosterAbsence.deterministicReplacementId(operationId, absenceId, effectiveOrigAssignId, replacementPersonId, rosterV2Digest_);
-  const replacementAssignmentId = RosterLifecycle.deterministicAssignmentId(operationId, replacementPersonId, date, dutyDomain, shiftCode, 0, rosterV2Digest_);
+  let entityPersisted = false;
+  try {
+    // 3. Persist Replacement row idempotently
+    const replacementId = RosterAbsence.deterministicReplacementId(operationId, absenceId, effectiveOrigAssignId, replacementPersonId, rosterV2Digest_);
+    const replacementAssignmentId = RosterLifecycle.deterministicAssignmentId(operationId, replacementPersonId, date, dutyDomain, shiftCode, 0, rosterV2Digest_);
 
-  const replacementRecord = {
-    ReplacementId: replacementId,
-    AbsenceId: absenceId,
-    OriginalAssignmentId: effectiveOrigAssignId,
-    ReplacementPersonId: replacementPersonId,
-    ReplacementAssignmentId: replacementAssignmentId,
-    DutyDomain: dutyDomain,
-    Date: date,
-    ShiftCode: shiftCode,
-    Status: 'ACTIVE',
-    OperationId: operationId,
-    CreatedAt: timestamp,
-    CreatedBy: actor
-  };
+    const replacementRecord = {
+      ReplacementId: replacementId,
+      AbsenceId: absenceId,
+      OriginalAssignmentId: effectiveOrigAssignId,
+      ReplacementPersonId: replacementPersonId,
+      ReplacementAssignmentId: replacementAssignmentId,
+      DutyDomain: dutyDomain,
+      Date: date,
+      ShiftCode: shiftCode,
+      Status: 'ACTIVE',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
 
-  const existingReplacements = rosterLifecycleGetRecords_('RosterReplacements');
-  const existingRepl = existingReplacements.find(function(r) { return r.ReplacementId === replacementId; });
-  if (existingRepl) {
-    rosterLifecycleWriteRow_('RosterReplacements', Object.assign({}, existingRepl, replacementRecord), existingRepl._row);
-  } else {
-    rosterLifecycleAppendRows_('RosterReplacements', [replacementRecord]);
-  }
+    const existingReplacements = rosterLifecycleGetRecords_('RosterReplacements');
+    const existingRepl = existingReplacements.find(function(r) { return r.ReplacementId === replacementId; });
+    if (existingRepl) {
+      rosterLifecycleWriteRow_('RosterReplacements', Object.assign({}, existingRepl, replacementRecord), existingRepl._row);
+    } else {
+      rosterLifecycleAppendRows_('RosterReplacements', [replacementRecord]);
+    }
+    entityPersisted = true;
 
-  // 4. Compute intended Current with the new replacement
-  const intendedReplacements = priorReplacements.concat([replacementRecord]);
-  const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
-    periodId: periodId,
-    plannedAssignments: plannedAssignments,
-    events: priorEvents,
-    absences: priorAbsences,
-    replacements: intendedReplacements,
-    people: people,
-    digestFn: rosterV2Digest_
-  });
-
-  // 5. Project to MasterRoster and write
-  const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
-  const masterTable = rosterV2ReadTable_('MasterRoster');
-  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
-  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
-  rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
-
-  // 6. Read back and verify projection checksum
-  const readbackTable = rosterV2ReadTable_('MasterRoster');
-  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
-  const targetMonthPersistedRows = readbackRows.filter(function(r) {
-    const ld = RosterCompatibility.localDate(r.Date);
-    return ld && ld.slice(0, 7) === periodId;
-  });
-
-  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
-  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
-
-  if (actualChecksum !== expectedChecksum) {
-    existingLog.Status = 'RECOVERY_REQUIRED';
-    existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
-    rosterLifecycleWriteLog_(existingLog);
-    throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
-      actual: actualChecksum,
-      expected: expectedChecksum
+    // 4. Compute intended Current with the new replacement
+    const intendedReplacements = priorReplacements.concat([replacementRecord]);
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: priorAbsences,
+      replacements: intendedReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
     });
+
+    // 5. Project to MasterRoster and write
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    // 6. Read back and verify projection checksum
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      existingLog.Status = 'RECOVERY_REQUIRED';
+      existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(existingLog);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
+        actual: actualChecksum,
+        expected: expectedChecksum
+      });
+    }
+
+    // 7. Update RosterPeriods
+    const updatedPeriod = Object.assign({}, periodRecord, {
+      State: 'AMENDED',
+      Revision: currentRevision + 1,
+      ProjectionChecksum: actualChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    });
+    rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+    // 8. Confirm OperationLog
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: 'AMENDED',
+      revision: currentRevision + 1,
+      replacementId: replacementId,
+      absenceId: absenceId,
+      originalAssignmentId: effectiveOrigAssignId,
+      replacementAssignmentId: replacementAssignmentId,
+      projectionChecksum: actualChecksum,
+      createdAt: timestamp,
+      createdBy: actor
+    };
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = currentRevision + 1;
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
   }
-
-  // 7. Update RosterPeriods
-  const updatedPeriod = Object.assign({}, periodRecord, {
-    State: 'AMENDED',
-    Revision: currentRevision + 1,
-    ProjectionChecksum: actualChecksum,
-    LastOperationId: operationId,
-    UpdatedAt: timestamp
-  });
-  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
-
-  // 8. Confirm OperationLog
-  const confirmedResult = {
-    ok: true,
-    operationId: operationId,
-    periodId: periodId,
-    state: 'AMENDED',
-    revision: currentRevision + 1,
-    replacementId: replacementId,
-    absenceId: absenceId,
-    originalAssignmentId: effectiveOrigAssignId,
-    replacementAssignmentId: replacementAssignmentId,
-    projectionChecksum: actualChecksum,
-    createdAt: timestamp,
-    createdBy: actor
-  };
-  existingLog.Status = 'CONFIRMED';
-  existingLog.ResultRevision = currentRevision + 1;
-  existingLog.ResultJson = JSON.stringify(confirmedResult);
-  existingLog.CompletedAt = new Date().toISOString();
-  existingLog.ErrorCode = '';
-  rosterLifecycleWriteLog_(existingLog);
-
-  return confirmedResult;
 }
 
 function rosterLifecycleAbsenceReverse_(data, actor) {
@@ -2969,104 +3351,119 @@ function rosterLifecycleAbsenceReverse_(data, actor) {
     existingLog = rosterLifecycleFindOperationLog_(operationId);
   }
 
-  // 3. Mark absence row as REVERSED
-  const updatedAbsence = Object.assign({}, absenceRecord, {
-    Status: 'REVERSED'
-  });
-  rosterLifecycleWriteRow_('RosterAbsences', updatedAbsence, absenceRecord._row);
-
-  // 4. Load baseline Planned, confirmed events, confirmed absences/replacements
-  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
-  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
-  DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
-
-  const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
-  const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
-  const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
-  const remainingActiveAbsences = confirmedAbsences.filter(function(a) {
-    return a.AbsenceId !== absenceId && a.Status === 'ACTIVE';
-  });
-  const remainingActiveReplacements = confirmedReplacements.filter(function(r) {
-    return r.Status === 'ACTIVE';
-  });
-  const people = rosterLifecycleGetPeople_();
-
-  // 5. Recompute intended Current
-  const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
-    periodId: periodId,
-    plannedAssignments: plannedAssignments,
-    events: priorEvents,
-    absences: remainingActiveAbsences,
-    replacements: remainingActiveReplacements,
-    people: people,
-    digestFn: rosterV2Digest_
-  });
-
-  // 6. Project to MasterRoster and write
-  const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
-  const masterTable = rosterV2ReadTable_('MasterRoster');
-  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
-  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
-  rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
-
-  // 7. Read back and verify projection checksum
-  const readbackTable = rosterV2ReadTable_('MasterRoster');
-  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
-  const targetMonthPersistedRows = readbackRows.filter(function(r) {
-    const ld = RosterCompatibility.localDate(r.Date);
-    return ld && ld.slice(0, 7) === periodId;
-  });
-
-  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
-  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
-
-  if (actualChecksum !== expectedChecksum) {
-    existingLog.Status = 'RECOVERY_REQUIRED';
-    existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
-    rosterLifecycleWriteLog_(existingLog);
-    throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
-      actual: actualChecksum,
-      expected: expectedChecksum
+  let entityPersisted = false;
+  try {
+    // 3. Mark absence row as REVERSED
+    const updatedAbsence = Object.assign({}, absenceRecord, {
+      Status: 'REVERSED',
+      OperationId: operationId,
+      UpdatedAt: timestamp,
+      ReversedBy: actor,
+      ReversedAt: timestamp
     });
+    rosterLifecycleWriteRow_('RosterAbsences', updatedAbsence, absenceRecord._row);
+    entityPersisted = true;
+
+    // 4. Load baseline Planned, confirmed events, confirmed absences/replacements
+    const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+    const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+    DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+    const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+    const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+    const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+    const remainingActiveAbsences = confirmedAbsences.filter(function(a) {
+      return a.AbsenceId !== absenceId && a.Status === 'ACTIVE';
+    });
+    const remainingActiveReplacements = confirmedReplacements.filter(function(r) {
+      return r.Status === 'ACTIVE';
+    });
+    const people = rosterLifecycleGetPeople_();
+
+    // 5. Recompute intended Current
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: remainingActiveAbsences,
+      replacements: remainingActiveReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    // 6. Project to MasterRoster and write
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    // 7. Read back and verify projection checksum
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      existingLog.Status = 'RECOVERY_REQUIRED';
+      existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(existingLog);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
+        actual: actualChecksum,
+        expected: expectedChecksum
+      });
+    }
+
+    // 8. Determine target state and revision
+    const targetState = intendedCurrent.effectiveState || 'PUBLISHED';
+    const isNoDuty = (actualChecksum === periodRecord.ProjectionChecksum && targetState === periodRecord.State);
+    const targetRevision = isNoDuty ? currentRevision : (currentRevision + 1);
+
+    // Update RosterPeriods
+    const updatedPeriod = Object.assign({}, periodRecord, {
+      State: targetState,
+      Revision: targetRevision,
+      ProjectionChecksum: actualChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    });
+    rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+    // 9. Confirm OperationLog
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      absenceId: absenceId,
+      status: 'REVERSED',
+      projectionChecksum: actualChecksum,
+      reversedAt: timestamp,
+      reversedBy: actor
+    };
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = targetRevision;
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
   }
-
-  // 8. Determine target state: AMENDED or PUBLISHED
-  const activeAmendmentCount = RosterLifecycle.countActiveAmendments(priorEvents);
-  const targetState = (activeAmendmentCount > 0 || remainingActiveAbsences.length > 0)
-    ? 'AMENDED'
-    : 'PUBLISHED';
-
-  // Update RosterPeriods
-  const updatedPeriod = Object.assign({}, periodRecord, {
-    State: targetState,
-    Revision: currentRevision + 1,
-    ProjectionChecksum: actualChecksum,
-    LastOperationId: operationId,
-    UpdatedAt: timestamp
-  });
-  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
-
-  // 9. Confirm OperationLog
-  const confirmedResult = {
-    ok: true,
-    operationId: operationId,
-    periodId: periodId,
-    state: targetState,
-    revision: currentRevision + 1,
-    absenceId: absenceId,
-    status: 'REVERSED',
-    projectionChecksum: actualChecksum,
-    reversedAt: timestamp,
-    reversedBy: actor
-  };
-  existingLog.Status = 'CONFIRMED';
-  existingLog.ResultRevision = currentRevision + 1;
-  existingLog.ResultJson = JSON.stringify(confirmedResult);
-  existingLog.CompletedAt = new Date().toISOString();
-  existingLog.ErrorCode = '';
-  rosterLifecycleWriteLog_(existingLog);
-
-  return confirmedResult;
 }
 
 function rosterLifecycleReplacementReverse_(data, actor) {
@@ -3203,98 +3600,114 @@ function rosterLifecycleReplacementReverse_(data, actor) {
     existingLog = rosterLifecycleFindOperationLog_(operationId);
   }
 
-  // 3. Mark replacement row as REVERSED
-  const updatedRepl = Object.assign({}, replacementRecord, {
-    Status: 'REVERSED'
-  });
-  rosterLifecycleWriteRow_('RosterReplacements', updatedRepl, replacementRecord._row);
-
-  // 4. Load baseline Planned, confirmed events, confirmed absences/replacements
-  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
-  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
-  DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
-
-  const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
-  const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
-  const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
-  const activeAbsences = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; });
-  const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
-  const remainingActiveReplacements = confirmedReplacements.filter(function(r) {
-    return r.ReplacementId !== replacementId && r.Status === 'ACTIVE';
-  });
-  const people = rosterLifecycleGetPeople_();
-
-  // 5. Recompute intended Current (duty returns to UNCOVERED absence)
-  const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
-    periodId: periodId,
-    plannedAssignments: plannedAssignments,
-    events: priorEvents,
-    absences: activeAbsences,
-    replacements: remainingActiveReplacements,
-    people: people,
-    digestFn: rosterV2Digest_
-  });
-
-  // 6. Project to MasterRoster and write
-  const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
-  const masterTable = rosterV2ReadTable_('MasterRoster');
-  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
-  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
-  rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
-
-  // 7. Read back and verify projection checksum
-  const readbackTable = rosterV2ReadTable_('MasterRoster');
-  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
-  const targetMonthPersistedRows = readbackRows.filter(function(r) {
-    const ld = RosterCompatibility.localDate(r.Date);
-    return ld && ld.slice(0, 7) === periodId;
-  });
-
-  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
-  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
-
-  if (actualChecksum !== expectedChecksum) {
-    existingLog.Status = 'RECOVERY_REQUIRED';
-    existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
-    rosterLifecycleWriteLog_(existingLog);
-    throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
-      actual: actualChecksum,
-      expected: expectedChecksum
+  let entityPersisted = false;
+  try {
+    // 3. Mark replacement row as REVERSED
+    const updatedRepl = Object.assign({}, replacementRecord, {
+      Status: 'REVERSED',
+      OperationId: operationId,
+      UpdatedAt: timestamp,
+      ReversedBy: actor,
+      ReversedAt: timestamp
     });
+    rosterLifecycleWriteRow_('RosterReplacements', updatedRepl, replacementRecord._row);
+    entityPersisted = true;
+
+    // 4. Load baseline Planned, confirmed events, confirmed absences/replacements
+    const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+    const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+    DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+    const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+    const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+    const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+    const activeAbsences = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; });
+    const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+    const remainingActiveReplacements = confirmedReplacements.filter(function(r) {
+      return r.ReplacementId !== replacementId && r.Status === 'ACTIVE';
+    });
+    const people = rosterLifecycleGetPeople_();
+
+    // 5. Recompute intended Current (duty returns to UNCOVERED absence)
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: activeAbsences,
+      replacements: remainingActiveReplacements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    // 6. Project to MasterRoster and write
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    // 7. Read back and verify projection checksum
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      existingLog.Status = 'RECOVERY_REQUIRED';
+      existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(existingLog);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', {
+        actual: actualChecksum,
+        expected: expectedChecksum
+      });
+    }
+
+    // 8. Update RosterPeriods (remains AMENDED since parent absence is active)
+    const updatedPeriod = Object.assign({}, periodRecord, {
+      State: 'AMENDED',
+      Revision: currentRevision + 1,
+      ProjectionChecksum: actualChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    });
+    rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+    // 9. Confirm OperationLog
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: 'AMENDED',
+      revision: currentRevision + 1,
+      replacementId: replacementId,
+      status: 'REVERSED',
+      coverageStatus: 'UNCOVERED',
+      projectionChecksum: actualChecksum,
+      reversedAt: timestamp,
+      reversedBy: actor
+    };
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = currentRevision + 1;
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
   }
-
-  // 8. Update RosterPeriods (remains AMENDED since parent absence is active)
-  const updatedPeriod = Object.assign({}, periodRecord, {
-    State: 'AMENDED',
-    Revision: currentRevision + 1,
-    ProjectionChecksum: actualChecksum,
-    LastOperationId: operationId,
-    UpdatedAt: timestamp
-  });
-  rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
-
-  // 9. Confirm OperationLog
-  const confirmedResult = {
-    ok: true,
-    operationId: operationId,
-    periodId: periodId,
-    state: 'AMENDED',
-    revision: currentRevision + 1,
-    replacementId: replacementId,
-    status: 'REVERSED',
-    coverageStatus: 'UNCOVERED',
-    projectionChecksum: actualChecksum,
-    reversedAt: timestamp,
-    reversedBy: actor
-  };
-  existingLog.Status = 'CONFIRMED';
-  existingLog.ResultRevision = currentRevision + 1;
-  existingLog.ResultJson = JSON.stringify(confirmedResult);
-  existingLog.CompletedAt = new Date().toISOString();
-  existingLog.ErrorCode = '';
-  rosterLifecycleWriteLog_(existingLog);
-
-  return confirmedResult;
 }
 
 function rosterLifecycleGetAbsences_(parameters, principal) {
@@ -3387,7 +3800,8 @@ function rosterLifecycleRoute_(action, data) {
     const writeActions = [
       'rosterv2publish', 'rosterv2close', 'rosterv2reopen', 'rosterv2lifecyclerecover',
       'rosterv2amend', 'rosterv2amendreversal',
-      'rosterv2absencecreate', 'rosterv2replacementcreate', 'rosterv2absencereverse', 'rosterv2replacementreverse'
+      'rosterv2absencecreate', 'rosterv2replacementcreate', 'rosterv2absencereverse', 'rosterv2replacementreverse',
+      'rosterv2absencerecover', 'rosterv2replacementrecover'
     ];
     const isWrite = writeActions.includes(action);
 
@@ -3499,6 +3913,14 @@ function rosterLifecycleRoute_(action, data) {
 
     if (action === 'rosterv2lifecyclerecover') {
       return createJsonResponse(rosterLifecycleRecover_(data.operationId));
+    }
+
+    if (action === 'rosterv2absencerecover') {
+      return createJsonResponse(rosterLifecycleAbsenceRecover_(data.operationId, principal.email));
+    }
+
+    if (action === 'rosterv2replacementrecover') {
+      return createJsonResponse(rosterLifecycleReplacementRecover_(data.operationId, principal.email));
     }
 
     throw DraftProtocol.fail('VALIDATION_FAILED');
