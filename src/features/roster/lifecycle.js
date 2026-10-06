@@ -57,7 +57,15 @@ const RosterLifecycle = (() => {
     REVERSAL_DEPENDENCY_CONFLICT: 'REVERSAL_DEPENDENCY_CONFLICT',
     REVISION_CONFLICT: 'REVISION_CONFLICT',
     UNKNOWN_REASON_CODE: 'UNKNOWN_REASON_CODE',
-    EVENT_NOT_FOUND: 'EVENT_NOT_FOUND'
+    EVENT_NOT_FOUND: 'EVENT_NOT_FOUND',
+    INCOMPATIBLE_OPERATIONAL_STATUS: 'INCOMPATIBLE_OPERATIONAL_STATUS',
+    INSUFFICIENT_GOFF_BALANCE: 'INSUFFICIENT_GOFF_BALANCE',
+    INSUFFICIENT_GHKA_BALANCE: 'INSUFFICIENT_GHKA_BALANCE',
+    EP_DOMAIN_EXCLUDED: 'EP_DOMAIN_EXCLUDED',
+    DUPLICATE_CREDIT_SOURCE: 'DUPLICATE_CREDIT_SOURCE',
+    DEPENDENT_CONSUMPTION_EXISTS: 'DEPENDENT_CONSUMPTION_EXISTS',
+    CROSS_ENTITLEMENT_DEPENDENCY_FORBIDDEN: 'CROSS_ENTITLEMENT_DEPENDENCY_FORBIDDEN',
+    INVALID_ENTITLEMENT_TYPE: 'INVALID_ENTITLEMENT_TYPE'
   });
 
   const ROSTER_LIFECYCLE_SCHEMAS = RosterCompatibility.lifecycleSchemas || freeze({
@@ -1084,6 +1092,7 @@ const RosterLifecycle = (() => {
     events = [],
     absences = [],
     replacements = [],
+    entitlements = [],
     people = [],
     digestFn
   }) {
@@ -1350,6 +1359,56 @@ const RosterLifecycle = (() => {
       currentCells.get(replKey).push(replAssignment);
     }
 
+    // 3d. Apply active Phase 7 Entitlement Consumptions (GOFF / GHKA)
+    const reversedEntitlementIds = new Set(
+      (entitlements || [])
+        .filter(t => t && (t.TransactionType === 'CONSUMPTION_REVERSAL' || t.transactionType === 'CONSUMPTION_REVERSAL') && (t.Status === 'CONFIRMED' || t.status === 'CONFIRMED'))
+        .map(t => t.RelatedTransactionId || t.relatedTransactionId)
+        .filter(Boolean)
+    );
+
+    const activeConsumptions = (entitlements || []).filter(t => {
+      if (!t) return false;
+      const type = t.TransactionType || t.transactionType;
+      const status = t.Status || t.status;
+      if (status !== 'CONFIRMED') return false;
+      if (type !== 'GOFF_CONSUMED' && type !== 'GHKA_CONSUMED' && type !== 'ENTITLEMENT_CONSUMED') return false;
+      const tid = t.TransactionId || t.transactionId;
+      if (reversedEntitlementIds.has(tid)) return false;
+      const effDate = t.EffectiveDate || t.effectiveDate || '';
+      return !periodId || (effDate.slice(0, 7) === periodId);
+    });
+
+    for (const cons of activeConsumptions) {
+      const personId = cons.PersonId || cons.personId;
+      const domain = cons.DutyDomain || cons.dutyDomain || 'MO';
+      const date = cons.EffectiveDate || cons.effectiveDate;
+      const entType = cons.EntitlementType || cons.entitlementType ||
+        (cons.TransactionType === 'GOFF_CONSUMED' ? 'GOFF' : 'GHKA');
+
+      const cellKey = makeCellKey(personId, date, domain);
+      const items = currentCells.get(cellKey) || [];
+
+      // If person has an active absence on that date/domain, fail closed
+      if (items.some(item => item.Source === 'ABSENCE')) {
+        throw fail(LIFECYCLE_ERRORS.INCOMPATIBLE_OPERATIONAL_STATUS,
+          `Cannot consume ${entType} on ${date}: Person has an active absence (MC/EL/AL/COURSE) on this date.`
+        );
+      }
+
+      for (const item of items) {
+        if (item.ShiftCode !== 'OFF') {
+          item.OriginalShiftCode = item.OriginalShiftCode || item.ShiftCode;
+          item.OriginalAssignmentId = item.OriginalAssignmentId || item.AssignmentId;
+          item.ShiftCode = entType;
+          item._rawShift = entType;
+          item.Source = entType;
+          item.EntitlementTransactionId = cons.TransactionId || cons.transactionId;
+          item.EntitlementType = entType;
+        }
+      }
+    }
+
     // 4. Flatten all current assignments and sort canonically
     const currentAssignments = [];
     for (const [_, items] of currentCells.entries()) {
@@ -1367,10 +1426,11 @@ const RosterLifecycle = (() => {
     );
 
     // 5. Active amendments & effective state
-    // An active absence only makes the operational roster AMENDED if it actually altered at least one assignment.
+    // An active absence or entitlement consumption makes the operational roster AMENDED if it altered assignments.
     const activeCount = countActiveAmendments(eventGroups);
     const hasActiveRosterAbsence = currentAssignments.some(a => a.Source === 'ABSENCE');
-    const effectiveState = (activeCount > 0 || hasActiveRosterAbsence) ? LIFECYCLE_STATES.AMENDED : LIFECYCLE_STATES.PUBLISHED;
+    const hasActiveEntitlement = currentAssignments.some(a => a.Source === 'GOFF' || a.Source === 'GHKA');
+    const effectiveState = (activeCount > 0 || hasActiveRosterAbsence || hasActiveEntitlement) ? LIFECYCLE_STATES.AMENDED : LIFECYCLE_STATES.PUBLISHED;
 
     // 6. Master roster projection & checksum
     const masterRosterProjection = generateMasterRosterProjection(currentAssignments);
@@ -1385,6 +1445,7 @@ const RosterLifecycle = (() => {
       activeAmendmentCount: activeCount,
       activeAbsences,
       activeReplacements,
+      activeEntitlements: activeConsumptions,
       totalEvents: eventGroups.length,
       reversedEventIds: Array.from(reversedEventIds),
       currentAssignments,

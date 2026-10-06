@@ -7,6 +7,9 @@ function rosterLifecycleSchemas_() {
   if (typeof RosterAbsence !== 'undefined' && RosterAbsence.ABSENCE_SCHEMAS) {
     Object.assign(schemas, RosterAbsence.ABSENCE_SCHEMAS);
   }
+  if (typeof RosterEntitlement !== 'undefined' && RosterEntitlement.ROSTER_ENTITLEMENT_SCHEMAS) {
+    Object.assign(schemas, RosterEntitlement.ROSTER_ENTITLEMENT_SCHEMAS);
+  }
   return schemas;
 }
 
@@ -74,7 +77,7 @@ function rosterLifecycleEnsureSchema_(sheetName) {
 }
 
 function rosterLifecycleEnsureAllSchemas_() {
-  ['RosterPeriods', 'RosterAssignments', 'RosterEvents', 'WeeklyOffSnapshots', 'RosterAbsences', 'RosterReplacements'].forEach(function(name) {
+  ['RosterPeriods', 'RosterAssignments', 'RosterEvents', 'WeeklyOffSnapshots', 'RosterAbsences', 'RosterReplacements', 'RosterEntitlementTransactions'].forEach(function(name) {
     rosterLifecycleEnsureSchema_(name);
   });
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -312,6 +315,54 @@ function rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, currentOper
 function rosterLifecycleFindReplacementById_(replacementId) {
   const records = rosterLifecycleGetRecords_('RosterReplacements');
   return records.find(function(r) { return r.ReplacementId === replacementId; }) || null;
+}
+
+function rosterLifecycleGetConfirmedOperationIdsAll_() {
+  const table = rosterV2ReadTable_('OperationLog');
+  const confirmed = new Set();
+  if (!table.exists) return confirmed;
+  const statusIdx = table.headers.indexOf('Status');
+  const opIdIdx = table.headers.indexOf('OperationId');
+  for (let i = 0; i < table.rows.length; i++) {
+    const row = table.rows[i];
+    if (row[statusIdx] === 'CONFIRMED') {
+      confirmed.add(row[opIdIdx]);
+    }
+  }
+  return confirmed;
+}
+
+function rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId, currentOperationIdToInclude) {
+  const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const confirmedOpIds = rosterLifecycleGetConfirmedOperationIdsAll_();
+  return records.filter(function(tx) {
+    const inPeriod = (tx.PeriodId === periodId) ||
+      (tx.EffectiveDate && String(tx.EffectiveDate).slice(0, 7) === periodId);
+    if (!inPeriod) return false;
+    if (tx.Status !== 'CONFIRMED') return false;
+    if (confirmedOpIds.has(tx.OperationId)) return true;
+    if (currentOperationIdToInclude && tx.OperationId === currentOperationIdToInclude) return true;
+    if (!tx.OperationId && tx.Status === 'CONFIRMED') return true;
+    return false;
+  });
+}
+
+function rosterLifecycleFindAllConfirmedEntitlementsByPerson_(personId, currentOperationIdToInclude) {
+  const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const confirmedOpIds = rosterLifecycleGetConfirmedOperationIdsAll_();
+  return records.filter(function(tx) {
+    if (tx.PersonId !== personId) return false;
+    if (tx.Status !== 'CONFIRMED') return false;
+    if (confirmedOpIds.has(tx.OperationId)) return true;
+    if (currentOperationIdToInclude && tx.OperationId === currentOperationIdToInclude) return true;
+    if (!tx.OperationId && tx.Status === 'CONFIRMED') return true;
+    return false;
+  });
+}
+
+function rosterLifecycleFindEntitlementById_(transactionId) {
+  const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  return records.find(function(r) { return r.TransactionId === transactionId; }) || null;
 }
 
 function rosterLifecycleWriteMasterRoster_(mergedRows) {
@@ -1494,12 +1545,13 @@ function rosterLifecycleGetCurrent_(data) {
     }
   }
 
-  // 3. Read confirmed amendment/reversal events, absences, and replacements (unconfirmed operations remain invisible)
+  // 3. Read confirmed amendment/reversal events, absences, replacements, and entitlements (unconfirmed operations remain invisible)
   const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId);
   const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId);
   const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId);
+  const confirmedEntitlements = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId);
 
-  // 4. Derive Current using canonical Phase 5/6 resolver
+  // 4. Derive Current using canonical Phase 5/6/7 resolver
   const people = rosterLifecycleGetPeople_();
   let resolved;
   try {
@@ -1509,6 +1561,7 @@ function rosterLifecycleGetCurrent_(data) {
       events: confirmedEvents,
       absences: confirmedAbsences,
       replacements: confirmedReplacements,
+      entitlements: confirmedEntitlements,
       people: people,
       digestFn: rosterV2Digest_
     });
@@ -1577,7 +1630,9 @@ function rosterLifecycleGetCurrent_(data) {
     if (r.OriginalShiftCode) dto.originalShiftCode = r.OriginalShiftCode;
     if (r.OriginalAssignmentId) dto.originalAssignmentId = r.OriginalAssignmentId;
     if (r.CoveringForPersonId) dto.coveringForPersonId = r.CoveringForPersonId;
-    if (r.Source && (r.Source === 'ABSENCE' || r.Source === 'REPLACEMENT')) dto.source = r.Source;
+    if (r.EntitlementTransactionId) dto.entitlementTransactionId = r.EntitlementTransactionId;
+    if (r.EntitlementType) dto.entitlementType = r.EntitlementType;
+    if (r.Source && (r.Source === 'ABSENCE' || r.Source === 'REPLACEMENT' || r.Source === 'GOFF' || r.Source === 'GHKA')) dto.source = r.Source;
     return dto;
   });
 
@@ -1592,6 +1647,7 @@ function rosterLifecycleGetCurrent_(data) {
     activeAmendmentCount: resolved.activeAmendmentCount,
     activeAbsences: (resolved.activeAbsences || []).length,
     activeReplacements: (resolved.activeReplacements || []).length,
+    activeEntitlements: (resolved.activeEntitlements || []).length,
     totalEvents: resolved.totalEvents,
     count: assignments.length,
     assignments: assignments,
@@ -1899,12 +1955,14 @@ function rosterLifecycleReopen_(data, actor) {
   const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
   const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
   const priorEvents = RosterLifecycle.groupEventLines(confirmedRows);
+  const confirmedEntitlements = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId);
   const cur = RosterLifecycle.resolveCurrentRoster({
     periodId: periodId,
     plannedAssignments: plannedAssignments,
     events: priorEvents,
     absences: activeAbsences,
     replacements: activeReplacements,
+    entitlements: confirmedEntitlements,
     people: rosterLifecycleGetPeople_(),
     digestFn: rosterV2Digest_
   });
@@ -3792,6 +3850,1678 @@ function rosterLifecycleGetReplacements_(parameters, principal) {
   };
 }
 
+function rosterLifecycleGetEntitlementBalances_(parameters, principal) {
+  const personId = String(parameters.personId || parameters.person || '').trim();
+  const asOfDate = parameters.asOfDate ? String(parameters.asOfDate).trim() : null;
+  if (!personId) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'personId is required' });
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+  const people = rosterLifecycleGetPeople_();
+  const person = people.find(function(p) { return p.PersonId === personId; });
+  if (!person) {
+    throw DraftProtocol.fail('INVALID_PERSON_IDENTITY', { message: 'Person ' + personId + ' not found' });
+  }
+
+  // EP domain boundary: Section 1 & 9
+  if (person.DirectoryType === 'EP') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'EP domain does not participate in entitlement accounting' });
+  }
+  if (person.DirectoryType !== 'MO') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'Only MO directory type participates in entitlement accounting' });
+  }
+
+  // Read all confirmed transactions for this person across periods
+  const confirmedTx = rosterLifecycleFindAllConfirmedEntitlementsByPerson_(personId);
+  const goff = RosterEntitlement.deriveEntitlementBalance(confirmedTx, personId, 'GOFF', asOfDate);
+  const ghka = RosterEntitlement.deriveEntitlementBalance(confirmedTx, personId, 'GHKA', asOfDate);
+
+  return {
+    ok: true,
+    personId: personId,
+    balances: {
+      GOFF: goff.currentBalance,
+      GHKA: ghka.currentBalance
+    },
+    availableBalances: {
+      GOFF: goff.availableBalance,
+      GHKA: ghka.availableBalance
+    },
+    asOfDate: asOfDate || null
+  };
+}
+
+function rosterLifecycleGetEntitlementTransactions_(parameters, principal) {
+  const periodId = parameters.periodId || parameters.period ? RosterCompatibility.validatePeriod(String(parameters.periodId || parameters.period)) : null;
+  const personId = parameters.personId || parameters.person ? String(parameters.personId || parameters.person).trim() : null;
+
+  rosterLifecycleEnsureAllSchemas_();
+  let confirmedTx;
+  if (personId) {
+    confirmedTx = rosterLifecycleFindAllConfirmedEntitlementsByPerson_(personId);
+    if (periodId) {
+      confirmedTx = confirmedTx.filter(function(tx) {
+        return (tx.PeriodId === periodId) || (tx.EffectiveDate && String(tx.EffectiveDate).slice(0, 7) === periodId);
+      });
+    }
+  } else if (periodId) {
+    confirmedTx = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId);
+  } else {
+    const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+    const confirmedOpIds = rosterLifecycleGetConfirmedOperationIdsAll_();
+    confirmedTx = records.filter(function(tx) {
+      if (tx.Status !== 'CONFIRMED') return false;
+      if (confirmedOpIds.has(tx.OperationId)) return true;
+      if (!tx.OperationId && tx.Status === 'CONFIRMED') return true;
+      return false;
+    });
+  }
+
+  const isAdmin = Boolean(principal && principal.isAdmin);
+  const transactions = confirmedTx.map(function(tx) {
+    if (isAdmin) {
+      return {
+        TransactionId: tx.TransactionId,
+        PeriodId: tx.PeriodId,
+        PersonId: tx.PersonId,
+        PersonNameSnapshot: tx.PersonNameSnapshot || '',
+        EntitlementType: tx.EntitlementType,
+        DutyDomain: tx.DutyDomain,
+        TransactionType: tx.TransactionType,
+        Amount: Number(tx.Amount),
+        EffectiveDate: tx.EffectiveDate,
+        SourceType: tx.SourceType,
+        SourceId: tx.SourceId || '',
+        SourceAssignmentId: tx.SourceAssignmentId || '',
+        SourcePeriodId: tx.SourcePeriodId || '',
+        PublicHolidayDate: tx.PublicHolidayDate || '',
+        PublicHolidayName: tx.PublicHolidayName || '',
+        RosterAssignmentId: tx.RosterAssignmentId || '',
+        RelatedTransactionId: tx.RelatedTransactionId || '',
+        ReasonCode: tx.ReasonCode || '',
+        AdminNote: tx.AdminNote || '',
+        ExpiresAt: tx.ExpiresAt || '',
+        ExpiryPolicyCode: tx.ExpiryPolicyCode || '',
+        Status: tx.Status,
+        OperationId: tx.OperationId,
+        CreatedAt: tx.CreatedAt,
+        CreatedBy: tx.CreatedBy
+      };
+    }
+    return RosterEntitlement.scrubEntitlementViewerDto(tx);
+  });
+
+  return {
+    ok: true,
+    periodId: periodId,
+    personId: personId,
+    transactions: transactions,
+    count: transactions.length,
+    isAdmin: isAdmin
+  };
+}
+
+function rosterLifecycleEntitlementEarnGoff_(data, actor) {
+  const payloadMeaning = DraftProtocol.payload(Object.assign({}, data, {
+    operationType: 'ENTITLEMENT_EARN_GOFF',
+    expectedRevision: Number.isSafeInteger(data.expectedRevision) ? data.expectedRevision : 0,
+    clientId: data.clientId || data.operationId,
+    tabId: data.tabId || data.operationId
+  }));
+  const operationId = payloadMeaning.operationId;
+  const clientId = payloadMeaning.clientId;
+  const tabId = payloadMeaning.tabId;
+  const periodId = payloadMeaning.payload.periodId;
+  const personId = payloadMeaning.payload.personId;
+  const date = payloadMeaning.payload.date || payloadMeaning.payload.effectiveDate;
+  const adminNote = payloadMeaning.payload.adminNote || '';
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!periodId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'periodId is required' });
+  if (!personId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'personId is required' });
+  if (!date) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'date is required' });
+
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(payloadMeaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found or not enrolled' });
+  }
+
+  // 1. Validate person and directory type: MO only, EP excluded
+  const people = rosterLifecycleGetPeople_();
+  const person = people.find(function(p) { return p.PersonId === personId; });
+  if (!person) {
+    throw DraftProtocol.fail('INVALID_PERSON_IDENTITY', { message: 'Person ' + personId + ' does not exist in RosterPeople' });
+  }
+  if (person.DirectoryType === 'EP') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'EP domain cannot earn entitlement credits' });
+  }
+  if (person.DirectoryType !== 'MO') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'Only MO directory type can earn entitlement credits' });
+  }
+  const personNameSnapshot = person.CurrentDisplayName || person.MemberName || personId;
+
+  // 2. Validate Planned snapshot existed and was OFF on this date
+  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+  DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+  const plannedOff = plannedAssignments.find(function(a) {
+    return a.PersonId === personId && a.Date === date && a.DutyDomain === 'MO';
+  });
+  if (!plannedOff || plannedOff.ShiftCode !== 'OFF') {
+    throw DraftProtocol.fail('NO_DISPLACED_OFF', {
+      message: 'Person ' + personId + ' was not planned OFF on ' + date + ' (planned: ' + (plannedOff ? plannedOff.ShiftCode : 'NONE') + ')'
+    });
+  }
+
+  // 3. Validate Current assignment is operational working duty displacing the OFF
+  const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+  const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+  const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+  const confirmedEntitlements = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId, operationId);
+
+  const currentRoster = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; })),
+    absences: confirmedAbsences.filter(function(a) { return a.OperationId !== operationId && a.Status === 'ACTIVE'; }),
+    replacements: confirmedReplacements.filter(function(r) { return r.OperationId !== operationId && r.Status === 'ACTIVE'; }),
+    entitlements: confirmedEntitlements.filter(function(e) { return e.OperationId !== operationId && e.Status === 'CONFIRMED'; }),
+    people: people,
+    digestFn: rosterV2Digest_
+  });
+
+  const currentDuty = (currentRoster.currentAssignments || []).find(function(a) {
+    return a.PersonId === personId && a.Date === date && a.DutyDomain === 'MO';
+  });
+
+  const nonWorkingShifts = ['OFF', 'MC', 'AL', 'EL', 'COURSE', 'HKA'];
+  if (!currentDuty || nonWorkingShifts.includes(currentDuty.ShiftCode)) {
+    throw DraftProtocol.fail('NO_DISPLACED_OFF', {
+      message: 'Current assignment on ' + date + ' is not an operational working duty (shift: ' + (currentDuty ? currentDuty.ShiftCode : 'NONE') + ')'
+    });
+  }
+
+  // 4. Duplicate credit check: deterministic SourceId
+  const sourceId = 'displaced-off:' + periodId + ':' + personId + ':' + date;
+  const existingRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const duplicateCredit = existingRecords.find(function(tx) {
+    return tx.PersonId === personId &&
+      tx.EffectiveDate === date &&
+      tx.EntitlementType === 'GOFF' &&
+      tx.SourceType === 'DISPLACED_WEEKLY_OFF' &&
+      tx.Status !== 'REVERSED';
+  });
+  if (duplicateCredit && duplicateCredit.OperationId !== operationId) {
+    throw DraftProtocol.fail('DUPLICATE_CREDIT_SOURCE', {
+      message: 'GOFF credit already exists for displaced off on ' + date + ' (TransactionId: ' + duplicateCredit.TransactionId + ')'
+    });
+  }
+
+  // Critical recovery window check
+  const existingForOp = existingRecords.find(function(tx) { return tx.OperationId === operationId; });
+  if (existingForOp) {
+    const result = {
+      ok: true,
+      operationId: operationId,
+      transactionId: existingForOp.TransactionId,
+      entitlementType: 'GOFF',
+      personId: personId,
+      amount: 1,
+      effectiveDate: date,
+      status: 'CONFIRMED',
+      createdAt: existingForOp.CreatedAt || timestamp,
+      createdBy: existingForOp.CreatedBy || actor
+    };
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = Number(periodRecord.Revision || 0);
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'ENTITLEMENT_EARN_GOFF',
+      EntityKey: 'period:' + periodId,
+      ExpectedRevision: Number(periodRecord.Revision || 0),
+      ResultRevision: Number(periodRecord.Revision || 0),
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  let entityPersisted = false;
+  try {
+    const transactionId = 'etx-goff-' + rosterV2Digest_(operationId + ':' + personId + ':' + date).slice(0, 16);
+    const transactionRecord = {
+      TransactionId: transactionId,
+      PeriodId: periodId,
+      PersonId: personId,
+      PersonNameSnapshot: personNameSnapshot,
+      EntitlementType: 'GOFF',
+      DutyDomain: 'MO',
+      TransactionType: 'CREDIT_EARNED',
+      Amount: 1,
+      EffectiveDate: date,
+      SourceType: 'DISPLACED_WEEKLY_OFF',
+      SourceId: sourceId,
+      SourceAssignmentId: currentDuty.AssignmentId || '',
+      SourcePeriodId: periodId,
+      PublicHolidayDate: '',
+      PublicHolidayName: '',
+      RosterAssignmentId: '',
+      RelatedTransactionId: '',
+      ReasonCode: 'DISPLACED_OFF_CREDIT',
+      AdminNote: adminNote,
+      ExpiresAt: '',
+      ExpiryPolicyCode: '',
+      Status: 'CONFIRMED',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
+
+    rosterLifecycleAppendRows_('RosterEntitlementTransactions', [transactionRecord]);
+    entityPersisted = true;
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      transactionId: transactionId,
+      entitlementType: 'GOFF',
+      personId: personId,
+      amount: 1,
+      effectiveDate: date,
+      status: 'CONFIRMED',
+      createdAt: timestamp,
+      createdBy: actor
+    };
+
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = Number(periodRecord.Revision || 0);
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
+  }
+}
+
+function rosterLifecycleEntitlementEarnGhka_(data, actor) {
+  const payloadMeaning = DraftProtocol.payload(Object.assign({}, data, {
+    operationType: 'ENTITLEMENT_EARN_GHKA',
+    expectedRevision: Number.isSafeInteger(data.expectedRevision) ? data.expectedRevision : 0,
+    clientId: data.clientId || data.operationId,
+    tabId: data.tabId || data.operationId
+  }));
+  const operationId = payloadMeaning.operationId;
+  const clientId = payloadMeaning.clientId;
+  const tabId = payloadMeaning.tabId;
+  const periodId = payloadMeaning.payload.periodId;
+  const personId = payloadMeaning.payload.personId;
+  const date = payloadMeaning.payload.date || payloadMeaning.payload.holidayDate || payloadMeaning.payload.effectiveDate;
+  const adminNote = payloadMeaning.payload.adminNote || '';
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!periodId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'periodId is required' });
+  if (!personId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'personId is required' });
+  if (!date) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'date is required' });
+
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(payloadMeaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found or not enrolled' });
+  }
+
+  // 1. Validate person and directory type
+  const people = rosterLifecycleGetPeople_();
+  const person = people.find(function(p) { return p.PersonId === personId; });
+  if (!person) {
+    throw DraftProtocol.fail('INVALID_PERSON_IDENTITY', { message: 'Person ' + personId + ' does not exist in RosterPeople' });
+  }
+  if (person.DirectoryType === 'EP') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'EP domain cannot earn entitlement credits' });
+  }
+  if (person.DirectoryType !== 'MO') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'Only MO directory type can earn entitlement credits' });
+  }
+  const personNameSnapshot = person.CurrentDisplayName || person.MemberName || personId;
+
+  // 2. Validate Public Holiday
+  const holidayName = RosterEntitlement.getPublicHoliday(date);
+  if (!holidayName) {
+    throw DraftProtocol.fail('NOT_PUBLIC_HOLIDAY', { message: 'Date ' + date + ' is not a recognized gazetted public holiday' });
+  }
+
+  // 3. Validate Current assignment is qualifying holiday working duty
+  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+  DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+  const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+  const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+  const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+  const confirmedEntitlements = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId, operationId);
+
+  const currentRoster = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; })),
+    absences: confirmedAbsences.filter(function(a) { return a.OperationId !== operationId && a.Status === 'ACTIVE'; }),
+    replacements: confirmedReplacements.filter(function(r) { return r.OperationId !== operationId && r.Status === 'ACTIVE'; }),
+    entitlements: confirmedEntitlements.filter(function(e) { return e.OperationId !== operationId && e.Status === 'CONFIRMED'; }),
+    people: people,
+    digestFn: rosterV2Digest_
+  });
+
+  const currentDuty = (currentRoster.currentAssignments || []).find(function(a) {
+    return a.PersonId === personId && a.Date === date && a.DutyDomain === 'MO';
+  });
+
+  if (!currentDuty || !RosterEntitlement.QUALIFYING_HOLIDAY_SHIFTS.includes(currentDuty.ShiftCode)) {
+    throw DraftProtocol.fail('NOT_QUALIFYING_DUTY', {
+      message: 'Person ' + personId + ' does not have a qualifying working duty on holiday ' + date + ' (shift: ' + (currentDuty ? currentDuty.ShiftCode : 'NONE') + ')'
+    });
+  }
+
+  // 4. Max one GHKA per person per holiday date
+  const sourceId = 'holiday-duty:' + date + ':' + personId;
+  const existingRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const duplicateCredit = existingRecords.find(function(tx) {
+    return tx.PersonId === personId &&
+      tx.EffectiveDate === date &&
+      tx.EntitlementType === 'GHKA' &&
+      tx.SourceType === 'PUBLIC_HOLIDAY_DUTY' &&
+      tx.Status !== 'REVERSED';
+  });
+  if (duplicateCredit && duplicateCredit.OperationId !== operationId) {
+    throw DraftProtocol.fail('DUPLICATE_CREDIT_SOURCE', {
+      message: 'GHKA credit already exists for public holiday duty on ' + date + ' (TransactionId: ' + duplicateCredit.TransactionId + ')'
+    });
+  }
+
+  // Critical recovery window check
+  const existingForOp = existingRecords.find(function(tx) { return tx.OperationId === operationId; });
+  if (existingForOp) {
+    const result = {
+      ok: true,
+      operationId: operationId,
+      transactionId: existingForOp.TransactionId,
+      entitlementType: 'GHKA',
+      personId: personId,
+      amount: 1,
+      effectiveDate: date,
+      holidayName: holidayName,
+      status: 'CONFIRMED',
+      createdAt: existingForOp.CreatedAt || timestamp,
+      createdBy: existingForOp.CreatedBy || actor
+    };
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = Number(periodRecord.Revision || 0);
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'ENTITLEMENT_EARN_GHKA',
+      EntityKey: 'period:' + periodId,
+      ExpectedRevision: Number(periodRecord.Revision || 0),
+      ResultRevision: Number(periodRecord.Revision || 0),
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  let entityPersisted = false;
+  try {
+    const transactionId = 'etx-ghka-' + rosterV2Digest_(operationId + ':' + personId + ':' + date).slice(0, 16);
+    const transactionRecord = {
+      TransactionId: transactionId,
+      PeriodId: periodId,
+      PersonId: personId,
+      PersonNameSnapshot: personNameSnapshot,
+      EntitlementType: 'GHKA',
+      DutyDomain: 'MO',
+      TransactionType: 'CREDIT_EARNED',
+      Amount: 1,
+      EffectiveDate: date,
+      SourceType: 'PUBLIC_HOLIDAY_DUTY',
+      SourceId: sourceId,
+      SourceAssignmentId: currentDuty.AssignmentId || '',
+      SourcePeriodId: periodId,
+      PublicHolidayDate: date,
+      PublicHolidayName: holidayName,
+      RosterAssignmentId: '',
+      RelatedTransactionId: '',
+      ReasonCode: 'HOLIDAY_DUTY_CREDIT',
+      AdminNote: adminNote,
+      ExpiresAt: '',
+      ExpiryPolicyCode: '',
+      Status: 'CONFIRMED',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
+
+    rosterLifecycleAppendRows_('RosterEntitlementTransactions', [transactionRecord]);
+    entityPersisted = true;
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      transactionId: transactionId,
+      entitlementType: 'GHKA',
+      personId: personId,
+      amount: 1,
+      effectiveDate: date,
+      holidayName: holidayName,
+      status: 'CONFIRMED',
+      createdAt: timestamp,
+      createdBy: actor
+    };
+
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = Number(periodRecord.Revision || 0);
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
+  }
+}
+
+function rosterLifecycleEntitlementCreditManual_(data, actor) {
+  const payloadMeaning = DraftProtocol.payload(Object.assign({}, data, {
+    operationType: 'ENTITLEMENT_CREDIT_MANUAL',
+    expectedRevision: Number.isSafeInteger(data.expectedRevision) ? data.expectedRevision : 0,
+    clientId: data.clientId || data.operationId,
+    tabId: data.tabId || data.operationId
+  }));
+  const operationId = payloadMeaning.operationId;
+  const clientId = payloadMeaning.clientId;
+  const tabId = payloadMeaning.tabId;
+  const periodId = payloadMeaning.payload.periodId;
+  const personId = payloadMeaning.payload.personId;
+  const entitlementType = String(payloadMeaning.payload.entitlementType || '').toUpperCase();
+  const amount = Number(payloadMeaning.payload.amount !== undefined ? payloadMeaning.payload.amount : 1);
+  const effectiveDate = payloadMeaning.payload.effectiveDate || payloadMeaning.payload.date;
+  const reasonCode = String(payloadMeaning.payload.reasonCode || '').trim();
+  const adminNote = String(payloadMeaning.payload.adminNote || '').trim();
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!personId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'personId is required' });
+  if (!periodId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'periodId is required' });
+  if (!effectiveDate) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'effectiveDate is required' });
+  if (!reasonCode) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'reasonCode is required for manual adjustment' });
+  if (!adminNote) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'adminNote is required for manual adjustment' });
+  if (amount !== 1) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'amount must be positive integer +1' });
+
+  if (entitlementType !== 'GOFF' && entitlementType !== 'GHKA') {
+    throw DraftProtocol.fail('INVALID_ENTITLEMENT_TYPE', { message: 'Invalid EntitlementType: ' + entitlementType });
+  }
+
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(payloadMeaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found or not enrolled' });
+  }
+
+  const people = rosterLifecycleGetPeople_();
+  const person = people.find(function(p) { return p.PersonId === personId; });
+  if (!person) {
+    throw DraftProtocol.fail('INVALID_PERSON_IDENTITY', { message: 'Person ' + personId + ' does not exist in RosterPeople' });
+  }
+  if (person.DirectoryType === 'EP') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'EP domain cannot receive manual entitlement adjustments' });
+  }
+  if (person.DirectoryType !== 'MO') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'Only MO directory type can receive manual entitlement adjustments' });
+  }
+  const personNameSnapshot = person.CurrentDisplayName || person.MemberName || personId;
+
+  const existingRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const existingForOp = existingRecords.find(function(tx) { return tx.OperationId === operationId; });
+  if (existingForOp) {
+    const result = {
+      ok: true,
+      operationId: operationId,
+      transactionId: existingForOp.TransactionId,
+      entitlementType: entitlementType,
+      personId: personId,
+      amount: 1,
+      effectiveDate: effectiveDate,
+      reasonCode: reasonCode,
+      status: 'CONFIRMED',
+      createdAt: existingForOp.CreatedAt || timestamp,
+      createdBy: existingForOp.CreatedBy || actor
+    };
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = Number(periodRecord.Revision || 0);
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'ENTITLEMENT_CREDIT_MANUAL',
+      EntityKey: 'period:' + periodId,
+      ExpectedRevision: Number(periodRecord.Revision || 0),
+      ResultRevision: Number(periodRecord.Revision || 0),
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  let entityPersisted = false;
+  try {
+    const transactionId = 'etx-man-' + rosterV2Digest_(operationId + ':' + personId + ':' + effectiveDate).slice(0, 16);
+    const transactionRecord = {
+      TransactionId: transactionId,
+      PeriodId: periodId,
+      PersonId: personId,
+      PersonNameSnapshot: personNameSnapshot,
+      EntitlementType: entitlementType,
+      DutyDomain: 'MO',
+      TransactionType: 'CREDIT_MANUAL',
+      Amount: 1,
+      EffectiveDate: effectiveDate,
+      SourceType: 'ADMIN_ADJUSTMENT',
+      SourceId: 'manual:' + operationId,
+      SourceAssignmentId: '',
+      SourcePeriodId: periodId,
+      PublicHolidayDate: '',
+      PublicHolidayName: '',
+      RosterAssignmentId: '',
+      RelatedTransactionId: '',
+      ReasonCode: reasonCode,
+      AdminNote: adminNote,
+      ExpiresAt: '',
+      ExpiryPolicyCode: '',
+      Status: 'CONFIRMED',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
+
+    rosterLifecycleAppendRows_('RosterEntitlementTransactions', [transactionRecord]);
+    entityPersisted = true;
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      transactionId: transactionId,
+      entitlementType: entitlementType,
+      personId: personId,
+      amount: 1,
+      effectiveDate: effectiveDate,
+      reasonCode: reasonCode,
+      status: 'CONFIRMED',
+      createdAt: timestamp,
+      createdBy: actor
+    };
+
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = Number(periodRecord.Revision || 0);
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
+  }
+}
+
+function rosterLifecycleEntitlementConsume_(data, actor) {
+  const payloadMeaning = DraftProtocol.payload(Object.assign({}, data, {
+    operationType: 'ENTITLEMENT_CONSUME',
+    clientId: data.clientId || data.operationId,
+    tabId: data.tabId || data.operationId
+  }));
+  const operationId = payloadMeaning.operationId;
+  const clientId = payloadMeaning.clientId;
+  const tabId = payloadMeaning.tabId;
+  const periodId = payloadMeaning.payload.periodId;
+  const personId = payloadMeaning.payload.personId;
+  const entitlementType = String(payloadMeaning.payload.entitlementType || '').toUpperCase();
+  const date = payloadMeaning.payload.date || payloadMeaning.payload.effectiveDate;
+  const expectedRevision = payloadMeaning.expectedRevision;
+  const adminNote = payloadMeaning.payload.adminNote || '';
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!periodId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'periodId is required' });
+  if (!personId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'personId is required' });
+  if (!date) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'date is required' });
+  if (entitlementType !== 'GOFF' && entitlementType !== 'GHKA') {
+    throw DraftProtocol.fail('INVALID_ENTITLEMENT_TYPE', { message: 'Invalid EntitlementType: ' + entitlementType });
+  }
+
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(payloadMeaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found or not enrolled' });
+  }
+
+  const currentState = String(periodRecord.State || '').toUpperCase();
+  if (currentState !== 'PUBLISHED' && currentState !== 'AMENDED') {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot receive entitlement consumption; must be PUBLISHED or AMENDED' });
+  }
+
+  const currentRevision = Number(periodRecord.Revision || 0);
+
+  if (periodRecord.LastOperationId === operationId) {
+    let result = null;
+    if (existingLog && existingLog.ResultJson) {
+      try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
+    }
+    if (!result) {
+      const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+      const targetCons = records.find(function(tx) { return tx.OperationId === operationId; });
+      result = {
+        ok: true,
+        operationId: operationId,
+        periodId: periodId,
+        state: periodRecord.State,
+        revision: currentRevision,
+        transactionId: targetCons ? targetCons.TransactionId : '',
+        entitlementType: entitlementType,
+        date: date,
+        projectionChecksum: periodRecord.ProjectionChecksum,
+        consumedAt: targetCons ? targetCons.CreatedAt : timestamp,
+        consumedBy: targetCons ? targetCons.CreatedBy : actor
+      };
+    }
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = currentRevision;
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = periodRecord.UpdatedAt || timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  if (expectedRevision !== currentRevision) {
+    throw DraftProtocol.fail('REVISION_CONFLICT', {
+      entityKey: 'period:' + periodId,
+      currentRevision: currentRevision,
+      expectedRevision: expectedRevision
+    });
+  }
+
+  // 1. Validate person in RosterPeople
+  const people = rosterLifecycleGetPeople_();
+  const person = people.find(function(p) { return p.PersonId === personId; });
+  if (!person) {
+    throw DraftProtocol.fail('INVALID_PERSON_IDENTITY', { message: 'Person ' + personId + ' does not exist in RosterPeople' });
+  }
+  if (person.DirectoryType === 'EP') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'EP domain cannot consume entitlement credits' });
+  }
+  if (person.DirectoryType !== 'MO') {
+    throw DraftProtocol.fail('EP_DOMAIN_EXCLUDED', { message: 'Only MO directory type can consume entitlement credits' });
+  }
+  const personNameSnapshot = person.CurrentDisplayName || person.MemberName || personId;
+
+  // 2. Validate separate balance: Section 11 & 12
+  const confirmedTx = rosterLifecycleFindAllConfirmedEntitlementsByPerson_(personId, operationId);
+  const bal = RosterEntitlement.deriveEntitlementBalance(
+    confirmedTx.filter(function(tx) { return tx.OperationId !== operationId; }),
+    personId,
+    entitlementType
+  );
+  if (bal.currentBalance < 1) {
+    if (entitlementType === 'GOFF') {
+      throw DraftProtocol.fail('INSUFFICIENT_GOFF_BALANCE', {
+        message: 'Insufficient GOFF balance (' + bal.currentBalance + '); cannot consume GOFF even if GHKA is available'
+      });
+    } else {
+      throw DraftProtocol.fail('INSUFFICIENT_GHKA_BALANCE', {
+        message: 'Insufficient GHKA balance (' + bal.currentBalance + '); cannot consume GHKA even if GOFF is available'
+      });
+    }
+  }
+
+  // 3. Operational conflict checks on date
+  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+  DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+  const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+  const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+  const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+  const priorAbsences = confirmedAbsences.filter(function(a) { return a.OperationId !== operationId && a.Status === 'ACTIVE'; });
+  const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+  const priorReplacements = confirmedReplacements.filter(function(r) { return r.OperationId !== operationId && r.Status === 'ACTIVE'; });
+  const confirmedEntitlements = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId, operationId);
+  const priorEntitlements = confirmedEntitlements.filter(function(e) { return e.OperationId !== operationId && e.Status === 'CONFIRMED'; });
+
+  const authoritativeBefore = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: priorEvents,
+    absences: priorAbsences,
+    replacements: priorReplacements,
+    entitlements: priorEntitlements,
+    people: people,
+    digestFn: rosterV2Digest_
+  });
+
+  const hasAbsence = (authoritativeBefore.currentAssignments || []).some(function(a) {
+    return a.PersonId === personId && a.Date === date && a.DutyDomain === 'MO' && a.Source === 'ABSENCE';
+  });
+  if (hasAbsence) {
+    throw DraftProtocol.fail('INCOMPATIBLE_OPERATIONAL_STATUS', {
+      message: 'Cannot consume ' + entitlementType + ' on ' + date + ': Doctor has an active absence (MC/AL/EL/COURSE) on this date.'
+    });
+  }
+
+  const alreadyConsumed = (authoritativeBefore.currentAssignments || []).some(function(a) {
+    return a.PersonId === personId && a.Date === date && a.DutyDomain === 'MO' && (a.Source === 'GOFF' || a.Source === 'GHKA');
+  });
+  if (alreadyConsumed) {
+    throw DraftProtocol.fail('INCOMPATIBLE_OPERATIONAL_STATUS', {
+      message: 'Cannot consume ' + entitlementType + ' on ' + date + ': Date already has an active entitlement consumption.'
+    });
+  }
+
+  const targetCurrentDuty = (authoritativeBefore.currentAssignments || []).find(function(a) {
+    return a.PersonId === personId && a.Date === date && a.DutyDomain === 'MO';
+  });
+  if (!targetCurrentDuty || targetCurrentDuty.ShiftCode === 'OFF') {
+    throw DraftProtocol.fail('INVALID_ASSIGNMENT', {
+      message: 'Cannot consume ' + entitlementType + ' on a scheduled OFF date (' + date + ')'
+    });
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'ENTITLEMENT_CONSUME',
+      EntityKey: 'period:' + periodId,
+      ExpectedRevision: expectedRevision,
+      ResultRevision: currentRevision + 1,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  let entityPersisted = false;
+  try {
+    const transactionId = 'etx-cons-' + rosterV2Digest_(operationId + ':' + personId + ':' + date).slice(0, 16);
+    const txType = entitlementType === 'GOFF' ? 'GOFF_CONSUMED' : 'GHKA_CONSUMED';
+    const consumptionRecord = {
+      TransactionId: transactionId,
+      PeriodId: periodId,
+      PersonId: personId,
+      PersonNameSnapshot: personNameSnapshot,
+      EntitlementType: entitlementType,
+      DutyDomain: 'MO',
+      TransactionType: txType,
+      Amount: -1,
+      EffectiveDate: date,
+      SourceType: 'ROSTER_ASSIGNMENT',
+      SourceId: targetCurrentDuty.AssignmentId || '',
+      SourceAssignmentId: targetCurrentDuty.AssignmentId || '',
+      SourcePeriodId: periodId,
+      PublicHolidayDate: '',
+      PublicHolidayName: '',
+      RosterAssignmentId: targetCurrentDuty.AssignmentId || '',
+      RelatedTransactionId: '',
+      ReasonCode: entitlementType + '_CONSUMPTION',
+      AdminNote: adminNote,
+      ExpiresAt: '',
+      ExpiryPolicyCode: '',
+      Status: 'CONFIRMED',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
+
+    const existingRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+    const existingCons = existingRecords.find(function(tx) { return tx.TransactionId === transactionId; });
+    if (existingCons) {
+      rosterLifecycleWriteRow_('RosterEntitlementTransactions', Object.assign({}, existingCons, consumptionRecord), existingCons._row);
+    } else {
+      rosterLifecycleAppendRows_('RosterEntitlementTransactions', [consumptionRecord]);
+    }
+    entityPersisted = true;
+
+    const intendedEntitlements = priorEntitlements.concat([consumptionRecord]);
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: priorAbsences,
+      replacements: priorReplacements,
+      entitlements: intendedEntitlements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      existingLog.Status = 'RECOVERY_REQUIRED';
+      existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(existingLog);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', { actual: actualChecksum, expected: expectedChecksum });
+    }
+
+    const targetRevision = currentRevision + 1;
+    const targetState = 'AMENDED';
+    const updatedPeriod = Object.assign({}, periodRecord, {
+      State: targetState,
+      Revision: targetRevision,
+      ProjectionChecksum: actualChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    });
+    rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      transactionId: transactionId,
+      entitlementType: entitlementType,
+      date: date,
+      projectionChecksum: actualChecksum,
+      consumedAt: timestamp,
+      consumedBy: actor
+    };
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = targetRevision;
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
+  }
+}
+
+function rosterLifecycleEntitlementCreditReverse_(data, actor) {
+  const payloadMeaning = DraftProtocol.payload(Object.assign({}, data, {
+    operationType: 'ENTITLEMENT_CREDIT_REVERSAL',
+    expectedRevision: Number.isSafeInteger(data.expectedRevision) ? data.expectedRevision : 0,
+    clientId: data.clientId || data.operationId,
+    tabId: data.tabId || data.operationId
+  }));
+  const operationId = payloadMeaning.operationId;
+  const clientId = payloadMeaning.clientId;
+  const tabId = payloadMeaning.tabId;
+  const periodId = payloadMeaning.payload.periodId || data.periodId;
+  const transactionId = payloadMeaning.payload.transactionId || data.transactionId;
+  const adminNote = payloadMeaning.payload.adminNote || '';
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!transactionId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'transactionId is required' });
+
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(payloadMeaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const allRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const targetTx = allRecords.find(function(tx) { return tx.TransactionId === transactionId; });
+  if (!targetTx) {
+    throw DraftProtocol.fail('TRANSACTION_NOT_FOUND', { message: 'Transaction ' + transactionId + ' not found' });
+  }
+
+  const isCredit = (targetTx.TransactionType === 'CREDIT_EARNED' || targetTx.TransactionType === 'CREDIT_MANUAL');
+  if (!isCredit) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Transaction ' + transactionId + ' is not an earned or manual credit' });
+  }
+
+  const alreadyReversed = allRecords.some(function(tx) {
+    return tx.TransactionType === 'CREDIT_REVERSAL' && tx.RelatedTransactionId === transactionId && tx.Status === 'CONFIRMED';
+  });
+  if (alreadyReversed) {
+    throw DraftProtocol.fail('TRANSACTION_ALREADY_REVERSED', { message: 'Transaction ' + transactionId + ' is already reversed' });
+  }
+
+  const existingForOp = allRecords.find(function(tx) { return tx.OperationId === operationId; });
+  if (existingForOp) {
+    const result = {
+      ok: true,
+      operationId: operationId,
+      reversalTransactionId: existingForOp.TransactionId,
+      targetTransactionId: transactionId,
+      entitlementType: targetTx.EntitlementType,
+      status: 'CONFIRMED',
+      reversedAt: existingForOp.CreatedAt || timestamp,
+      reversedBy: existingForOp.CreatedBy || actor
+    };
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  // Section 15: dependent consumption check & cross-entitlement boundaries
+  const directlyDependentCons = allRecords.find(function(tx) {
+    return tx.RelatedTransactionId === transactionId &&
+      (tx.TransactionType === 'GOFF_CONSUMED' || tx.TransactionType === 'GHKA_CONSUMED' || tx.TransactionType === 'ENTITLEMENT_CONSUMED') &&
+      tx.Status === 'CONFIRMED';
+  });
+  if (directlyDependentCons) {
+    if (directlyDependentCons.EntitlementType !== targetTx.EntitlementType) {
+      throw DraftProtocol.fail('CROSS_ENTITLEMENT_DEPENDENCY_FORBIDDEN', {
+        message: 'Cross-entitlement dependency conflict: ' + directlyDependentCons.EntitlementType + ' consumption cannot depend on ' + targetTx.EntitlementType + ' credit'
+      });
+    }
+    throw DraftProtocol.fail('DEPENDENT_CONSUMPTION_EXISTS', {
+      message: 'Cannot reverse ' + targetTx.EntitlementType + ' credit ' + transactionId + ': Dependent consumption ' + directlyDependentCons.TransactionId + ' must be reversed first'
+    });
+  }
+
+  const confirmedForPerson = rosterLifecycleFindAllConfirmedEntitlementsByPerson_(targetTx.PersonId, operationId);
+  const currentBal = RosterEntitlement.deriveEntitlementBalance(
+    confirmedForPerson.filter(function(tx) { return tx.OperationId !== operationId; }),
+    targetTx.PersonId,
+    targetTx.EntitlementType
+  );
+  if (currentBal.currentBalance < 1) {
+    throw DraftProtocol.fail('DEPENDENT_CONSUMPTION_EXISTS', {
+      message: 'Cannot reverse ' + targetTx.EntitlementType + ' credit: Current balance (' + currentBal.currentBalance + ') is insufficient; dependent consumption exists'
+    });
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'ENTITLEMENT_CREDIT_REVERSAL',
+      EntityKey: 'period:' + (targetTx.PeriodId || periodId || ''),
+      ExpectedRevision: 0,
+      ResultRevision: 0,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  let entityPersisted = false;
+  try {
+    const reversalId = 'etx-rev-' + rosterV2Digest_(operationId + ':' + transactionId).slice(0, 16);
+    const reversalRecord = {
+      TransactionId: reversalId,
+      PeriodId: targetTx.PeriodId || periodId || '',
+      PersonId: targetTx.PersonId,
+      PersonNameSnapshot: targetTx.PersonNameSnapshot || '',
+      EntitlementType: targetTx.EntitlementType,
+      DutyDomain: targetTx.DutyDomain || 'MO',
+      TransactionType: 'CREDIT_REVERSAL',
+      Amount: -1,
+      EffectiveDate: targetTx.EffectiveDate,
+      SourceType: targetTx.SourceType,
+      SourceId: transactionId,
+      SourceAssignmentId: targetTx.SourceAssignmentId || '',
+      SourcePeriodId: targetTx.SourcePeriodId || targetTx.PeriodId || '',
+      PublicHolidayDate: targetTx.PublicHolidayDate || '',
+      PublicHolidayName: targetTx.PublicHolidayName || '',
+      RosterAssignmentId: '',
+      RelatedTransactionId: transactionId,
+      ReasonCode: 'CREDIT_REVERSAL',
+      AdminNote: adminNote,
+      ExpiresAt: '',
+      ExpiryPolicyCode: '',
+      Status: 'CONFIRMED',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
+
+    rosterLifecycleAppendRows_('RosterEntitlementTransactions', [reversalRecord]);
+    entityPersisted = true;
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      reversalTransactionId: reversalId,
+      targetTransactionId: transactionId,
+      entitlementType: targetTx.EntitlementType,
+      personId: targetTx.PersonId,
+      amount: -1,
+      status: 'CONFIRMED',
+      reversedAt: timestamp,
+      reversedBy: actor
+    };
+
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
+  }
+}
+
+function rosterLifecycleEntitlementConsumeReverse_(data, actor) {
+  const payloadMeaning = DraftProtocol.payload(Object.assign({}, data, {
+    operationType: 'ENTITLEMENT_CONSUMPTION_REVERSAL',
+    clientId: data.clientId || data.operationId,
+    tabId: data.tabId || data.operationId
+  }));
+  const operationId = payloadMeaning.operationId;
+  const clientId = payloadMeaning.clientId;
+  const tabId = payloadMeaning.tabId;
+  const periodId = payloadMeaning.payload.periodId || data.periodId;
+  const transactionId = payloadMeaning.payload.transactionId || data.transactionId;
+  const expectedRevision = payloadMeaning.expectedRevision;
+  const adminNote = payloadMeaning.payload.adminNote || '';
+  const timestamp = data.timestamp || new Date().toISOString();
+
+  if (!transactionId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'transactionId is required' });
+  if (!periodId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'periodId is required' });
+
+  const payloadHash = rosterV2Digest_(DraftProtocol.canonical(payloadMeaning));
+  if (data.payloadHash && data.payloadHash !== payloadHash) {
+    throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+  }
+
+  rosterLifecycleEnsureAllSchemas_();
+
+  let existingLog = rosterLifecycleFindOperationLog_(operationId);
+  if (existingLog) {
+    if (existingLog.PayloadHash && existingLog.PayloadHash !== payloadHash) {
+      throw DraftProtocol.fail('IDEMPOTENCY_MISMATCH');
+    }
+    if (existingLog.Status === 'CONFIRMED') {
+      return JSON.parse(existingLog.ResultJson);
+    }
+    if (existingLog.Status === 'FAILED') {
+      throw DraftProtocol.fail(existingLog.ErrorCode || 'PERMANENT_FAILURE');
+    }
+  }
+
+  const periodRecord = rosterLifecycleFindPeriod_(periodId);
+  if (!periodRecord) {
+    throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found or not enrolled' });
+  }
+
+  const currentState = String(periodRecord.State || '').toUpperCase();
+  if (currentState !== 'PUBLISHED' && currentState !== 'AMENDED') {
+    throw DraftProtocol.fail('INVALID_STATE', { message: 'Period ' + periodId + ' in state ' + currentState + ' cannot receive consumption reversal; must be PUBLISHED or AMENDED' });
+  }
+
+  const currentRevision = Number(periodRecord.Revision || 0);
+
+  if (periodRecord.LastOperationId === operationId) {
+    let result = null;
+    if (existingLog && existingLog.ResultJson) {
+      try { result = JSON.parse(existingLog.ResultJson); } catch (_) {}
+    }
+    if (!result) {
+      const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+      const targetRev = records.find(function(tx) { return tx.OperationId === operationId; });
+      result = {
+        ok: true,
+        operationId: operationId,
+        periodId: periodId,
+        state: periodRecord.State,
+        revision: currentRevision,
+        reversalTransactionId: targetRev ? targetRev.TransactionId : '',
+        targetTransactionId: transactionId,
+        projectionChecksum: periodRecord.ProjectionChecksum,
+        reversedAt: targetRev ? targetRev.CreatedAt : timestamp,
+        reversedBy: targetRev ? targetRev.CreatedBy : actor
+      };
+    }
+    if (existingLog) {
+      existingLog.Status = 'CONFIRMED';
+      existingLog.ResultRevision = currentRevision;
+      existingLog.ResultJson = JSON.stringify(result);
+      existingLog.CompletedAt = periodRecord.UpdatedAt || timestamp;
+      existingLog.ErrorCode = '';
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    return result;
+  }
+
+  if (expectedRevision !== currentRevision) {
+    throw DraftProtocol.fail('REVISION_CONFLICT', {
+      entityKey: 'period:' + periodId,
+      currentRevision: currentRevision,
+      expectedRevision: expectedRevision
+    });
+  }
+
+  const allRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const targetTx = allRecords.find(function(tx) { return tx.TransactionId === transactionId; });
+  if (!targetTx) {
+    throw DraftProtocol.fail('TRANSACTION_NOT_FOUND', { message: 'Transaction ' + transactionId + ' not found' });
+  }
+
+  const isConsumption = (targetTx.TransactionType === 'GOFF_CONSUMED' || targetTx.TransactionType === 'GHKA_CONSUMED' || targetTx.TransactionType === 'ENTITLEMENT_CONSUMED');
+  if (!isConsumption) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Transaction ' + transactionId + ' is not a consumption' });
+  }
+
+  const alreadyReversed = allRecords.some(function(tx) {
+    return tx.TransactionType === 'CONSUMPTION_REVERSAL' && tx.RelatedTransactionId === transactionId && tx.Status === 'CONFIRMED';
+  });
+  if (alreadyReversed) {
+    throw DraftProtocol.fail('TRANSACTION_ALREADY_REVERSED', { message: 'Transaction ' + transactionId + ' is already reversed' });
+  }
+
+  // Journal PENDING
+  if (!existingLog) {
+    existingLog = {
+      OperationId: operationId,
+      ClientId: clientId,
+      TabId: tabId,
+      OperationType: 'ENTITLEMENT_CONSUMPTION_REVERSAL',
+      EntityKey: 'period:' + periodId,
+      ExpectedRevision: expectedRevision,
+      ResultRevision: currentRevision + 1,
+      PayloadHash: payloadHash,
+      Status: 'PENDING',
+      ResultJson: '',
+      ErrorCode: '',
+      CreatedAt: timestamp,
+      CompletedAt: ''
+    };
+    rosterLifecycleWriteLog_(existingLog);
+    existingLog = rosterLifecycleFindOperationLog_(operationId);
+  }
+
+  let entityPersisted = false;
+  try {
+    const reversalId = 'etx-rev-' + rosterV2Digest_(operationId + ':' + transactionId).slice(0, 16);
+    const reversalRecord = {
+      TransactionId: reversalId,
+      PeriodId: periodId,
+      PersonId: targetTx.PersonId,
+      PersonNameSnapshot: targetTx.PersonNameSnapshot || '',
+      EntitlementType: targetTx.EntitlementType,
+      DutyDomain: targetTx.DutyDomain || 'MO',
+      TransactionType: 'CONSUMPTION_REVERSAL',
+      Amount: 1,
+      EffectiveDate: targetTx.EffectiveDate,
+      SourceType: targetTx.SourceType,
+      SourceId: transactionId,
+      SourceAssignmentId: targetTx.SourceAssignmentId || '',
+      SourcePeriodId: periodId,
+      PublicHolidayDate: '',
+      PublicHolidayName: '',
+      RosterAssignmentId: targetTx.RosterAssignmentId || '',
+      RelatedTransactionId: transactionId,
+      ReasonCode: 'CONSUMPTION_REVERSAL',
+      AdminNote: adminNote,
+      ExpiresAt: '',
+      ExpiryPolicyCode: '',
+      Status: 'CONFIRMED',
+      OperationId: operationId,
+      CreatedAt: timestamp,
+      CreatedBy: actor
+    };
+
+    rosterLifecycleAppendRows_('RosterEntitlementTransactions', [reversalRecord]);
+    entityPersisted = true;
+
+    const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+    const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+    DraftProtocol.ensure(plannedAssignments.length > 0, 'ENTITY_NOT_FOUND', { message: 'No Planned assignments found for period ' + periodId });
+
+    const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+    const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+    const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+    const priorAbsences = confirmedAbsences.filter(function(a) { return a.OperationId !== operationId && a.Status === 'ACTIVE'; });
+    const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+    const priorReplacements = confirmedReplacements.filter(function(r) { return r.OperationId !== operationId && r.Status === 'ACTIVE'; });
+    const confirmedEntitlements = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId, operationId);
+    const people = rosterLifecycleGetPeople_();
+
+    const intendedEntitlements = confirmedEntitlements.concat([reversalRecord]);
+    const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+      periodId: periodId,
+      plannedAssignments: plannedAssignments,
+      events: priorEvents,
+      absences: priorAbsences,
+      replacements: priorReplacements,
+      entitlements: intendedEntitlements,
+      people: people,
+      digestFn: rosterV2Digest_
+    });
+
+    const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+    const masterTable = rosterV2ReadTable_('MasterRoster');
+    const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+    const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+    rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+    const readbackTable = rosterV2ReadTable_('MasterRoster');
+    const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+    const targetMonthPersistedRows = readbackRows.filter(function(r) {
+      const ld = RosterCompatibility.localDate(r.Date);
+      return ld && ld.slice(0, 7) === periodId;
+    });
+
+    const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+    const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+    if (actualChecksum !== expectedChecksum) {
+      existingLog.Status = 'RECOVERY_REQUIRED';
+      existingLog.ErrorCode = 'CHECKSUM_MISMATCH';
+      rosterLifecycleWriteLog_(existingLog);
+      throw DraftProtocol.fail('CHECKSUM_MISMATCH', { actual: actualChecksum, expected: expectedChecksum });
+    }
+
+    const targetState = intendedCurrent.effectiveState || 'PUBLISHED';
+    const targetRevision = currentRevision + 1;
+
+    const updatedPeriod = Object.assign({}, periodRecord, {
+      State: targetState,
+      Revision: targetRevision,
+      ProjectionChecksum: actualChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: timestamp
+    });
+    rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, periodRecord._row);
+
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      periodId: periodId,
+      state: targetState,
+      revision: targetRevision,
+      reversalTransactionId: reversalId,
+      targetTransactionId: transactionId,
+      entitlementType: targetTx.EntitlementType,
+      projectionChecksum: actualChecksum,
+      reversedAt: timestamp,
+      reversedBy: actor
+    };
+
+    existingLog.Status = 'CONFIRMED';
+    existingLog.ResultRevision = targetRevision;
+    existingLog.ResultJson = JSON.stringify(confirmedResult);
+    existingLog.CompletedAt = new Date().toISOString();
+    existingLog.ErrorCode = '';
+    rosterLifecycleWriteLog_(existingLog);
+
+    return confirmedResult;
+  } catch (err) {
+    if (existingLog) {
+      existingLog.Status = entityPersisted ? 'RECOVERY_REQUIRED' : 'FAILED';
+      existingLog.ErrorCode = err.code || (entityPersisted ? 'RECOVERY_REQUIRED' : 'VALIDATION_FAILED');
+      existingLog.CompletedAt = new Date().toISOString();
+      rosterLifecycleWriteLog_(existingLog);
+    }
+    throw err;
+  }
+}
+
+function rosterLifecycleEntitlementRecover_(operationId, actor) {
+  if (!operationId) throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'operationId is required' });
+  const log = rosterLifecycleFindOperationLog_(operationId);
+  if (!log) throw DraftProtocol.fail('ENTITY_NOT_FOUND', { message: 'Operation ' + operationId + ' not found in OperationLog' });
+
+  const phase7OpTypes = [
+    'ENTITLEMENT_EARN_GOFF', 'ENTITLEMENT_EARN_GHKA', 'ENTITLEMENT_CREDIT_MANUAL',
+    'ENTITLEMENT_CONSUME', 'ENTITLEMENT_CREDIT_REVERSAL', 'ENTITLEMENT_CONSUMPTION_REVERSAL'
+  ];
+  if (!phase7OpTypes.includes(log.OperationType)) {
+    throw DraftProtocol.fail('VALIDATION_FAILED', { message: 'Unsupported entitlement operation type for recovery: ' + log.OperationType });
+  }
+
+  if (log.Status === 'CONFIRMED') {
+    return rosterLifecycleStatus_(operationId);
+  }
+  if (log.Status === 'FAILED') {
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  const periodId = log.EntityKey ? log.EntityKey.replace(/^period:/, '') : '';
+  const period = periodId ? rosterLifecycleFindPeriod_(periodId) : null;
+  const currentRevision = period ? Number(period.Revision || 0) : 0;
+
+  const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const targetTx = records.find(function(tx) { return tx.OperationId === operationId; });
+
+  if (!targetTx) {
+    log.Status = 'FAILED';
+    log.ErrorCode = log.ErrorCode || 'NO_PERSISTED_MUTATION';
+    log.CompletedAt = new Date().toISOString();
+    rosterLifecycleWriteLog_(log);
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  const isRosterChanging = (log.OperationType === 'ENTITLEMENT_CONSUME' || log.OperationType === 'ENTITLEMENT_CONSUMPTION_REVERSAL');
+
+  if (!isRosterChanging) {
+    if (targetTx.Status !== 'CONFIRMED') {
+      targetTx.Status = 'CONFIRMED';
+      rosterLifecycleWriteRow_('RosterEntitlementTransactions', targetTx, targetTx._row);
+    }
+    const confirmedResult = {
+      ok: true,
+      operationId: operationId,
+      transactionId: targetTx.TransactionId,
+      entitlementType: targetTx.EntitlementType,
+      personId: targetTx.PersonId,
+      status: 'CONFIRMED',
+      createdAt: targetTx.CreatedAt || new Date().toISOString(),
+      createdBy: targetTx.CreatedBy || actor || ''
+    };
+    log.Status = 'CONFIRMED';
+    log.ResultRevision = currentRevision;
+    log.ResultJson = JSON.stringify(confirmedResult);
+    log.CompletedAt = new Date().toISOString();
+    log.ErrorCode = '';
+    rosterLifecycleWriteLog_(log);
+    return rosterLifecycleStatus_(operationId);
+  }
+
+  DraftProtocol.ensure(period, 'ENTITY_NOT_FOUND', { message: 'Period ' + periodId + ' not found for recovery' });
+
+  const allAssignments = rosterLifecycleFindAssignmentsByPeriod_(periodId);
+  const plannedAssignments = allAssignments.filter(function(r) { return r.Layer === 'PLANNED'; });
+  const confirmedEvents = rosterLifecycleFindConfirmedEventsByPeriod_(periodId, operationId);
+  const priorEvents = RosterLifecycle.groupEventLines(confirmedEvents.filter(function(r) { return r.OperationId !== operationId; }));
+  const confirmedAbsences = rosterLifecycleFindConfirmedAbsencesByPeriod_(periodId, operationId);
+  const activeAbsences = confirmedAbsences.filter(function(a) { return a.Status === 'ACTIVE'; });
+  const confirmedReplacements = rosterLifecycleFindConfirmedReplacementsByPeriod_(periodId, operationId);
+  const activeReplacements = confirmedReplacements.filter(function(r) { return r.Status === 'ACTIVE'; });
+  const confirmedEntitlements = rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId, operationId);
+  if (!confirmedEntitlements.some(function(e) { return e.TransactionId === targetTx.TransactionId; })) {
+    confirmedEntitlements.push(targetTx);
+  }
+  const people = rosterLifecycleGetPeople_();
+
+  const intendedCurrent = RosterLifecycle.resolveCurrentRoster({
+    periodId: periodId,
+    plannedAssignments: plannedAssignments,
+    events: priorEvents,
+    absences: activeAbsences,
+    replacements: activeReplacements,
+    entitlements: confirmedEntitlements,
+    people: people,
+    digestFn: rosterV2Digest_
+  });
+
+  const projectedRows = intendedCurrent.masterRosterProjection || RosterLifecycle.generateMasterRosterProjection(intendedCurrent.currentAssignments || []);
+  const masterTable = rosterV2ReadTable_('MasterRoster');
+  const existingMasterRows = masterTable.exists ? rosterV2Records_(masterTable, ['Name', 'Date', 'Shift'], true) : [];
+  const mergeResult = RosterLifecycle.mergeMasterRosterProjection(existingMasterRows, periodId, projectedRows);
+  rosterLifecycleWriteMasterRoster_(mergeResult.mergedRows);
+
+  const readbackTable = rosterV2ReadTable_('MasterRoster');
+  const readbackRows = rosterV2Records_(readbackTable, ['Name', 'Date', 'Shift'], true);
+  const targetMonthPersistedRows = readbackRows.filter(function(r) {
+    const ld = RosterCompatibility.localDate(r.Date);
+    return ld && ld.slice(0, 7) === periodId;
+  });
+
+  const actualChecksum = RosterLifecycle.computeProjectionChecksum(targetMonthPersistedRows, rosterV2Digest_);
+  const expectedChecksum = RosterLifecycle.computeProjectionChecksum(projectedRows, rosterV2Digest_);
+
+  if (actualChecksum !== expectedChecksum) {
+    log.Status = 'RECOVERY_REQUIRED';
+    log.ErrorCode = 'CHECKSUM_MISMATCH';
+    rosterLifecycleWriteLog_(log);
+    throw DraftProtocol.fail('CHECKSUM_MISMATCH', { actual: actualChecksum, expected: expectedChecksum });
+  }
+
+  let targetRevision = currentRevision;
+  let targetState = period.State;
+
+  if (period.LastOperationId === operationId) {
+    targetRevision = currentRevision;
+    targetState = period.State;
+  } else {
+    targetRevision = currentRevision + 1;
+    targetState = intendedCurrent.effectiveState || 'AMENDED';
+    const updatedPeriod = Object.assign({}, period, {
+      State: targetState,
+      Revision: targetRevision,
+      ProjectionChecksum: actualChecksum,
+      LastOperationId: operationId,
+      UpdatedAt: new Date().toISOString()
+    });
+    rosterLifecycleWriteRow_('RosterPeriods', updatedPeriod, period._row);
+  }
+
+  const confirmedResult = {
+    ok: true,
+    operationId: operationId,
+    periodId: periodId,
+    state: targetState,
+    revision: targetRevision,
+    transactionId: targetTx.TransactionId,
+    entitlementType: targetTx.EntitlementType,
+    projectionChecksum: actualChecksum,
+    createdAt: targetTx.CreatedAt || new Date().toISOString(),
+    createdBy: targetTx.CreatedBy || actor || ''
+  };
+  log.Status = 'CONFIRMED';
+  log.ResultRevision = targetRevision;
+  log.ResultJson = JSON.stringify(confirmedResult);
+  log.CompletedAt = new Date().toISOString();
+  log.ErrorCode = '';
+  rosterLifecycleWriteLog_(log);
+  return rosterLifecycleStatus_(operationId);
+}
+
 function rosterLifecycleRoute_(action, data) {
   let lock, acquired = false, principal;
   try {
@@ -3801,7 +5531,10 @@ function rosterLifecycleRoute_(action, data) {
       'rosterv2publish', 'rosterv2close', 'rosterv2reopen', 'rosterv2lifecyclerecover',
       'rosterv2amend', 'rosterv2amendreversal',
       'rosterv2absencecreate', 'rosterv2replacementcreate', 'rosterv2absencereverse', 'rosterv2replacementreverse',
-      'rosterv2absencerecover', 'rosterv2replacementrecover'
+      'rosterv2absencerecover', 'rosterv2replacementrecover',
+      'rosterv2entitlementearngoff', 'rosterv2entitlementearnghka', 'rosterv2entitlementcreditmanual',
+      'rosterv2entitlementconsume', 'rosterv2entitlementcreditreverse', 'rosterv2entitlementconsumereverse',
+      'rosterv2entitlementrecover'
     ];
     const isWrite = writeActions.includes(action);
 
@@ -3923,6 +5656,42 @@ function rosterLifecycleRoute_(action, data) {
       return createJsonResponse(rosterLifecycleReplacementRecover_(data.operationId, principal.email));
     }
 
+    if (action === 'rosterv2entitlementbalances') {
+      return createJsonResponse(rosterLifecycleGetEntitlementBalances_(data, principal));
+    }
+
+    if (action === 'rosterv2entitlementtransactions') {
+      return createJsonResponse(rosterLifecycleGetEntitlementTransactions_(data, principal));
+    }
+
+    if (action === 'rosterv2entitlementearngoff') {
+      return createJsonResponse(rosterLifecycleEntitlementEarnGoff_(data, principal.email));
+    }
+
+    if (action === 'rosterv2entitlementearnghka') {
+      return createJsonResponse(rosterLifecycleEntitlementEarnGhka_(data, principal.email));
+    }
+
+    if (action === 'rosterv2entitlementcreditmanual') {
+      return createJsonResponse(rosterLifecycleEntitlementCreditManual_(data, principal.email));
+    }
+
+    if (action === 'rosterv2entitlementconsume') {
+      return createJsonResponse(rosterLifecycleEntitlementConsume_(data, principal.email));
+    }
+
+    if (action === 'rosterv2entitlementcreditreverse') {
+      return createJsonResponse(rosterLifecycleEntitlementCreditReverse_(data, principal.email));
+    }
+
+    if (action === 'rosterv2entitlementconsumereverse') {
+      return createJsonResponse(rosterLifecycleEntitlementConsumeReverse_(data, principal.email));
+    }
+
+    if (action === 'rosterv2entitlementrecover') {
+      return createJsonResponse(rosterLifecycleEntitlementRecover_(data.operationId, principal.email));
+    }
+
     throw DraftProtocol.fail('VALIDATION_FAILED');
   } catch (error) {
     const recognizedErrors = [
@@ -3938,11 +5707,18 @@ function rosterLifecycleRoute_(action, data) {
       'INVALID_ABSENCE_TYPE', 'INVALID_DATE_RANGE', 'OVERLAPPING_ABSENCE',
       'ABSENCE_NOT_FOUND', 'ABSENCE_ALREADY_REVERSED', 'REPLACEMENT_NOT_FOUND',
       'REPLACEMENT_ALREADY_REVERSED', 'DUTY_DOMAIN_MISMATCH',
-      'INVALID_PERSON_IDENTITY', 'INVALID_ASSIGNMENT', 'SHORTAGE_ACCEPTANCE_REQUIRED'
+      'INVALID_PERSON_IDENTITY', 'INVALID_ASSIGNMENT', 'SHORTAGE_ACCEPTANCE_REQUIRED',
+      'INSUFFICIENT_GOFF_BALANCE', 'INSUFFICIENT_GHKA_BALANCE',
+      'CROSS_ENTITLEMENT_CONSUMPTION_FORBIDDEN', 'CROSS_ENTITLEMENT_DEPENDENCY_FORBIDDEN',
+      'INVALID_ENTITLEMENT_TYPE', 'EP_DOMAIN_EXCLUDED', 'DUPLICATE_CREDIT_SOURCE',
+      'DEPENDENT_CONSUMPTION_EXISTS', 'INCOMPATIBLE_OPERATIONAL_STATUS',
+      'TRANSACTION_NOT_FOUND', 'TRANSACTION_ALREADY_REVERSED',
+      'NO_DISPLACED_OFF', 'NOT_PUBLIC_HOLIDAY', 'NOT_QUALIFYING_DUTY'
     ];
     const code = (DraftProtocol.errors.includes(error.code) ||
       (RosterLifecycle.LIFECYCLE_ERRORS && RosterLifecycle.LIFECYCLE_ERRORS[error.code]) ||
       (typeof RosterAbsence !== 'undefined' && RosterAbsence.ABSENCE_ERRORS && RosterAbsence.ABSENCE_ERRORS[error.code]) ||
+      (typeof RosterEntitlement !== 'undefined' && RosterEntitlement.ENTITLEMENT_ERRORS && RosterEntitlement.ENTITLEMENT_ERRORS[error.code]) ||
       recognizedErrors.includes(error.code))
       ? error.code
       : 'RECOVERY_REQUIRED';

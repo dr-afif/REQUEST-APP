@@ -15,7 +15,13 @@ const DraftProtocol = (() => {
     'INVALID_ABSENCE_TYPE','INVALID_DATE_RANGE','OVERLAPPING_ABSENCE','ABSENCE_NOT_FOUND',
     'ABSENCE_ALREADY_REVERSED','REPLACEMENT_DEPENDENCY_CONFLICT','REPLACEMENT_NOT_FOUND',
     'REPLACEMENT_ALREADY_REVERSED','DUTY_DOMAIN_MISMATCH','INVALID_PERSON_IDENTITY',
-    'INVALID_ASSIGNMENT','SHORTAGE_ACCEPTANCE_REQUIRED'
+    'INVALID_ASSIGNMENT','SHORTAGE_ACCEPTANCE_REQUIRED',
+    'INSUFFICIENT_GOFF_BALANCE','INSUFFICIENT_GHKA_BALANCE',
+    'CROSS_ENTITLEMENT_CONSUMPTION_FORBIDDEN','CROSS_ENTITLEMENT_DEPENDENCY_FORBIDDEN',
+    'INVALID_ENTITLEMENT_TYPE','EP_DOMAIN_EXCLUDED','DUPLICATE_CREDIT_SOURCE',
+    'DEPENDENT_CONSUMPTION_EXISTS','INCOMPATIBLE_OPERATIONAL_STATUS',
+    'TRANSACTION_NOT_FOUND','TRANSACTION_ALREADY_REVERSED',
+    'NO_DISPLACED_OFF','NOT_PUBLIC_HOLIDAY','NOT_QUALIFYING_DUTY'
   ];
   const fail = (code, details = {}) => Object.assign(new Error(code), { code, details });
   const ensure = (ok, code = 'VALIDATION_FAILED') => { if (!ok) throw fail(code); };
@@ -315,6 +321,173 @@ const DraftProtocol = (() => {
           adminNote: adminNote,
           shortageAccepted: shortageAccepted,
           shortageReason: shortageReason
+        }
+      };
+    }
+
+    if (operation.operationType === 'ENTITLEMENT_EARN_GOFF') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const personId = String(payload.personId || '').trim();
+      ensure(uuid(personId), 'VALIDATION_FAILED');
+      const date = String(payload.date || '').trim();
+      ensure(/^\d{4}-\d{2}-\d{2}$/.test(date), 'VALIDATION_FAILED');
+      const adminNote = String(payload.adminNote || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ENTITLEMENT_EARN_GOFF',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          personId: personId,
+          date: date,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'ENTITLEMENT_EARN_GHKA') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const personId = String(payload.personId || '').trim();
+      ensure(uuid(personId), 'VALIDATION_FAILED');
+      const date = String(payload.date || '').trim();
+      ensure(/^\d{4}-\d{2}-\d{2}$/.test(date), 'VALIDATION_FAILED');
+      const adminNote = String(payload.adminNote || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ENTITLEMENT_EARN_GHKA',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          personId: personId,
+          date: date,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'ENTITLEMENT_CREDIT_MANUAL') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const personId = String(payload.personId || '').trim();
+      ensure(uuid(personId), 'VALIDATION_FAILED');
+      const entitlementType = String(payload.entitlementType || '').trim().toUpperCase();
+      ensure(entitlementType === 'GOFF' || entitlementType === 'GHKA', 'VALIDATION_FAILED');
+      const amount = Number(payload.amount);
+      ensure(amount === 1, 'VALIDATION_FAILED');
+      const effectiveDate = String(payload.effectiveDate || payload.date || '').trim();
+      ensure(/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate), 'VALIDATION_FAILED');
+      const reasonCode = String(payload.reasonCode || '').trim();
+      ensure(reasonCode.length > 0, 'VALIDATION_FAILED');
+      const adminNote = String(payload.adminNote || '').trim();
+      ensure(adminNote.length > 0, 'VALIDATION_FAILED');
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ENTITLEMENT_CREDIT_MANUAL',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          personId: personId,
+          entitlementType: entitlementType,
+          amount: 1,
+          effectiveDate: effectiveDate,
+          reasonCode: reasonCode,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'ENTITLEMENT_CONSUME') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const personId = String(payload.personId || '').trim();
+      ensure(uuid(personId), 'VALIDATION_FAILED');
+      const entitlementType = String(payload.entitlementType || '').trim().toUpperCase();
+      ensure(entitlementType === 'GOFF' || entitlementType === 'GHKA', 'VALIDATION_FAILED');
+      const date = String(payload.date || '').trim();
+      ensure(/^\d{4}-\d{2}-\d{2}$/.test(date), 'VALIDATION_FAILED');
+      const expectedRevision = Number.isSafeInteger(payload.expectedRevision) ? payload.expectedRevision : (Number.isSafeInteger(operation.expectedRevision) ? operation.expectedRevision : 0);
+      const adminNote = String(payload.adminNote || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ENTITLEMENT_CONSUME',
+        entityKey: 'period:' + periodId,
+        expectedRevision: expectedRevision,
+        payload: {
+          periodId: periodId,
+          personId: personId,
+          entitlementType: entitlementType,
+          date: date,
+          expectedRevision: expectedRevision,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'ENTITLEMENT_CREDIT_REVERSAL') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const transactionId = String(payload.transactionId || '').trim();
+      ensure(typeof transactionId === 'string' && transactionId.length > 0, 'VALIDATION_FAILED');
+      const adminNote = String(payload.adminNote || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ENTITLEMENT_CREDIT_REVERSAL',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          transactionId: transactionId,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'ENTITLEMENT_CONSUMPTION_REVERSAL') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const transactionId = String(payload.transactionId || '').trim();
+      ensure(typeof transactionId === 'string' && transactionId.length > 0, 'VALIDATION_FAILED');
+      const expectedRevision = Number.isSafeInteger(payload.expectedRevision) ? payload.expectedRevision : (Number.isSafeInteger(operation.expectedRevision) ? operation.expectedRevision : 0);
+      const adminNote = String(payload.adminNote || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ENTITLEMENT_CONSUMPTION_REVERSAL',
+        entityKey: 'period:' + periodId,
+        expectedRevision: expectedRevision,
+        payload: {
+          periodId: periodId,
+          transactionId: transactionId,
+          expectedRevision: expectedRevision,
+          adminNote: adminNote
         }
       };
     }
