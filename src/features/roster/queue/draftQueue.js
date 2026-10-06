@@ -113,6 +113,18 @@ export class DraftQueue {
         response = await this.repository.reverseAbsence(op);
       } else if (op.operationType === 'REPLACEMENT_REVERSE') {
         response = await this.repository.reverseReplacement(op);
+      } else if (op.operationType === 'ENTITLEMENT_EARN_GOFF') {
+        response = await this.repository.earnGoff(op);
+      } else if (op.operationType === 'ENTITLEMENT_EARN_GHKA') {
+        response = await this.repository.earnGhka(op);
+      } else if (op.operationType === 'ENTITLEMENT_CREDIT_MANUAL') {
+        response = await this.repository.creditManual(op);
+      } else if (op.operationType === 'ENTITLEMENT_CONSUME') {
+        response = await this.repository.consumeEntitlement(op);
+      } else if (op.operationType === 'ENTITLEMENT_CREDIT_REVERSAL') {
+        response = await this.repository.reverseCredit(op);
+      } else if (op.operationType === 'ENTITLEMENT_CONSUMPTION_REVERSAL') {
+        response = await this.repository.reverseConsumption(op);
       } else {
         response = await this.repository.write(op);
       }
@@ -210,6 +222,8 @@ export class DraftQueue {
           response = await this.repository.recoverAbsence(id);
         } else if (frozen.operationType === 'REPLACEMENT_CREATE' || frozen.operationType === 'REPLACEMENT_REVERSE') {
           response = await this.repository.recoverReplacement(id);
+        } else if (['ENTITLEMENT_EARN_GOFF','ENTITLEMENT_EARN_GHKA','ENTITLEMENT_CREDIT_MANUAL','ENTITLEMENT_CONSUME','ENTITLEMENT_CREDIT_REVERSAL','ENTITLEMENT_CONSUMPTION_REVERSAL'].includes(frozen.operationType)) {
+          response = await this.repository.recoverEntitlement(id);
         } else {
           response = await this.repository.recoverLifecycle(id);
         }
@@ -245,8 +259,17 @@ export class DraftQueue {
           await this.handle(key,id,rec);
           return;
         }
-        if(op.operationType==='REPLACEMENT_CREATE'||op.operationType==='REPLACEMENT_REVERSE'){
+        if (op.operationType==='REPLACEMENT_CREATE'||op.operationType==='REPLACEMENT_REVERSE'){
           const rec=await this.repository.recoverReplacement(id);
+          if(rec.ok&&rec.status==='CONFIRMED'){
+            await this.handle(key,id,rec);
+            return;
+          }
+          await this.handle(key,id,rec);
+          return;
+        }
+        if (['ENTITLEMENT_EARN_GOFF','ENTITLEMENT_EARN_GHKA','ENTITLEMENT_CREDIT_MANUAL','ENTITLEMENT_CONSUME','ENTITLEMENT_CREDIT_REVERSAL','ENTITLEMENT_CONSUMPTION_REVERSAL'].includes(op.operationType)){
+          const rec=await this.repository.recoverEntitlement(id);
           if(rec.ok&&rec.status==='CONFIRMED'){
             await this.handle(key,id,rec);
             return;
@@ -1124,5 +1147,563 @@ export class DraftQueue {
   async getCurrentRoster(periodId){
     RosterCompatibility.validatePeriod(periodId);
     return this.repository.getCurrentRoster(periodId);
+  }
+
+  async earnGoff(periodId, payload, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot earn GOFF`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ENTITLEMENT_EARN_GOFF'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ENTITLEMENT_EARN_GOFF'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ENTITLEMENT_EARN_GOFF',
+            entityKey:key,
+            expectedRevision:0,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return {ok:true,operationId:id,status:'CONFIRMED',...after.lifecycle};
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async earnGhka(periodId, payload, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot earn GHKA`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ENTITLEMENT_EARN_GHKA'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ENTITLEMENT_EARN_GHKA'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ENTITLEMENT_EARN_GHKA',
+            entityKey:key,
+            expectedRevision:0,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return {ok:true,operationId:id,status:'CONFIRMED',...after.lifecycle};
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async creditManual(periodId, payload, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot add manual credit`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ENTITLEMENT_CREDIT_MANUAL'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ENTITLEMENT_CREDIT_MANUAL'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ENTITLEMENT_CREDIT_MANUAL',
+            entityKey:key,
+            expectedRevision:0,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return {ok:true,operationId:id,status:'CONFIRMED',...after.lifecycle};
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async consumeEntitlement(periodId, payload, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot consume entitlement`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot consume entitlement`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot consume entitlement`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ENTITLEMENT_CONSUME'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ENTITLEMENT_CONSUME'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ENTITLEMENT_CONSUME',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload:{...payload,expectedRevision}}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async reverseCredit(periodId, payloadOrTxId, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    const payload=typeof payloadOrTxId==='string'
+      ?{transactionId:payloadOrTxId,...(options.payload||{}),adminNote:options.adminNote||''}
+      :(payloadOrTxId||{});
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot reverse credit`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ENTITLEMENT_CREDIT_REVERSAL'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ENTITLEMENT_CREDIT_REVERSAL'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ENTITLEMENT_CREDIT_REVERSAL',
+            entityKey:key,
+            expectedRevision:0,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return {ok:true,operationId:id,status:'CONFIRMED',...after.lifecycle};
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async reverseConsumption(periodId, payloadOrTxId, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    const payload=typeof payloadOrTxId==='string'
+      ?{transactionId:payloadOrTxId,...(options.payload||{}),adminNote:options.adminNote||''}
+      :(payloadOrTxId||{});
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot reverse consumption`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot reverse consumption`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot reverse consumption`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ENTITLEMENT_CONSUMPTION_REVERSAL'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ENTITLEMENT_CONSUMPTION_REVERSAL'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ENTITLEMENT_CONSUMPTION_REVERSAL',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload:{...payload,expectedRevision}}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async recoverEntitlement(operationId){
+    return this.repository.recoverEntitlement(operationId);
+  }
+  async getEntitlementBalances(params){
+    return this.repository.getEntitlementBalances(params);
+  }
+  async getEntitlementTransactions(params){
+    return this.repository.getEntitlementTransactions(params);
   }
 }

@@ -41,7 +41,12 @@ export default function PlannedRosterView({
   }, [assignments]);
 
   return (
-    <div className="space-y-4" aria-label="Planned Roster Snapshot">
+    <div
+      id="planned-roster-view"
+      data-testid="planned-roster-view"
+      className="space-y-4"
+      aria-label="Planned Roster Snapshot"
+    >
       {/* Immutability Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-2xl bg-slate-100 border border-slate-300 gap-2">
         <div className="flex items-center gap-3">
@@ -108,6 +113,8 @@ export default function PlannedRosterView({
                       return (
                         <td
                           key={d}
+                          id={`cell-planned-${row.personId}-${d}-${row.dutyDomain}`}
+                          data-testid={`cell-planned-${row.personId}-${d}-${row.dutyDomain}`}
                           className="p-2 text-center border-r border-slate-200 font-mono text-[11px]"
                         >
                           {shift}

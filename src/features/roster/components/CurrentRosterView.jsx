@@ -25,7 +25,10 @@ export default function CurrentRosterView({
   onSelectCellForAmend,
   onSelectDutyForAbsence,
   onSelectDutyForReplacement,
-  onOpenAbsenceModal
+  onOpenAbsenceModal,
+  onSelectDutyForEntitlement,
+  onSelectPersonForEntitlement,
+  onOpenEntitlementsPanel
 }) {
   const canAmend = Boolean(
     isAdmin &&
@@ -110,30 +113,44 @@ export default function CurrentRosterView({
           </h4>
           <p className="text-xs text-indigo-800/80 mt-0.5">
             {canAmend
-              ? 'Click duty cells to modify shifts, record absences, or assign replacements.'
+              ? 'Click duty cells to modify shifts, record absences, assign replacements, or use entitlements.'
               : 'Displaying authoritative schedule. Amendments require administrator authorization.'}
           </p>
         </div>
 
-        {canAmend && (
-          <div className="flex items-center gap-2 self-start sm:self-auto">
-            {onOpenAbsenceModal && (
-              <button
-                type="button"
-                id="btn-toolbar-record-absence"
-                data-testid="btn-toolbar-record-absence"
-                onClick={onOpenAbsenceModal}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50 active:scale-95 transition shadow-2xs"
-              >
-                <span>🩺</span>
-                <span>Record Absence</span>
-              </button>
-            )}
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          {onOpenEntitlementsPanel && (
+            <button
+              type="button"
+              id="btn-toolbar-entitlements"
+              data-testid="btn-toolbar-entitlements"
+              onClick={onOpenEntitlementsPanel}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-teal-800 border border-teal-200 hover:bg-teal-50 active:scale-95 transition shadow-2xs cursor-pointer"
+            >
+              <span>⚖️</span>
+              <span>Entitlements</span>
+            </button>
+          )}
+
+          {canAmend && onOpenAbsenceModal && (
+            <button
+              type="button"
+              id="btn-toolbar-record-absence"
+              data-testid="btn-toolbar-record-absence"
+              onClick={onOpenAbsenceModal}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50 active:scale-95 transition shadow-2xs"
+            >
+              <span>🩺</span>
+              <span>Record Absence</span>
+            </button>
+          )}
+
+          {canAmend && (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">
               <span>✏️</span> Amendment Mode
             </span>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {currentAssignments.length === 0 ? (
@@ -170,7 +187,21 @@ export default function CurrentRosterView({
                 {groupedByPerson.map((row) => (
                   <tr key={`${row.personId}::${row.dutyDomain}`} className="hover:bg-slate-50/50">
                     <td className="p-3 font-semibold sticky left-0 bg-white z-10 border-r border-slate-200">
-                      <div className="text-slate-900 font-bold">{row.personNameSnapshot}</div>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-slate-900 font-bold">{row.personNameSnapshot}</span>
+                        {row.dutyDomain !== 'EP' && onSelectPersonForEntitlement && (
+                          <button
+                            type="button"
+                            id={`btn-view-entitlements-${row.personId}`}
+                            data-testid={`btn-view-entitlements-${row.personId}`}
+                            onClick={() => onSelectPersonForEntitlement(row.personId)}
+                            title={`View entitlements for ${row.personNameSnapshot}`}
+                            className="text-[10px] font-bold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 px-1.5 py-0.5 rounded border border-teal-200 transition cursor-pointer"
+                          >
+                            ⚖️
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="p-2 text-center border-r border-slate-200">
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600">
@@ -190,7 +221,8 @@ export default function CurrentRosterView({
                       const isUncovered = isAbsence && assignment?.coverageStatus !== 'COVERED';
                       const isCoveredAbsence = isAbsence && assignment?.coverageStatus === 'COVERED';
                       const isCovering = assignment?.source === 'REPLACEMENT' || Boolean(assignment?.coveringForPersonId);
-                      const isWorking = currentShift && currentShift !== 'OFF' && !isAbsence && !isCovering;
+                      const isEntitlementDuty = currentShift === 'GOFF' || currentShift === 'GHKA';
+                      const isWorking = currentShift && currentShift !== 'OFF' && currentShift !== 'HKA' && !isEntitlementDuty && !isAbsence && !isCovering;
 
                       // Check whether cell differs from Planned
                       const isChanged = plannedShift !== undefined && plannedShift !== currentShift;
@@ -238,6 +270,12 @@ export default function CurrentRosterView({
                               ? 'bg-purple-50/50'
                               : isCovering
                               ? 'bg-emerald-50/50'
+                              : currentShift === 'GOFF'
+                              ? 'bg-teal-50/60'
+                              : currentShift === 'GHKA'
+                              ? 'bg-amber-50/60'
+                              : currentShift === 'HKA'
+                              ? 'bg-slate-100/50'
                               : isChanged
                               ? 'bg-amber-50/50'
                               : ''
@@ -265,6 +303,12 @@ export default function CurrentRosterView({
                                     ? 'text-purple-800 bg-purple-100 hover:bg-purple-200'
                                     : isCovering
                                     ? 'text-emerald-800 bg-emerald-100 hover:bg-emerald-200'
+                                    : currentShift === 'GOFF'
+                                    ? 'text-teal-900 bg-teal-100 hover:bg-teal-200'
+                                    : currentShift === 'GHKA'
+                                    ? 'text-amber-900 bg-amber-100 hover:bg-amber-200'
+                                    : currentShift === 'HKA'
+                                    ? 'text-slate-700 bg-slate-200 hover:bg-slate-300'
                                     : 'text-slate-800 hover:bg-indigo-100 hover:text-indigo-800'
                                 }`}
                               >
@@ -272,9 +316,66 @@ export default function CurrentRosterView({
                               </button>
                             ) : (
                               <span className={`font-mono text-xs font-bold ${
-                                isUncovered ? 'text-rose-700' : isCoveredAbsence ? 'text-purple-700' : isCovering ? 'text-emerald-700' : 'text-slate-800'
+                                isUncovered
+                                  ? 'text-rose-700'
+                                  : isCoveredAbsence
+                                  ? 'text-purple-700'
+                                  : isCovering
+                                  ? 'text-emerald-700'
+                                  : currentShift === 'GOFF'
+                                  ? 'text-teal-800'
+                                  : currentShift === 'GHKA'
+                                  ? 'text-amber-900'
+                                  : currentShift === 'HKA'
+                                  ? 'text-slate-700'
+                                  : 'text-slate-800'
                               }`}>
                                 {currentShift || '—'}
+                              </span>
+                            )}
+
+                            {/* Phase 7: Distinct Badges for GOFF, GHKA, HKA, GOFF* */}
+                            {currentShift === 'GOFF' && (
+                              <span
+                                id={`badge-goff-${row.personId}-${date}-${row.dutyDomain}`}
+                                className="inline-block text-[9px] font-extrabold text-teal-800 bg-teal-100 px-1 py-0.2 rounded border border-teal-300 leading-tight"
+                                title="Weekly-off replacement entitlement used"
+                                data-testid={`badge-goff-${row.personId}-${date}-${row.dutyDomain}`}
+                              >
+                                GOFF
+                              </span>
+                            )}
+
+                            {currentShift === 'GHKA' && (
+                              <span
+                                id={`badge-ghka-${row.personId}-${date}-${row.dutyDomain}`}
+                                className="inline-block text-[9px] font-extrabold text-amber-900 bg-amber-100 px-1 py-0.2 rounded border border-amber-300 leading-tight"
+                                title="Public-holiday replacement entitlement used"
+                                data-testid={`badge-ghka-${row.personId}-${date}-${row.dutyDomain}`}
+                              >
+                                GHKA
+                              </span>
+                            )}
+
+                            {currentShift === 'HKA' && (
+                              <span
+                                id={`badge-hka-${row.personId}-${date}-${row.dutyDomain}`}
+                                className="inline-block text-[9px] font-bold text-slate-700 bg-slate-100 px-1 py-0.2 rounded border border-slate-300 leading-tight"
+                                title="Public holiday rest"
+                                data-testid={`badge-hka-${row.personId}-${date}-${row.dutyDomain}`}
+                              >
+                                HKA
+                              </span>
+                            )}
+
+                            {currentShift === 'GOFF*' && (
+                              <span
+                                id={`badge-goff-legacy-${row.personId}-${date}-${row.dutyDomain}`}
+                                className="inline-block text-[9px] font-bold text-slate-600 bg-slate-100 px-1 py-0.2 rounded border border-slate-300 leading-tight"
+                                title="Legacy GOFF* marker"
+                                data-testid={`badge-goff-legacy-${row.personId}-${date}-${row.dutyDomain}`}
+                              >
+                                GOFF*
                               </span>
                             )}
 
@@ -293,7 +394,7 @@ export default function CurrentRosterView({
                                     id={`btn-assign-replacement-${row.personId}-${date}-${row.dutyDomain}`}
                                     data-testid={`btn-assign-replacement-${row.personId}-${date}-${row.dutyDomain}`}
                                     onClick={() => onSelectDutyForReplacement(cellData)}
-                                    className="text-[9px] font-bold text-rose-700 hover:text-rose-900 bg-white hover:bg-rose-50 px-1 py-0.5 rounded border border-rose-300 shadow-2xs transition active:scale-95"
+                                    className="text-[9px] font-bold text-rose-700 hover:text-rose-900 bg-white hover:bg-rose-50 px-1 py-0.5 rounded border border-rose-300 shadow-2xs transition active:scale-95 cursor-pointer"
                                   >
                                     Assign replacement
                                   </button>
@@ -335,14 +436,40 @@ export default function CurrentRosterView({
                                 data-testid={`btn-record-absence-${row.personId}-${date}-${row.dutyDomain}`}
                                 onClick={() => onSelectDutyForAbsence(cellData)}
                                 title={`Record absence for ${row.personNameSnapshot} on ${date}`}
-                                className="text-[9px] font-semibold text-slate-500 hover:text-indigo-700 hover:underline transition mt-0.5 leading-none"
+                                className="text-[9px] font-semibold text-slate-500 hover:text-indigo-700 hover:underline transition mt-0.5 leading-none cursor-pointer"
                               >
                                 Record absence
                               </button>
                             )}
 
+                            {/* Phase 7: Use GOFF / Use GHKA on working duty for MO only */}
+                            {canAmend && isWorking && row.dutyDomain !== 'EP' && onSelectDutyForEntitlement && (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <button
+                                  type="button"
+                                  id={`btn-use-goff-${row.personId}-${date}-${row.dutyDomain}`}
+                                  data-testid={`btn-use-goff-${row.personId}-${date}-${row.dutyDomain}`}
+                                  onClick={() => onSelectDutyForEntitlement(cellData, 'GOFF')}
+                                  title={`Use GOFF for ${row.personNameSnapshot} on ${date}`}
+                                  className="text-[9px] font-bold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 px-1 py-0.2 rounded border border-teal-200 transition leading-none cursor-pointer"
+                                >
+                                  Use GOFF
+                                </button>
+                                <button
+                                  type="button"
+                                  id={`btn-use-ghka-${row.personId}-${date}-${row.dutyDomain}`}
+                                  data-testid={`btn-use-ghka-${row.personId}-${date}-${row.dutyDomain}`}
+                                  onClick={() => onSelectDutyForEntitlement(cellData, 'GHKA')}
+                                  title={`Use GHKA for ${row.personNameSnapshot} on ${date}`}
+                                  className="text-[9px] font-bold text-amber-800 hover:text-amber-950 bg-amber-50 hover:bg-amber-100 px-1 py-0.2 rounded border border-amber-200 transition leading-none cursor-pointer"
+                                >
+                                  Use GHKA
+                                </button>
+                              </div>
+                            )}
+
                             {/* Changed Badge */}
-                            {isChanged && !isAbsence && !isCovering && (
+                            {isChanged && !isAbsence && !isCovering && !isEntitlementDuty && (
                               <span
                                 className="changed-badge inline-block text-[9px] font-extrabold text-amber-700 bg-amber-100/80 px-1 py-0.2 rounded border border-amber-300 shadow-2xs leading-none"
                                 title={`Original Planned: ${plannedShift || 'OFF'}`}

@@ -7,6 +7,9 @@ import AmendmentHistoryPanel from './AmendmentHistoryPanel.jsx';
 import AmendmentModal from './AmendmentModal.jsx';
 import AbsenceModal from './AbsenceModal.jsx';
 import ReplacementModal from './ReplacementModal.jsx';
+import EntitlementPanel from './EntitlementPanel.jsx';
+import EntitlementCreditModal from './EntitlementCreditModal.jsx';
+import EntitlementConsumeModal from './EntitlementConsumeModal.jsx';
 import UndoToast from './UndoToast.jsx';
 
 /**
@@ -62,6 +65,20 @@ export default function Phase5RosterContainer({
 
   // Phase 6 Reversals
   const [isReversingPhase6, setIsReversingPhase6] = useState(false);
+
+  // Phase 7 Entitlements state
+  const [selectedPersonForEntitlement, setSelectedPersonForEntitlement] = useState(
+    people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId || null
+  );
+  const [entitlementBalances, setEntitlementBalances] = useState({ GOFF: 0, GHKA: 0 });
+  const [entitlementTransactions, setEntitlementTransactions] = useState([]);
+  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
+  const [creditModalConfig, setCreditModalConfig] = useState(null);
+  const [selectedDutyForEntitlement, setSelectedDutyForEntitlement] = useState(null);
+  const [consumeEntitlementType, setConsumeEntitlementType] = useState('GOFF');
+  const [isSubmittingCredit, setIsSubmittingCredit] = useState(false);
+  const [isSubmittingConsume, setIsSubmittingConsume] = useState(false);
+  const [isReversingEntitlement, setIsReversingEntitlement] = useState(false);
 
   // 10-second Undo for amendments
   const [undoEvent, setUndoEvent] = useState(null);
@@ -120,13 +137,20 @@ export default function Phase5RosterContainer({
         return;
       }
 
-      // 2. Concurrently fetch Current, Planned, Changes, Absences, and Replacements
-      const [currRes, planRes, histRes, absRes, replRes] = await Promise.all([
+      // 2. Concurrently fetch Current, Planned, Changes, Absences, Replacements, and Entitlements
+      const personForEntitlements = selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId;
+      const [currRes, planRes, histRes, absRes, replRes, balRes, txRes] = await Promise.all([
         targetQueue.getCurrentRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getPlannedRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getAmendmentHistory(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getAbsences?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, absences: [] }),
-        targetQueue.getReplacements?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, replacements: [] })
+        targetQueue.getReplacements?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, replacements: [] }),
+        personForEntitlements && targetQueue.getEntitlementBalances
+          ? targetQueue.getEntitlementBalances({ personId: personForEntitlements }).catch((e) => ({ ok: false, error: e }))
+          : Promise.resolve({ ok: true, balances: { GOFF: 0, GHKA: 0 } }),
+        targetQueue.getEntitlementTransactions
+          ? targetQueue.getEntitlementTransactions({ periodId: targetPeriod, ...(personForEntitlements ? { personId: personForEntitlements } : {}) }).catch((e) => ({ ok: false, error: e }))
+          : Promise.resolve({ ok: true, transactions: [] })
       ]);
 
       if (gen !== requestGenRef.current) return;
@@ -145,6 +169,12 @@ export default function Phase5RosterContainer({
       }
       if (replRes?.ok) {
         setReplacements(replRes.replacements || []);
+      }
+      if (balRes?.ok && balRes.balances) {
+        setEntitlementBalances(balRes.balances);
+      }
+      if (txRes?.ok && txRes.transactions) {
+        setEntitlementTransactions(txRes.transactions);
       }
 
       syncRecoveryState(targetQueue, targetPeriod);
@@ -169,8 +199,11 @@ export default function Phase5RosterContainer({
     setIsAbsenceModalOpen(false);
     setSelectedDutyForAbsence(null);
     setSelectedDutyForReplacement(null);
+    setSelectedDutyForEntitlement(null);
+    setIsCreditModalOpen(false);
+    setCreditModalConfig(null);
     setUndoEvent(null);
-    setViewMode('CURRENT'); // Default view mode is Current
+    setViewMode((prev) => (prev === 'ENTITLEMENTS' ? 'ENTITLEMENTS' : 'CURRENT'));
     setCurrentRoster(null);
     setPlannedRoster(null);
     setAmendmentHistory(null);
@@ -371,6 +404,8 @@ export default function Phase5RosterContainer({
         await queue.recoverAbsence(opId);
       } else if (opType === 'REPLACEMENT_CREATE' || opType === 'REPLACEMENT_REVERSE') {
         await queue.recoverReplacement(opId);
+      } else if (['ENTITLEMENT_EARN_GOFF', 'ENTITLEMENT_EARN_GHKA', 'ENTITLEMENT_CREDIT_MANUAL', 'ENTITLEMENT_CONSUME', 'ENTITLEMENT_CREDIT_REVERSAL', 'ENTITLEMENT_CONSUMPTION_REVERSAL'].includes(opType)) {
+        await queue.recoverEntitlement(opId);
       } else {
         await queue.retry(`draft:${period}`, opId);
       }
@@ -382,6 +417,162 @@ export default function Phase5RosterContainer({
       setIsRecovering(false);
     }
   }, [queue, period, isRecovering, loadAuthoritativeData]);
+
+  // Handle selecting another person in EntitlementPanel
+  const handleSelectPersonForEntitlement = useCallback(async (pId) => {
+    setSelectedPersonForEntitlement(pId);
+    if (!queue || !pId) return;
+    try {
+      const [bRes, tRes] = await Promise.all([
+        queue.getEntitlementBalances?.({ personId: pId }).catch(() => null),
+        queue.getEntitlementTransactions?.({ personId: pId, periodId: period }).catch(() => null)
+      ]);
+      if (bRes?.ok && bRes.balances) setEntitlementBalances(bRes.balances);
+      if (tRes?.ok && tRes.transactions) setEntitlementTransactions(tRes.transactions);
+    } catch (_) {}
+  }, [queue, period]);
+
+  // Handle opening consume modal from Current duty cell
+  const handleOpenConsumeModal = useCallback(async (cellData, type) => {
+    setConsumeEntitlementType(type);
+    setSelectedDutyForEntitlement(cellData);
+    if (cellData.personId) {
+      setSelectedPersonForEntitlement(cellData.personId);
+      if (queue && queue.getEntitlementBalances) {
+        try {
+          const balRes = await queue.getEntitlementBalances({ personId: cellData.personId });
+          if (balRes?.ok && balRes.balances) {
+            setEntitlementBalances(balRes.balances);
+          }
+        } catch (_) {}
+      }
+    }
+  }, [queue]);
+
+  // Handle Phase 7 Earn GOFF Submission
+  const handleEarnGoff = useCallback(async ({ personId: targetPId, date, adminNote }) => {
+    if (!queue || isSubmittingCredit) return;
+    setIsSubmittingCredit(true);
+    setActionError(null);
+    try {
+      await queue.earnGoff(period, { personId: targetPId, date, adminNote });
+      setIsCreditModalOpen(false);
+      setCreditModalConfig(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      setActionError(err.message || err.code);
+    } finally {
+      setIsSubmittingCredit(false);
+    }
+  }, [queue, isSubmittingCredit, period, loadAuthoritativeData]);
+
+  // Handle Phase 7 Earn GHKA Submission
+  const handleEarnGhka = useCallback(async ({ personId: targetPId, date, adminNote }) => {
+    if (!queue || isSubmittingCredit) return;
+    setIsSubmittingCredit(true);
+    setActionError(null);
+    try {
+      await queue.earnGhka(period, { personId: targetPId, date, adminNote });
+      setIsCreditModalOpen(false);
+      setCreditModalConfig(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      setActionError(err.message || err.code);
+    } finally {
+      setIsSubmittingCredit(false);
+    }
+  }, [queue, isSubmittingCredit, period, loadAuthoritativeData]);
+
+  // Handle Phase 7 Manual Credit Submission
+  const handleCreditManual = useCallback(async ({ personId: targetPId, entitlementType, amount, effectiveDate, reasonCode, adminNote }) => {
+    if (!queue || isSubmittingCredit) return;
+    setIsSubmittingCredit(true);
+    setActionError(null);
+    try {
+      await queue.creditManual(period, { personId: targetPId, entitlementType, amount: 1, effectiveDate, reasonCode, adminNote });
+      setIsCreditModalOpen(false);
+      setCreditModalConfig(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      setActionError(err.message || err.code);
+    } finally {
+      setIsSubmittingCredit(false);
+    }
+  }, [queue, isSubmittingCredit, period, loadAuthoritativeData]);
+
+  // Handle Phase 7 Entitlement Consumption
+  const handleConsumeEntitlement = useCallback(async ({ personId: targetPId, entitlementType, date, expectedRevision: expRev, adminNote }) => {
+    if (!queue || isSubmittingConsume) return;
+    const currentState = String(lifecycle?.state || '').toUpperCase();
+    if (currentState === 'CLOSED') {
+      setActionError('Period is CLOSED and read-only');
+      return;
+    }
+    setIsSubmittingConsume(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+    try {
+      await queue.consumeEntitlement(period, { personId: targetPId, entitlementType, date, expectedRevision: expRev, adminNote });
+      setSelectedDutyForEntitlement(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSubmittingConsume(false);
+    }
+  }, [queue, isSubmittingConsume, period, lifecycle, loadAuthoritativeData]);
+
+  // Handle Phase 7 Consumption Reversal
+  const handleReverseConsumption = useCallback(async (tx) => {
+    if (!queue || isReversingEntitlement) return;
+    setIsReversingEntitlement(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+    try {
+      const txId = tx.TransactionId || tx.transactionId;
+      await queue.reverseConsumption(period, txId, { expectedRevision: lifecycle?.revision });
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsReversingEntitlement(false);
+    }
+  }, [queue, period, lifecycle, isReversingEntitlement, loadAuthoritativeData]);
+
+  // Handle Phase 7 Credit Reversal
+  const handleReverseCredit = useCallback(async (tx) => {
+    if (!queue || isReversingEntitlement) return;
+    setIsReversingEntitlement(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+    try {
+      const txId = tx.TransactionId || tx.transactionId;
+      await queue.reverseCredit(period, txId);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsReversingEntitlement(false);
+    }
+  }, [queue, period, isReversingEntitlement, loadAuthoritativeData]);
 
   // If not enrolled or in DRAFT state or V2 read is disabled: container does not render Phase 5/6 modes
   const state = lifecycle?.state;
@@ -513,6 +704,12 @@ export default function Phase5RosterContainer({
             setSelectedDutyForAbsence(null);
             setIsAbsenceModalOpen(true);
           }}
+          onSelectDutyForEntitlement={handleOpenConsumeModal}
+          onSelectPersonForEntitlement={(pId) => {
+            handleSelectPersonForEntitlement(pId);
+            setViewMode('ENTITLEMENTS');
+          }}
+          onOpenEntitlementsPanel={() => setViewMode('ENTITLEMENTS')}
         />
       )}
 
@@ -536,6 +733,26 @@ export default function Phase5RosterContainer({
           onReverseReplacement={(replacementId, options) => handleReverseReplacement(replacementId, options)}
           isReversing={isReversingPhase6}
           reversalError={actionError}
+        />
+      )}
+
+      {viewMode === 'ENTITLEMENTS' && (
+        <EntitlementPanel
+          people={people}
+          selectedPersonId={selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId}
+          onSelectPersonId={handleSelectPersonForEntitlement}
+          balances={entitlementBalances}
+          transactions={entitlementTransactions}
+          isAdmin={isAdmin}
+          period={period}
+          onOpenCreditModal={(cfg) => {
+            setCreditModalConfig(cfg);
+            setIsCreditModalOpen(true);
+          }}
+          onReverseConsumption={handleReverseConsumption}
+          onReverseCredit={handleReverseCredit}
+          isReversing={isReversingEntitlement}
+          error={actionError}
         />
       )}
 
@@ -576,6 +793,43 @@ export default function Phase5RosterContainer({
         people={people}
         absences={absences}
         isSubmitting={isSubmittingReplacement}
+        error={actionError}
+      />
+
+      {/* Phase 7 Entitlement Credit Modal */}
+      <EntitlementCreditModal
+        key={`credit-${creditModalConfig?.mode}-${creditModalConfig?.personId || selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId}-${isCreditModalOpen}`}
+        isOpen={isCreditModalOpen}
+        onClose={() => {
+          setIsCreditModalOpen(false);
+          setCreditModalConfig(null);
+        }}
+        initialMode={creditModalConfig?.mode || 'EARN_GOFF'}
+        personId={creditModalConfig?.personId || selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId}
+        period={period}
+        people={people}
+        currentAssignments={currentRoster?.assignments || []}
+        plannedAssignments={plannedRoster?.assignments || []}
+        existingTransactions={entitlementTransactions}
+        onEarnGoff={handleEarnGoff}
+        onEarnGhka={handleEarnGhka}
+        onCreditManual={handleCreditManual}
+        isSubmitting={isSubmittingCredit}
+        error={actionError}
+      />
+
+      {/* Phase 7 Entitlement Consume Modal */}
+      <EntitlementConsumeModal
+        key={`consume-${selectedDutyForEntitlement?.personId}-${selectedDutyForEntitlement?.date}-${consumeEntitlementType}-${Boolean(selectedDutyForEntitlement)}`}
+        isOpen={Boolean(selectedDutyForEntitlement)}
+        onClose={() => setSelectedDutyForEntitlement(null)}
+        targetDuty={selectedDutyForEntitlement}
+        balances={entitlementBalances}
+        initialType={consumeEntitlementType}
+        absences={absences}
+        expectedRevision={lifecycle?.revision || 0}
+        onConsume={handleConsumeEntitlement}
+        isSubmitting={isSubmittingConsume}
         error={actionError}
       />
 

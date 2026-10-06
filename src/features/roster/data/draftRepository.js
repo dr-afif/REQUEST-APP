@@ -111,6 +111,76 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
         shortageReason:semanticPayload.shortageReason
       };
     }
+    if(op.operationType==='ENTITLEMENT_EARN_GOFF'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        personId:semanticPayload.personId,
+        date:semanticPayload.date,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='ENTITLEMENT_EARN_GHKA'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        personId:semanticPayload.personId,
+        date:semanticPayload.date,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='ENTITLEMENT_CREDIT_MANUAL'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        personId:semanticPayload.personId,
+        entitlementType:semanticPayload.entitlementType,
+        amount:semanticPayload.amount,
+        effectiveDate:semanticPayload.effectiveDate,
+        reasonCode:semanticPayload.reasonCode,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='ENTITLEMENT_CONSUME'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        personId:semanticPayload.personId,
+        entitlementType:semanticPayload.entitlementType,
+        date:semanticPayload.date,
+        expectedRevision:semanticPayload.expectedRevision!==undefined?semanticPayload.expectedRevision:op.expectedRevision,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='ENTITLEMENT_CREDIT_REVERSAL'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        transactionId:semanticPayload.transactionId,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='ENTITLEMENT_CONSUMPTION_REVERSAL'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        transactionId:semanticPayload.transactionId,
+        expectedRevision:semanticPayload.expectedRevision!==undefined?semanticPayload.expectedRevision:op.expectedRevision,
+        adminNote:semanticPayload.adminNote
+      };
+    }
     return {...base,payload:op.payload};
   };
   return {
@@ -137,6 +207,21 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
     recoverReplacement:operationId=>request('rosterv2replacementrecover',{operationId},true),
     getAbsences:periodId=>request('rosterv2absences',typeof periodId==='object'?periodId:{periodId}),
     getReplacements:periodId=>request('rosterv2replacements',typeof periodId==='object'?periodId:{periodId}),
+    earnGoff:op=>request('rosterv2entitlementearngoff',lifecycleWire(op),true),
+    earnGhka:op=>request('rosterv2entitlementearnghka',lifecycleWire(op),true),
+    creditManual:op=>request('rosterv2entitlementcreditmanual',lifecycleWire(op),true),
+    consumeEntitlement:op=>request('rosterv2entitlementconsume',lifecycleWire(op),true),
+    reverseCredit:op=>request('rosterv2entitlementcreditreverse',lifecycleWire(op),true),
+    reverseConsumption:op=>request('rosterv2entitlementconsumereverse',lifecycleWire(op),true),
+    recoverEntitlement:operationId=>request('rosterv2entitlementrecover',{operationId},true),
+    getEntitlementBalances:async params=>{
+      const param=typeof params==='object'?params:{personId:params};
+      return request('rosterv2entitlementbalances',param);
+    },
+    getEntitlementTransactions:async params=>{
+      const param=typeof params==='object'?params:{periodId:params};
+      return request('rosterv2entitlementtransactions',param);
+    },
     getPlannedRoster:async periodId=>{
       const param=typeof periodId==='object'?periodId:{periodId};
       const res=await request('rosterv2planned',param);

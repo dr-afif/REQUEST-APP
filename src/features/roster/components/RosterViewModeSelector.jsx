@@ -73,6 +73,24 @@ export default function RosterViewModeSelector({
           </span>
         )}
       </button>
+
+      <button
+        type="button"
+        role="tab"
+        id="view-mode-entitlements"
+        data-testid="view-mode-entitlements"
+        aria-selected={mode === 'ENTITLEMENTS'}
+        disabled={disabled}
+        onClick={() => onChange('ENTITLEMENTS')}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+          mode === 'ENTITLEMENTS'
+            ? 'bg-white text-indigo-700 shadow-xs ring-1 ring-slate-200/80'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+        } disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer`}
+      >
+        <span>⚖️</span>
+        <span>Entitlements</span>
+      </button>
     </div>
   );
 }
