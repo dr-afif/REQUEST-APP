@@ -5,12 +5,19 @@ import CurrentRosterView from './CurrentRosterView.jsx';
 import PlannedRosterView from './PlannedRosterView.jsx';
 import AmendmentHistoryPanel from './AmendmentHistoryPanel.jsx';
 import AmendmentModal from './AmendmentModal.jsx';
+import AbsenceModal from './AbsenceModal.jsx';
+import ReplacementModal from './ReplacementModal.jsx';
 import UndoToast from './UndoToast.jsx';
 
 /**
- * Phase 5 Slice 4 Main Container:
+ * Phase 5/6 Roster Container:
  * Exposes Current, Planned, and Changes UI modes.
- * Orchestrates authoritative mutations, 10-second Undo, and dependency-safe reversals.
+ * Orchestrates authoritative mutations:
+ *   - Phase 5 Amendments (Correction & Swap), 10-second Undo, Reversals
+ *   - Phase 6 Operational Absences (MC, EL, AL, COURSE) & Shortage Workflow
+ *   - Phase 6 Replacement Coverage & Candidate Guidance
+ *   - Dedicated Absence & Replacement Recovery
+ * Rejects stale async responses across period switching.
  */
 export default function Phase5RosterContainer({
   period,
@@ -19,7 +26,8 @@ export default function Phase5RosterContainer({
   queue: externalQueue = null,
   runtimeFactory = draftRuntime,
   onLifecycleStateChange = null,
-  undoDurationMs = 10000
+  undoDurationMs = 10000,
+  people = []
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [viewMode, setViewMode] = useState('CURRENT');
@@ -28,16 +36,34 @@ export default function Phase5RosterContainer({
   const [currentRoster, setCurrentRoster] = useState(null);
   const [plannedRoster, setPlannedRoster] = useState(null);
   const [amendmentHistory, setAmendmentHistory] = useState(null);
+  const [absences, setAbsences] = useState([]);
+  const [replacements, setReplacements] = useState([]);
 
-  // Error banners
+  // Error and conflict banners
   const [actionError, setActionError] = useState(null);
   const [revisionConflictMsg, setRevisionConflictMsg] = useState(null);
 
-  // Amendment modal
+  // Recovery required state
+  const [recoveryOp, setRecoveryOp] = useState(null);
+  const [isRecovering, setIsRecovering] = useState(false);
+
+  // Phase 5 Amendment modal
   const [selectedCellForAmend, setSelectedCellForAmend] = useState(null);
   const [isSubmittingAmend, setIsSubmittingAmend] = useState(false);
 
-  // 10-second Undo
+  // Phase 6 Absence modal
+  const [isAbsenceModalOpen, setIsAbsenceModalOpen] = useState(false);
+  const [selectedDutyForAbsence, setSelectedDutyForAbsence] = useState(null);
+  const [isSubmittingAbsence, setIsSubmittingAbsence] = useState(false);
+
+  // Phase 6 Replacement modal
+  const [selectedDutyForReplacement, setSelectedDutyForReplacement] = useState(null);
+  const [isSubmittingReplacement, setIsSubmittingReplacement] = useState(false);
+
+  // Phase 6 Reversals
+  const [isReversingPhase6, setIsReversingPhase6] = useState(false);
+
+  // 10-second Undo for amendments
   const [undoEvent, setUndoEvent] = useState(null);
 
   // Monotonic generation counter to prevent stale async responses across month switching
@@ -47,6 +73,17 @@ export default function Phase5RosterContainer({
     settings?.roster_v2_write_enabled && settings?.write_queue_v2_enabled
   );
   const readEnabled = Boolean(settings?.roster_v2_read_enabled !== false);
+
+  // Check for any unresolved operations needing recovery
+  const syncRecoveryState = useCallback((q, p) => {
+    if (!q || !p) return;
+    try {
+      const qView = q.view?.();
+      const ops = qView?.operations || [];
+      const rec = ops.find(o => o.status === 'RECOVERY_REQUIRED' && !o.everConfirmed);
+      setRecoveryOp(rec || null);
+    } catch (_) {}
+  }, []);
 
   // Unified reload function
   const loadAuthoritativeData = useCallback(async (targetQueue, targetPeriod, gen) => {
@@ -61,6 +98,8 @@ export default function Phase5RosterContainer({
         setCurrentRoster(null);
         setPlannedRoster(null);
         setAmendmentHistory(null);
+        setAbsences([]);
+        setReplacements([]);
         onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: false, state: null, revision: null });
         return;
       }
@@ -71,19 +110,23 @@ export default function Phase5RosterContainer({
       setLifecycle({ state, revision });
       onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: true, state, revision });
 
-      // If DRAFT, Phase 5 view modes and amendment controls are not active
+      // If DRAFT, Phase 5/6 view modes and mutation controls are not active
       if (state === 'DRAFT') {
         setCurrentRoster(null);
         setPlannedRoster(null);
         setAmendmentHistory(null);
+        setAbsences([]);
+        setReplacements([]);
         return;
       }
 
-      // 2. Concurrently fetch Current, Planned, and Changes using canonical repository methods
-      const [currRes, planRes, histRes] = await Promise.all([
+      // 2. Concurrently fetch Current, Planned, Changes, Absences, and Replacements
+      const [currRes, planRes, histRes, absRes, replRes] = await Promise.all([
         targetQueue.getCurrentRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getPlannedRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
-        targetQueue.getAmendmentHistory(targetPeriod).catch((e) => ({ ok: false, error: e }))
+        targetQueue.getAmendmentHistory(targetPeriod).catch((e) => ({ ok: false, error: e })),
+        targetQueue.getAbsences?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, absences: [] }),
+        targetQueue.getReplacements?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, replacements: [] })
       ]);
 
       if (gen !== requestGenRef.current) return;
@@ -97,12 +140,20 @@ export default function Phase5RosterContainer({
       if (histRes?.ok) {
         setAmendmentHistory(histRes);
       }
+      if (absRes?.ok) {
+        setAbsences(absRes.absences || []);
+      }
+      if (replRes?.ok) {
+        setReplacements(replRes.replacements || []);
+      }
+
+      syncRecoveryState(targetQueue, targetPeriod);
     } catch (err) {
       if (gen === requestGenRef.current) {
         setActionError(err.message || 'Failed to load authoritative roster data');
       }
     }
-  }, [onLifecycleStateChange]);
+  }, [onLifecycleStateChange, syncRecoveryState]);
 
   // Initial and period change effect
   useEffect(() => {
@@ -115,12 +166,18 @@ export default function Phase5RosterContainer({
     setActionError(null);
     setRevisionConflictMsg(null);
     setSelectedCellForAmend(null);
+    setIsAbsenceModalOpen(false);
+    setSelectedDutyForAbsence(null);
+    setSelectedDutyForReplacement(null);
     setUndoEvent(null);
     setViewMode('CURRENT'); // Default view mode is Current
     setCurrentRoster(null);
     setPlannedRoster(null);
     setAmendmentHistory(null);
+    setAbsences([]);
+    setReplacements([]);
     setLifecycle(null);
+    setRecoveryOp(null);
 
     (async () => {
       try {
@@ -147,7 +204,7 @@ export default function Phase5RosterContainer({
     };
   }, [period, settings, externalQueue, runtimeFactory, loadAuthoritativeData]);
 
-  // Handle amendment submission (ADMIN_CORRECTION or SWAP)
+  // Handle Phase 5 amendment submission (ADMIN_CORRECTION or SWAP)
   const handleAmendmentSubmit = useCallback(async (payload) => {
     if (!queue || isSubmittingAmend) return;
     setIsSubmittingAmend(true);
@@ -155,13 +212,9 @@ export default function Phase5RosterContainer({
     setRevisionConflictMsg(null);
 
     try {
-      // Execute through Phase 5 queue
       const res = await queue.amend(period, payload);
-
-      // Successfully confirmed
       setSelectedCellForAmend(null);
 
-      // Trigger 10-second Undo
       const confirmedEventId = res?.eventId || res?.EventId;
       if (confirmedEventId) {
         const desc = payload.eventType === 'SWAP'
@@ -175,13 +228,11 @@ export default function Phase5RosterContainer({
         });
       }
 
-      // Reload authoritative data
       await loadAuthoritativeData(queue, period, requestGenRef.current);
     } catch (err) {
       const code = err.code || err.message;
       if (code === 'REVISION_CONFLICT') {
         setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
-        // Refresh authoritative data upon revision conflict
         await loadAuthoritativeData(queue, period, requestGenRef.current);
       } else {
         setActionError(err.message || code);
@@ -191,7 +242,7 @@ export default function Phase5RosterContainer({
     }
   }, [queue, isSubmittingAmend, period, loadAuthoritativeData]);
 
-  // Handle authoritative reversal (invoked by Undo or Changes history panel)
+  // Handle Phase 5 event reversal
   const handleReverseEvent = useCallback(async (eventId, adminNote = '') => {
     if (!queue || !eventId) return;
     setActionError(null);
@@ -199,13 +250,9 @@ export default function Phase5RosterContainer({
 
     try {
       await queue.reverseAmendment(period, eventId, { adminNote });
-
-      // Clear undo toast if this was the undoEvent being reversed
       if (undoEvent && undoEvent.eventId === eventId) {
         setUndoEvent(null);
       }
-
-      // Refresh authoritative data
       await loadAuthoritativeData(queue, period, requestGenRef.current);
     } catch (err) {
       const code = err.code || err.message;
@@ -217,7 +264,126 @@ export default function Phase5RosterContainer({
     }
   }, [queue, period, undoEvent, loadAuthoritativeData]);
 
-  // If not enrolled or in DRAFT state or V2 read is disabled: container does not render Phase 5 modes
+  // Handle Phase 6 Absence Submission
+  const handleAbsenceSubmit = useCallback(async (payload) => {
+    if (!queue || isSubmittingAbsence) return;
+    setIsSubmittingAbsence(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.createAbsence(period, payload);
+      setIsAbsenceModalOpen(false);
+      setSelectedDutyForAbsence(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSubmittingAbsence(false);
+    }
+  }, [queue, isSubmittingAbsence, period, loadAuthoritativeData]);
+
+  // Handle Phase 6 Replacement Submission
+  const handleReplacementSubmit = useCallback(async (payload) => {
+    if (!queue || isSubmittingReplacement) return;
+    setIsSubmittingReplacement(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.createReplacement(period, payload);
+      setSelectedDutyForReplacement(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSubmittingReplacement(false);
+    }
+  }, [queue, isSubmittingReplacement, period, loadAuthoritativeData]);
+
+  // Handle Phase 6 Absence Reversal
+  const handleReverseAbsence = useCallback(async (absenceId, adminNote = '') => {
+    if (!queue || !absenceId || isReversingPhase6) return;
+    setIsReversingPhase6(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.reverseAbsence(period, absenceId, { adminNote });
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+      throw err;
+    } finally {
+      setIsReversingPhase6(false);
+    }
+  }, [queue, period, isReversingPhase6, loadAuthoritativeData]);
+
+  // Handle Phase 6 Replacement Reversal
+  const handleReverseReplacement = useCallback(async (replacementId, options = {}) => {
+    if (!queue || !replacementId || isReversingPhase6) return;
+    setIsReversingPhase6(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.reverseReplacement(period, replacementId, options);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+      throw err;
+    } finally {
+      setIsReversingPhase6(false);
+    }
+  }, [queue, period, isReversingPhase6, loadAuthoritativeData]);
+
+  // Handle Dedicated Recovery
+  const handleRetryRecovery = useCallback(async (opId, opType) => {
+    if (!queue || !opId || isRecovering) return;
+    setIsRecovering(true);
+    setActionError(null);
+    try {
+      if (opType === 'ABSENCE_CREATE' || opType === 'ABSENCE_REVERSE') {
+        await queue.recoverAbsence(opId);
+      } else if (opType === 'REPLACEMENT_CREATE' || opType === 'REPLACEMENT_REVERSE') {
+        await queue.recoverReplacement(opId);
+      } else {
+        await queue.retry(`draft:${period}`, opId);
+      }
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      setRecoveryOp(null);
+    } catch (err) {
+      setActionError(err.message || 'Recovery attempt failed');
+    } finally {
+      setIsRecovering(false);
+    }
+  }, [queue, period, isRecovering, loadAuthoritativeData]);
+
+  // If not enrolled or in DRAFT state or V2 read is disabled: container does not render Phase 5/6 modes
   const state = lifecycle?.state;
   const isEnrolledAndActive = Boolean(
     readEnabled &&
@@ -234,11 +400,11 @@ export default function Phase5RosterContainer({
   }
 
   if (!isEnrolledAndActive) {
-    // Legacy or Draft mode: Phase 5 controls are not exposed
     return null;
   }
 
-  const activeAmendmentCount = currentRoster?.activeAmendmentCount || amendmentHistory?.count || 0;
+  const activeAmendmentCount = (currentRoster?.activeAmendmentCount || amendmentHistory?.count || 0) +
+    (absences.filter(a => a.Status === 'ACTIVE').length);
 
   return (
     <div className="space-y-4" id="phase-5-roster-container" data-testid="phase-5-roster-container">
@@ -256,9 +422,47 @@ export default function Phase5RosterContainer({
           <button
             type="button"
             onClick={() => setRevisionConflictMsg(null)}
-            className="text-amber-700 hover:text-amber-900 font-bold text-xs"
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs cursor-pointer"
           >
             ✕
+          </button>
+        </div>
+      )}
+
+      {/* Recovery Required Banner */}
+      {recoveryOp && (
+        <div
+          id="recovery-required-banner"
+          data-testid="recovery-required-banner"
+          className="p-3.5 rounded-xl bg-rose-50 border border-rose-300 text-xs text-rose-900 flex flex-wrap items-center justify-between gap-3 shadow-xs"
+          role="alert"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-rose-600 font-bold text-sm">🚨</span>
+            <div>
+              <p className="font-bold flex items-center gap-2">
+                <span>Recovery Required:</span>
+                <span className="px-2 py-0.2 rounded-full bg-rose-200 text-rose-900 text-[10px] font-mono">
+                  {recoveryOp.operationType}
+                </span>
+                <span className="font-mono text-[10px] text-rose-700">
+                  (ID: {recoveryOp.operationId})
+                </span>
+              </p>
+              <p className="text-[11px] text-rose-800 mt-0.5">
+                The last operation encountered an ambiguous backend outcome and requires reconciliation.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            id="btn-retry-recovery"
+            data-testid="btn-retry-recovery"
+            disabled={isRecovering}
+            onClick={() => handleRetryRecovery(recoveryOp.operationId, recoveryOp.operationType)}
+            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold transition shadow-2xs disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+          >
+            {isRecovering ? 'Reconciling…' : 'Retry / Reconcile'}
           </button>
         </div>
       )}
@@ -266,7 +470,7 @@ export default function Phase5RosterContainer({
       {/* Action Error Banner */}
       {actionError && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium" role="alert">
-          <p className="font-bold">Error</p>
+          <p className="font-bold">Notice</p>
           <p>{actionError}</p>
         </div>
       )}
@@ -294,11 +498,21 @@ export default function Phase5RosterContainer({
         <CurrentRosterView
           currentAssignments={currentRoster?.assignments || []}
           plannedAssignments={plannedRoster?.assignments || []}
+          people={people}
           period={period}
           isAdmin={isAdmin}
           lifecycleState={state}
           mutationsEnabled={mutationsEnabled}
           onSelectCellForAmend={(cell) => setSelectedCellForAmend(cell)}
+          onSelectDutyForAbsence={(duty) => {
+            setSelectedDutyForAbsence(duty);
+            setIsAbsenceModalOpen(true);
+          }}
+          onSelectDutyForReplacement={(duty) => setSelectedDutyForReplacement(duty)}
+          onOpenAbsenceModal={() => {
+            setSelectedDutyForAbsence(null);
+            setIsAbsenceModalOpen(true);
+          }}
         />
       )}
 
@@ -312,12 +526,20 @@ export default function Phase5RosterContainer({
       {viewMode === 'CHANGES' && (
         <AmendmentHistoryPanel
           events={amendmentHistory?.events || []}
+          absences={absences}
+          replacements={replacements}
+          currentAssignments={currentRoster?.assignments || []}
+          people={people}
           isAdmin={isAdmin}
           onReverse={(eventId, adminNote) => handleReverseEvent(eventId, adminNote)}
+          onReverseAbsence={(absenceId, adminNote) => handleReverseAbsence(absenceId, adminNote)}
+          onReverseReplacement={(replacementId, options) => handleReverseReplacement(replacementId, options)}
+          isReversing={isReversingPhase6}
+          reversalError={actionError}
         />
       )}
 
-      {/* Amendment Modal (Admin Correction & Swap) */}
+      {/* Phase 5 Amendment Modal (Correction & Swap) */}
       <AmendmentModal
         isOpen={Boolean(selectedCellForAmend)}
         onClose={() => setSelectedCellForAmend(null)}
@@ -325,6 +547,35 @@ export default function Phase5RosterContainer({
         targetCell={selectedCellForAmend}
         availableParticipants={currentRoster?.assignments || []}
         isSubmitting={isSubmittingAmend}
+        error={actionError}
+      />
+
+      {/* Phase 6 Absence Modal */}
+      <AbsenceModal
+        isOpen={isAbsenceModalOpen}
+        onClose={() => {
+          setIsAbsenceModalOpen(false);
+          setSelectedDutyForAbsence(null);
+        }}
+        onSubmit={handleAbsenceSubmit}
+        currentAssignments={currentRoster?.assignments || []}
+        people={people}
+        preselectedDuty={selectedDutyForAbsence}
+        isSubmitting={isSubmittingAbsence}
+        error={actionError}
+        period={period}
+      />
+
+      {/* Phase 6 Replacement Modal */}
+      <ReplacementModal
+        isOpen={Boolean(selectedDutyForReplacement)}
+        onClose={() => setSelectedDutyForReplacement(null)}
+        onSubmit={handleReplacementSubmit}
+        targetDuty={selectedDutyForReplacement}
+        currentAssignments={currentRoster?.assignments || []}
+        people={people}
+        absences={absences}
+        isSubmitting={isSubmittingReplacement}
         error={actionError}
       />
 

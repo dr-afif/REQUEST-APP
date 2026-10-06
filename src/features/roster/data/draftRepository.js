@@ -56,6 +56,61 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
         adminNote:semanticPayload.adminNote
       };
     }
+    if(op.operationType==='ABSENCE_CREATE'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        personId:semanticPayload.personId,
+        absenceType:semanticPayload.absenceType,
+        startDate:semanticPayload.startDate,
+        endDate:semanticPayload.endDate,
+        dutyDomain:semanticPayload.dutyDomain,
+        publicReason:semanticPayload.publicReason,
+        adminNote:semanticPayload.adminNote,
+        shortageAccepted:semanticPayload.shortageAccepted,
+        shortageReason:semanticPayload.shortageReason
+      };
+    }
+    if(op.operationType==='REPLACEMENT_CREATE'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        absenceId:semanticPayload.absenceId,
+        originalAssignmentId:semanticPayload.originalAssignmentId,
+        replacementPersonId:semanticPayload.replacementPersonId,
+        date:semanticPayload.date,
+        dutyDomain:semanticPayload.dutyDomain,
+        shiftCode:semanticPayload.shiftCode,
+        publicReason:semanticPayload.publicReason,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='ABSENCE_REVERSE'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        absenceId:semanticPayload.absenceId,
+        adminNote:semanticPayload.adminNote
+      };
+    }
+    if(op.operationType==='REPLACEMENT_REVERSE'){
+      const semanticPayload=op.payload?.payload||op.payload||{};
+      return {
+        ...base,
+        payloadHash:op.payloadHash,
+        payload:semanticPayload,
+        replacementId:semanticPayload.replacementId,
+        adminNote:semanticPayload.adminNote,
+        shortageAccepted:semanticPayload.shortageAccepted,
+        shortageReason:semanticPayload.shortageReason
+      };
+    }
     return {...base,payload:op.payload};
   };
   return {
@@ -74,6 +129,14 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
     amend:op=>request('rosterv2amend',lifecycleWire(op),true),
     reverseAmendment:op=>request('rosterv2amendreversal',lifecycleWire(op),true),
     getAmendmentHistory:periodId=>request('rosterv2amendmenthistory',typeof periodId==='object'?periodId:{periodId}),
+    createAbsence:op=>request('rosterv2absencecreate',lifecycleWire(op),true),
+    createReplacement:op=>request('rosterv2replacementcreate',lifecycleWire(op),true),
+    reverseAbsence:op=>request('rosterv2absencereverse',lifecycleWire(op),true),
+    reverseReplacement:op=>request('rosterv2replacementreverse',lifecycleWire(op),true),
+    recoverAbsence:operationId=>request('rosterv2absencerecover',{operationId},true),
+    recoverReplacement:operationId=>request('rosterv2replacementrecover',{operationId},true),
+    getAbsences:periodId=>request('rosterv2absences',typeof periodId==='object'?periodId:{periodId}),
+    getReplacements:periodId=>request('rosterv2replacements',typeof periodId==='object'?periodId:{periodId}),
     getPlannedRoster:async periodId=>{
       const param=typeof periodId==='object'?periodId:{periodId};
       const res=await request('rosterv2planned',param);

@@ -105,6 +105,14 @@ export class DraftQueue {
         response = await this.repository.amend(op);
       } else if (op.operationType === 'PERIOD_AMEND_REVERSAL') {
         response = await this.repository.reverseAmendment(op);
+      } else if (op.operationType === 'ABSENCE_CREATE') {
+        response = await this.repository.createAbsence(op);
+      } else if (op.operationType === 'REPLACEMENT_CREATE') {
+        response = await this.repository.createReplacement(op);
+      } else if (op.operationType === 'ABSENCE_REVERSE') {
+        response = await this.repository.reverseAbsence(op);
+      } else if (op.operationType === 'REPLACEMENT_REVERSE') {
+        response = await this.repository.reverseReplacement(op);
       } else {
         response = await this.repository.write(op);
       }
@@ -198,7 +206,13 @@ export class DraftQueue {
     try{
       let response;
       if (frozen.operationClass === 'LIFECYCLE' && frozen.status === 'RECOVERY_REQUIRED' && frozen.lastError !== 'CHECKSUM_MISMATCH' && frozen.operationType !== 'PERIOD_AMEND' && frozen.operationType !== 'PERIOD_AMEND_REVERSAL') {
-        response = await this.repository.recoverLifecycle(id);
+        if (frozen.operationType === 'ABSENCE_CREATE' || frozen.operationType === 'ABSENCE_REVERSE') {
+          response = await this.repository.recoverAbsence(id);
+        } else if (frozen.operationType === 'REPLACEMENT_CREATE' || frozen.operationType === 'REPLACEMENT_REVERSE') {
+          response = await this.repository.recoverReplacement(id);
+        } else {
+          response = await this.repository.recoverLifecycle(id);
+        }
       } else {
         response = await this.repository.status(id);
       }
@@ -220,6 +234,24 @@ export class DraftQueue {
         if(op.operationType==='PERIOD_AMEND'||op.operationType==='PERIOD_AMEND_REVERSAL'){
           await this.change(key,e=>{const o=e.operations.find(x=>x.operationId===id);o.attemptCount=0;o.nextRetryAt=0;o.status='RETRY_SCHEDULED';return e;});
           await this.send(key,id);
+          return;
+        }
+        if(op.operationType==='ABSENCE_CREATE'||op.operationType==='ABSENCE_REVERSE'){
+          const rec=await this.repository.recoverAbsence(id);
+          if(rec.ok&&rec.status==='CONFIRMED'){
+            await this.handle(key,id,rec);
+            return;
+          }
+          await this.handle(key,id,rec);
+          return;
+        }
+        if(op.operationType==='REPLACEMENT_CREATE'||op.operationType==='REPLACEMENT_REVERSE'){
+          const rec=await this.repository.recoverReplacement(id);
+          if(rec.ok&&rec.status==='CONFIRMED'){
+            await this.handle(key,id,rec);
+            return;
+          }
+          await this.handle(key,id,rec);
           return;
         }
         const rec=await this.repository.recoverLifecycle(id);
@@ -674,6 +706,412 @@ export class DraftQueue {
       if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
       return {ok:true,operationId:id,status:targetOp.status,pending:true};
     });
+  }
+  async createAbsence(periodId, payload, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot record absence`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot record absence`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot record absence`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ABSENCE_CREATE'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ABSENCE_CREATE'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ABSENCE_CREATE',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async createReplacement(periodId, payload, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot assign replacement`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot assign replacement`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot assign replacement`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='REPLACEMENT_CREATE'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='REPLACEMENT_CREATE'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'REPLACEMENT_CREATE',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async reverseAbsence(periodId, payloadOrAbsenceId, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    const payload=typeof payloadOrAbsenceId==='string'
+      ?{absenceId:payloadOrAbsenceId,...(options.payload||{}),adminNote:options.adminNote||''}
+      :(payloadOrAbsenceId||{});
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot reverse absence`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot reverse absence`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot reverse absence`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='ABSENCE_REVERSE'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='ABSENCE_REVERSE'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'ABSENCE_REVERSE',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async reverseReplacement(periodId, payloadOrReplacementId, options={}){
+    if(!this.enabled())throw protocol.fail('FEATURE_DISABLED');
+    if(!this.locks)throw protocol.fail('PERMANENT_FAILURE',{reason:'WEB_LOCKS_UNAVAILABLE'});
+    RosterCompatibility.validatePeriod(periodId);
+    const key=`draft:${periodId}`;
+    await this.flush(periodId);
+    await this.waitForDraftSettled(periodId);
+
+    const payload=typeof payloadOrReplacementId==='string'
+      ?{replacementId:payloadOrReplacementId,...(options.payload||{}),adminNote:options.adminNote||'',shortageAccepted:options.shortageAccepted,shortageReason:options.shortageReason}
+      :(payloadOrReplacementId||{});
+
+    return this.locks.request(this.store.name+':'+key,async()=>{
+      await this.reload();
+      const stored=await this.store.read(key);
+      const current=stored?await this.validateStored(stored):emptyEntity(key);
+      const currentState=String(current.lifecycle?.state||'DRAFT').toUpperCase();
+      if(currentState==='DRAFT'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is in DRAFT state and cannot reverse replacement`});
+      }
+      if(currentState==='CLOSED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} is CLOSED and cannot reverse replacement`});
+      }
+      if(currentState!=='PUBLISHED'&&currentState!=='AMENDED'){
+        throw protocol.fail('INVALID_STATE',{message:`Period ${periodId} in state ${currentState} cannot reverse replacement`});
+      }
+
+      const earlierUnresolved=current.operations.find(o=>!terminal(o));
+      let op=current.operations.find(o=>o.operationType==='REPLACEMENT_REVERSE'&&!terminal(o));
+      let id;
+      if(options.operationId&&earlierUnresolved&&earlierUnresolved.operationId===options.operationId){
+        op=earlierUnresolved;
+      }else if(earlierUnresolved&&(!options.operationId||earlierUnresolved.operationId!==options.operationId)){
+        throw protocol.fail('LIFECYCLE_OPERATION_PENDING',{
+          message:'An earlier operation is still unresolved',
+          operationId:earlierUnresolved.operationId
+        });
+      }
+
+      if(op){
+        id=op.operationId;
+        await this.change(key,e=>{
+          const target=e.operations.find(o=>o.operationId===id);
+          if(target&&!terminal(target)){target.nextRetryAt=0;}
+          return e;
+        });
+      }else{
+        id=options.operationId||crypto.randomUUID();
+        const expectedRevision=options.expectedRevision!==undefined
+          ?options.expectedRevision
+          :(Number.isSafeInteger(current.lifecycle?.revision)?current.lifecycle.revision:0);
+        await this.change(key,e=>{
+          const st=String(e.lifecycle?.state||'DRAFT').toUpperCase();
+          if(st==='DRAFT'||st==='CLOSED')throw protocol.fail('INVALID_STATE');
+          const existingOp=e.operations.find(o=>o.operationType==='REPLACEMENT_REVERSE'&&!terminal(o));
+          if(existingOp){id=existingOp.operationId;return e;}
+          const base={
+            operationId:id,
+            clientId:this.clientId,
+            tabId:this.tabId,
+            operationType:'REPLACEMENT_REVERSE',
+            entityKey:key,
+            expectedRevision:expectedRevision,
+            payload:{periodId,payload}
+          };
+          protocol.payload(base);
+          const newOp={
+            ...base,
+            schemaVersion:1,
+            operationClass:'LIFECYCLE',
+            payloadHash:null,
+            localSequence:++e.sequence,
+            status:'QUEUED',
+            everSent:false,
+            attemptCount:0,
+            nextRetryAt:0,
+            lastError:null,
+            createdAt:this.now(),
+            updatedAt:this.now(),
+            lastConfirmed:{}
+          };
+          e.operations.push(newOp);
+          return e;
+        });
+      }
+
+      await this.process(key);
+      const after=await this.validateStored(await this.store.read(key));
+      const targetOp=after.operations.find(o=>o.operationId===id);
+      if(!targetOp)throw protocol.fail('PERMANENT_FAILURE');
+      if(targetOp.status==='CONFIRMED')return after.lifecycle;
+      if(targetOp.status==='RECOVERY_REQUIRED'){
+        throw protocol.fail('RECOVERY_REQUIRED',{operationId:id,errorCode:targetOp.lastError,status:'RECOVERY_REQUIRED'});
+      }
+      if(targetOp.status==='CONFLICT')throw protocol.fail('REVISION_CONFLICT',{operationId:id});
+      if(targetOp.status==='FAILED')throw protocol.fail(targetOp.lastError||'PERMANENT_FAILURE',{operationId:id});
+      return {ok:true,operationId:id,status:targetOp.status,pending:true};
+    });
+  }
+
+  async recoverAbsence(operationId){
+    return this.repository.recoverAbsence(operationId);
+  }
+  async recoverReplacement(operationId){
+    return this.repository.recoverReplacement(operationId);
+  }
+  async getAbsences(periodId){
+    RosterCompatibility.validatePeriod(periodId);
+    return this.repository.getAbsences(periodId);
+  }
+  async getReplacements(periodId){
+    RosterCompatibility.validatePeriod(periodId);
+    return this.repository.getReplacements(periodId);
   }
   async getAmendmentHistory(periodId){
     RosterCompatibility.validatePeriod(periodId);

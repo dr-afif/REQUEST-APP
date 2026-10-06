@@ -1,16 +1,24 @@
 import React, { useState } from 'react';
+import OperationalAbsencePanel from './OperationalAbsencePanel.jsx';
 
 /**
  * Changes History Panel:
  * Shows chronological confirmed amendment/reversal history.
  * Groups SWAP lines into 1 logical entry.
+ * Surfaces Phase 6 Operational Absences and Replacements.
  * Protects admin privacy boundary (no AdminNote for viewers).
  * Provides dependency-safe Reversal for authorized admins.
  */
 export default function AmendmentHistoryPanel({
   events = [],
+  absences = [],
+  replacements = [],
+  currentAssignments = [],
+  people = [],
   isAdmin = false,
   onReverse,
+  onReverseAbsence,
+  onReverseReplacement,
   isReversing = false,
   reversalError = null
 }) {
@@ -237,6 +245,21 @@ export default function AmendmentHistoryPanel({
           })}
         </div>
       )}
+
+      {/* Operational Absences & Duty Replacements (Phase 6) */}
+      <div className="pt-4 border-t border-slate-200">
+        <OperationalAbsencePanel
+          absences={absences}
+          replacements={replacements}
+          currentAssignments={currentAssignments}
+          people={people}
+          isAdmin={isAdmin}
+          onReverseAbsence={onReverseAbsence}
+          onReverseReplacement={onReverseReplacement}
+          isReversing={isReversing}
+          reversalError={reversalError}
+        />
+      </div>
 
       {/* Reversal Confirmation Modal */}
       {selectedEventToReverse && (
