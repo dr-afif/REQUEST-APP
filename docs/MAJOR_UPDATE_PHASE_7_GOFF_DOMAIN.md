@@ -1,201 +1,192 @@
-# Phase 7 Slice 1 — GOFF Entitlement, Credit & Consumption Domain Foundation
+# Phase 7 Slice 1.1 — GOFF & GHKA Entitlement, Credit & Consumption Domain Foundation
 
 ## 1. Overview & Certified Baseline
 
-This document specifies the canonical domain foundation for **GOFF (Guaranteed Off / Replacement Day Off)** accounting, public-holiday credit generation, consumption, balance derivation, lineage, and append-only compensating reversals in REQUEST APP.
+This document specifies the canonical domain foundation for **GOFF (Guaranteed Off / Displaced Rest Day)** and **GHKA (Ganti Hari Kelepasan Am / Replacement Public Holiday)** accounting, credit generation, consumption, balance derivation, lineage, and append-only compensating reversals in REQUEST APP.
 
-- **Certified Baseline**: `dc9d4525195441351e9a229808c9507c91b1458b` (Phase 6 Slice 4 certified).
+- **Certified Baseline**: `aa3d819033c689e7d49db5f9d869244687d5b5ba` (Phase 7 Slice 1 checkpoint).
 - **Domain Module**: [`src/features/roster/goff.js`](file:///C:/Dev/REQUEST-APP/src/features/roster/goff.js).
 - **Domain Test Suite**: [`tests/phase7/domain.test.mjs`](file:///C:/Dev/REQUEST-APP/tests/phase7/domain.test.mjs).
-- **Phase 7 Branch**: `feature/phase-7-goff-ledger`.
+- **Branch**: `feature/phase-7-goff-ledger`.
+- **Authoritative Table / Sheet**: `RosterEntitlementTransactions` (append-only ledger).
 
 ---
 
-## 2. Git Lineage Discrepancy Resolution
+## 2. Git Lineage Forensic Verification
 
-Prior reporting identified commit `17712a4f7e177771ff3cf44d02d7ba570f567d21` with two conflicting descriptions:
+Prior reporting identified commit `17712a4f7e177771ff3cf44d02d7ba570f567d21` with conflicting descriptions:
 1. "legacy historical-roster frontend hotfix" (`fix(roster): backport safe historical month uploads`).
 2. "hotfix(pwa): register service worker without scope restriction".
 
-### Forensic Verification:
-Execution of `git show --no-patch --format=fuller 17712a4f7e177771ff3cf44d02d7ba570f567d21` confirmed:
+### Forensic Result:
+Execution of `git show --no-patch --format=fuller 17712a4f7e177771ff3cf44d02d7ba570f567d21` verified:
 - **Commit**: `17712a4f7e177771ff3cf44d02d7ba570f567d21`
 - **Author/Commit Date**: 2026-03-31T09:47:11+08:00
 - **Commit Message**: `fix(roster): backport safe historical month uploads`
 - **Lineage**: Identical on `main` and `origin/main`.
-- **Verdict**: The phrase referring to PWA service worker registration was an accidental documentation copy-paste typo in earlier certification text. The Git object graph itself is 100% valid, uncorrupted, and immutable.
+- **Verdict**: The phrase referring to PWA service worker registration was an accidental copy-paste typo in documentation. Git history is 100% valid, uncorrupted, and immutable.
 
 ---
 
-## 3. Discovered Legacy GOFF, HKA & GHKA Semantics
+## 3. Confirmed Business Rules: Separate Entitlement Domains
 
-An exhaustive audit of the codebase (`frontend`, `backend`, `legacy Apps Script`, `tests`, `docs`) reveals the following semantics:
+### A. GOFF (Guaranteed Off / Replacement Day Off)
+- **Concept**: Entitlement earned when a normal weekly rest day (`OFF`) is displaced by an administrative or operational working duty (e.g. working `AM`, `PM`, `ON1`, `ON2`, or required `PN` on an originally planned `OFF`).
+- **Source**: `DISPLACED_WEEKLY_OFF`.
+- **Earning Rule**: Evaluated via `qualifiesForDisplacedOffCredit`. Changing a planned `OFF` to an ordinary absence (`MC`, `EL`, `AL`, `COURSE`) or remaining `OFF`/`HKA` earns **zero** GOFF.
+- **Independence**: Working a public holiday does **NOT** earn GOFF.
 
-### A. HKA and GHKA
-- **HKA ("Hari Kelepasan Am")**: Public Holiday Off. A doctor planned or assigned to take off on a public holiday receives `HKA`.
-- **GHKA ("Ganti Hari Kelepasan Am")**: Replacement Public Holiday Off. A doctor who worked on a gazetted public holiday earns 1 replacement holiday off.
-- **Legacy Implementation**: [`src/utils/publicHolidayTracker.js`](file:///C:/Dev/REQUEST-APP/src/utils/publicHolidayTracker.js) and [`src/utils/holidays.js`](file:///C:/Dev/REQUEST-APP/src/utils/holidays.js). The legacy tracker inspects worked shifts (`AM`, `PM`, `ON1`, `ON2`, `NIGHT`, `AMX`, `PMX`, `PN`) against a gazetted holiday calendar, awarding +1 replacement holiday per worked holiday date.
+### B. GHKA ("Ganti Hari Kelepasan Am")
+- **Concept**: Entitlement earned by actually working an eligible duty on a gazetted public holiday.
+- **Source**: `PUBLIC_HOLIDAY_DUTY`.
+- **Earning Rule**: Evaluated via `qualifiesForPublicHolidayCredit`. A doctor performing an active clinical duty (`AM`, `PM`, `ON1`, `ON2`, `NIGHT`, `PN`, etc.) on a gazetted holiday earns **1 GHKA credit**. Non-working statuses (`OFF`, `HKA`, `GHKA`, `MC`, `AL`, `EL`, `COURSE`) earn **zero** GHKA.
+- **Single Credit Limit**: Maximum **1 GHKA** per person per holiday date, even if assigned multiple shifts (e.g. `AM` + `PM`).
+- **Coverage**: An absent doctor earns zero GHKA; the covering/replacement worker earns the GHKA credit.
+- **Independence**: A displaced weekly rest day does **NOT** earn GHKA.
 
-### B. GOFF ("Guaranteed Off / Replacement Day Off")
-- As defined in [`MAJOR_UPDATE_SPEC.md`](file:///C:/Dev/REQUEST-APP/MAJOR_UPDATE_SPEC.md#L85) and [`src/features/roster/guidance.js`](file:///C:/Dev/REQUEST-APP/src/features/roster/guidance.js), `GOFF` represents a **displaced weekly entitlement day off**.
-- When an administrative assignment displaces a planned `OFF` (such that a staff member works on what should have been their weekly rest day), the staff member is owed a replacement day off (`GOFF`).
-- In downstream reporting and PDF exports ([`src/utils/rosterPdfExport.js`](file:///C:/Dev/REQUEST-APP/src/utils/rosterPdfExport.js)), `GOFF` has the exact same visual weight as `OFF`, representing a rest day that breaks consecutive duty (`consecutive: 'RESET'`, `worked: false`).
+### C. Entitlement Separation & Anti-Pooling
+- `GOFF` and `GHKA` are **strictly separate entitlement balances**.
+- They are **NOT** pooled.
+- A GOFF credit cannot satisfy a GHKA consumption.
+- A GHKA credit cannot satisfy a GOFF consumption.
+- If a doctor has 0 GOFF credits and 5 GHKA credits, attempting a GOFF consumption fails closed with `INSUFFICIENT_GOFF_BALANCE`.
+- If a doctor has 5 GOFF credits and 0 GHKA credits, attempting a GHKA consumption fails closed with `INSUFFICIENT_GHKA_BALANCE`.
 
-### C. GOFF* ("GOFF Star") Semantics
-- In legacy code and MasterRoster text fixtures, occurrences of `GOFF*` exist.
-- Code audit demonstrates **zero programmatic distinction or custom calculation** for `GOFF*`. It was utilized historically by roster planners as an informal visual marker (e.g. indicating a carried-forward or replacement day off from a previous period).
-- In [`src/features/roster/compatibility.js`](file:///C:/Dev/REQUEST-APP/src/features/roster/compatibility.js), `GOFF*` preserves its raw text while resolving to non-working rest day behavior.
-- In Phase 7: `GOFF*` is documented as `GOFF_STAR_SEMANTICS_UNRESOLVED`. For canonical ledger accounting and projections, newly consumed replacement days project cleanly as `GOFF`.
+### D. HKA Semantics
+- **HKA ("Hari Kelepasan Am")**: Roster status for a doctor off/resting on a gazetted public holiday.
+- HKA is **neither** a credit nor a consumption.
+- HKA has **zero impact** on both GOFF and GHKA balances.
+- In `RosterCompatibility.resolveShift`, `HKA` resolves to `worked: false`, `consecutive: 'RESET'`.
 
-### D. Architectural Decision: SourceType Unification
-To satisfy both requirements without creating conflicting ledgers:
-- `MAJOR_UPDATE_SPEC.md` distinguishes displaced weekly OFF from public holiday GHKA.
-- Phase 7 Slice 1 specifications mandate supporting public-holiday credit generation within the ledger.
-- **Solution**: The canonical `RosterGoffTransactions` ledger explicitly distinguishes the provenance via `SourceType`:
-  1. `PUBLIC_HOLIDAY_DUTY`: Earned from working a qualifying shift on a gazetted public holiday.
-  2. `DISPLACED_WEEKLY_OFF`: Earned when a planned weekly rest day (`OFF`) is displaced by an administrative working duty.
-  3. `OPENING_BALANCE`: Certified historical balance grandfathered into Phase 7.
-  4. `ADMIN_ADJUSTMENT`: Authoritative manual managerial credit/deduction with mandatory public reason and admin note.
-
-> [!NOTE]
-> **BUSINESS_RULE_DECISION_REQUIRED (Coexistence vs Unified Ledger)**:
-> In Slice 1 domain foundation, both `PUBLIC_HOLIDAY_DUTY` and `DISPLACED_WEEKLY_OFF` are supported under the unified `RosterGoffTransactions` schema. Before Phase 7 Slice 2 backend rollout, clinical administration should formally decide whether legacy `GHKA` tracking is fully retired in favor of this ledger or whether the two ledgers run in parallel. The schema supports both without schema changes.
-
----
-
-## 4. Authoritative Identity Model
-
-All ledger transactions and balance calculations strictly require:
-- **`PersonId`**: The authoritative UUID of the staff member.
-- **`PersonNameSnapshot`**: Informational display snapshot only. Under no circumstances is name matching, fuzzy lookup, or row indexing permitted for ledger balance derivation.
-- **`DutyDomain`**: `MO` (Medical Officer).
-- **EP Domain Exclusion**: Staff in the `EP` domain are strictly excluded from MO staffing, consecutive work, and GOFF earning/consumption (`EP_DOMAIN_EXCLUDED`).
-- **Duplicate Display Names**: Multiple staff members sharing identical names (e.g. "Dr. Sarah Lee") are isolated completely by their unique `PersonId`.
+### E. GOFF* ("GOFF Star") Semantics
+- Marked as `GOFF_STAR_SEMANTICS_UNRESOLVED`.
+- Historical inspection shows zero algorithmic or business calculation tied to `GOFF*`; it was an informal legacy visual marker.
+- `GOFF*` is **not** an authoritative entitlement type.
+- Authoritative ledger transactions strictly use `GOFF` or `GHKA`.
 
 ---
 
-## 5. Append-Only Ledger Architecture
+## 4. Carry-Forward and Future Expiry Architecture
 
-Ledger transactions are stored in an append-only sheet/table `RosterGoffTransactions`. Physical row deletions or cell mutations are forbidden.
+### Current Expiry Policy:
+- **GOFF**: Carries forward indefinitely across months and calendar years.
+- **GHKA**: Carries forward indefinitely across months and calendar years.
+- Neither expires.
+- For all current credits, `ExpiresAt = null`.
 
-### Canonical Schema:
+### Future-Proofing Architecture:
+- The ledger schema includes explicit per-credit metadata: `ExpiresAt` (ISO date string or `null`) and `ExpiryPolicyCode` (string or `null`).
+- A `null` or empty `ExpiresAt` represents **non-expiring under the governing policy at credit issuance**.
+- The pure balance derivation function `deriveEntitlementBalance(transactions, { personId, entitlementType, asOfDate })` checks:
+  - If `asOfDate` is provided and a credit has `ExpiresAt !== null` where `ExpiresAt <= asOfDate`, the credit is considered **EXPIRED** and excluded from `netCredits`.
+  - Credits with `ExpiresAt === null` never expire.
+- If a hospital policy change introduces an expiry rule in the future, newly generated credits will receive an explicit `ExpiresAt` without rewriting or migrating historical ledger rows.
+
+---
+
+## 5. Canonical Table Schema & Identity
+
+### Authoritative Ledger Name:
+`RosterEntitlementTransactions` (append-only sheet/table).
+
+### Record Fields:
 | Field Name | Type | Description |
 | :--- | :--- | :--- |
-| `TransactionId` | `string` | Deterministic UUID (`tx-goff-...`) |
+| `TransactionId` | `string` | Deterministic UUID (`etx-...`) |
 | `PeriodId` | `string` | Monthly period context (`YYYY-MM`) |
-| `PersonId` | `string` | Authoritative doctor identity |
+| `PersonId` | `string` | Authoritative doctor UUID |
 | `PersonNameSnapshot` | `string` | Display snapshot at transaction time |
-| `DutyDomain` | `string` | Must be `MO` |
-| `TransactionType` | `string` | `CREDIT_EARNED`, `CREDIT_MANUAL`, `GOFF_CONSUMED`, etc. |
-| `Amount` | `number` | Integer amount (typically `1` for credit/consumption) |
-| `EffectiveDate` | `string` | ISO date (`YYYY-MM-DD`) when entitlement was earned or consumed |
-| `SourceType` | `string` | Provenance (`PUBLIC_HOLIDAY_DUTY`, `DISPLACED_WEEKLY_OFF`, etc.) |
-| `SourceId` | `string` | Lineage reference (AssignmentId, Holiday date, etc.) |
+| `EntitlementType` | `string` | `'GOFF'` \| `'GHKA'` (strictly typed) |
+| `DutyDomain` | `string` | Must be `'MO'` (EP strictly excluded) |
+| `TransactionType` | `string` | `CREDIT_EARNED`, `CREDIT_MANUAL`, `GOFF_CONSUMED`, `GHKA_CONSUMED`, etc. |
+| `Amount` | `number` | Integer amount (+1 for credit, -1 for consumption) |
+| `EffectiveDate` | `string` | ISO date (`YYYY-MM-DD`) |
+| `SourceType` | `string` | `DISPLACED_WEEKLY_OFF`, `PUBLIC_HOLIDAY_DUTY`, `OPENING_BALANCE`, `ADMIN_ADJUSTMENT`, `ROSTER_ASSIGNMENT` |
+| `SourceId` | `string` | Lineage reference |
+| `SourceAssignmentId` | `string` | Authoritative source assignment ID if applicable |
+| `SourcePeriodId` | `string` | Source roster month |
 | `PublicHolidayDate` | `string` | Qualifying holiday date if applicable |
 | `PublicHolidayName` | `string` | Holiday title if applicable |
-| `RosterAssignmentId` | `string` | Assignment where GOFF is placed |
-| `RelatedTransactionId` | `string` | For reversals: the target TransactionId being reversed |
-| `ReasonCode` | `string` | Public reason code (`DUTY_COVERAGE`, `ADMIN_CORRECTION`, etc.) |
-| `AdminNote` | `string` | Confidential managerial note (internal only) |
-| `Status` | `string` | `CONFIRMED`, `PENDING`, `REVERSED`, `FAILED` |
+| `RosterAssignmentId` | `string` | Target assignment where entitlement is taken |
+| `RelatedTransactionId` | `string` | Target TransactionId for reversals |
+| `ReasonCode` | `string` | Public reason code |
+| `AdminNote` | `string` | Confidential managerial note |
+| `ExpiresAt` | `string` \| `null` | Expiry date (`null` for current policy) |
+| `ExpiryPolicyCode` | `string` \| `null` | Expiry policy identifier (`null` for current policy) |
+| `Status` | `string` | `CONFIRMED`, `PENDING`, `REVERSED`, `REJECTED` |
 | `OperationId` | `string` | Client operation UUID for idempotency |
 | `CreatedAt` | `string` | ISO 8601 timestamp |
-| `CreatedBy` | `string` | User email or operator identifier |
+| `CreatedBy` | `string` | Operator identifier / email |
 
 ---
 
-## 6. Canonical Transaction Types
+## 6. Separate Balance Derivation Formula
 
-```javascript
-const GOFF_TRANSACTION_TYPES = {
-  CREDIT_EARNED: 'CREDIT_EARNED',
-  CREDIT_MANUAL: 'CREDIT_MANUAL',
-  CREDIT_REVERSAL: 'CREDIT_REVERSAL',
-  GOFF_RESERVED: 'GOFF_RESERVED',
-  GOFF_RESERVATION_RELEASED: 'GOFF_RESERVATION_RELEASED',
-  GOFF_CONSUMED: 'GOFF_CONSUMED',
-  CONSUMPTION_REVERSAL: 'CONSUMPTION_REVERSAL'
-};
-```
+Balance derivation is implemented by the pure function `deriveEntitlementBalance(transactions, { personId, entitlementType, asOfDate })`:
 
----
-
-## 7. Balance Derivation Formula
-
-Balance is never stored as an editable or mutable single cell. It is derived as a pure, deterministic function:
-
-$$\text{Active Net Credits} = \sum (\text{CONFIRMED Credits}) - \sum (\text{CONFIRMED Credit Reversals})$$
+$$\text{Active Net Credits} = \sum (\text{CONFIRMED Non-Expired Credits}) - \sum (\text{CONFIRMED Credit Reversals})$$
 $$\text{Active Net Consumptions} = \sum (\text{CONFIRMED Consumptions}) - \sum (\text{CONFIRMED Consumption Reversals})$$
 $$\text{Current Balance} = \text{Active Net Credits} - \text{Active Net Consumptions}$$
 
-- **Fail-Closed on Deficit**: If an attempted consumption exceeds available balance, the operation is rejected with `INSUFFICIENT_GOFF_BALANCE`.
-- **Negative Balance Policy**: Negative balances are disallowed by default. Debt/overdraft is only permissible with explicit administrative override flags (`ALLOW_NEGATIVE_OVERRIDE`), satisfying strict hospital compliance.
-- **As-of Date Evaluation**: `deriveGoffBalance(transactions, { personId, asOfDate })` deterministically filters transactions where `EffectiveDate <= asOfDate`, allowing historical audits.
-- **Cross-Period Carry-Forward**: Balance is non-expiring and carries across monthly and annual boundaries indefinitely unless explicitly deducted or reversed.
+- Evaluated strictly per `EntitlementType`.
+- Convenience method `deriveAllEntitlementBalances(transactions, { personId, asOfDate })` returns:
+  ```json
+  {
+    "GOFF": { "currentBalance": 1, ... },
+    "GHKA": { "currentBalance": 2, ... }
+  }
+  ```
+- **EP Domain Exclusion**: EP staff members do not earn or consume entitlements (`EP_DOMAIN_EXCLUDED`).
 
 ---
 
-## 8. Public Holiday Qualification Rules
+## 7. Consumption Semantics & Roster Projections
 
-The domain module function `qualifiesForPublicHolidayCredit(assignment, holidayName, existingAssignmentsOnDate)` enforces:
-1. **Gazetted Holiday**: Date must be gazetted in the official hospital holiday calendar ([`src/utils/holidays.js`](file:///C:/Dev/REQUEST-APP/src/utils/holidays.js)).
-2. **Qualifying Duty**: Shift must be an active duty (`AM`, `PM`, `AMX`, `PMX`, `ON1`, `ON2`, `NIGHT`, `PN`).
-3. **Non-Qualifying Statuses**: Non-working shifts (`OFF`, `GOFF`, `HKA`, `GHKA`, `AL`, `MC`, `EL`, `COURSE`) earn **zero** credits.
-4. **Single Credit Per Holiday Rule**: If a doctor works multiple assignments on the same holiday date (e.g. `AM` + `PM`, or `ON1` + `PN`), they earn at most **1 credit** for that holiday.
-5. **Phase 5 SWAP Interaction**: Entitlement follows the **actual operational worker** in Current. If Doctor A swaps out and Doctor B works the holiday, Doctor B qualifies for the credit; Doctor A does not.
-6. **Phase 6 MC / Absence Interaction**: If Doctor A has an active absence (`MC`) on a holiday, Doctor A earns **0 credits**. If Doctor B covers Doctor A as a replacement worker, Doctor B earns the **1 credit**.
-7. **Credit Generation Timing**: Holiday credit generation becomes authoritative when the duty occurs in the operational roster, or upon period publication/closure. It is evaluated against the authoritative Current assignment.
-
----
-
-## 9. Consumption Semantics & Roster Interaction
-
-1. **Validation**: Before consuming a GOFF, `validateGoffConsumption` checks:
-   - Doctor has `currentBalance >= 1`.
-   - Doctor is not actively absent (`MC`, `AL`, `EL`, `COURSE`) on that date (`CONFLICTING_OPERATIONAL_STATE`).
-   - Doctor domain is `MO`.
-2. **Current Roster Impact**: Consuming a GOFF replaces the doctor's assignment on that date with `GOFF`.
-3. **Planned Roster Immutability**: The original Planned assignment remains completely unchanged.
-4. **Lifecycle State Transition**:
-   - Earning a credit affects only the ledger sheet `RosterGoffTransactions`; it does **not** alter roster assignments and therefore does **not** change the period lifecycle state (`PUBLISHED` remains `PUBLISHED`).
-   - Consuming a credit alters an operational assignment in Current; this constitutes an amendment and transitions the period lifecycle state to `AMENDED`.
+1. **GOFF Consumption**:
+   - Requires `GOFF balance >= 1`.
+   - Projects as `ShiftCode = 'GOFF'`.
+   - Decreases GOFF balance by 1.
+2. **GHKA Consumption**:
+   - Requires `GHKA balance >= 1`.
+   - Projects as `ShiftCode = 'GHKA'`.
+   - Decreases GHKA balance by 1.
+3. **Phase 6 Operational Conflicts**:
+   - Fails closed if the doctor has an active absence (`MC`, `EL`, `AL`, `COURSE`) on that date (`INCOMPATIBLE_OPERATIONAL_STATUS`).
+4. **Lifecycle Impact**:
+   - Earning a credit does **not** alter roster assignments $\rightarrow$ period remains `PUBLISHED`.
+   - Consuming a credit alters Current assignments $\rightarrow$ period becomes `AMENDED`.
+   - The immutable Planned layer remains untouched.
 
 ---
 
-## 10. Dependency Model & Append-Only Reversals
+## 8. Reversal & Dependency Rules
 
-Compensating transactions are used for all cancellations:
-- **Reversing a Consumption (`CONSUMPTION_REVERSAL`)**: Appends a compensating record that points to the original `GOFF_CONSUMED` transaction via `RelatedTransactionId`. Entitlement balance is restored.
-- **Reversing an Earned Credit (`CREDIT_REVERSAL`)**:
-  - Before a credit can be reversed, the dependency validator checks if active consumptions depend upon that credit.
-  - If a dependent consumption exists, the credit reversal is blocked with `DEPENDENT_CONSUMPTION_EXISTS`.
-  - The administrator must first reverse the dependent consumption before the credit can be safely reversed.
-- **Idempotency**: Automatic generation and manual transaction creation are deterministically keyed by `OperationId` and semantic source keys (`PersonId` + `HolidayDate` + `DutyDomain`). Re-running generation yields identical outcomes without duplicate rows.
-
----
-
-## 11. Requests / Leave Boundary
-
-In the current REQUEST APP system:
-- Staff requests for "GOFF" or "HKA" represent **administrative user requests / preferences**.
-- In Phase 7 Slice 1, requests do **not** automatically execute ledger transactions or alter Current assignments.
-- Conversion of approved requests into ledger consumptions will be mediated through administrative actions in subsequent slices.
+Compensating reversal transactions append to `RosterEntitlementTransactions`:
+- **Scoped Dependencies**:
+  - A GOFF credit cannot be reversed if an active GOFF consumption depends upon it (`DEPENDENT_CONSUMPTION_EXISTS`).
+  - A GHKA credit cannot be reversed if an active GHKA consumption depends upon it (`DEPENDENT_CONSUMPTION_EXISTS`).
+- **Cross-Type Dependency Rejection**:
+  - Cross-entitlement dependencies (e.g. a GHKA consumption referencing a GOFF credit) are strictly rejected with `CROSS_ENTITLEMENT_DEPENDENCY_FORBIDDEN`.
 
 ---
 
-## 12. Privacy & Viewer DTO Boundary
+## 9. MasterRoster, Requests, and Privacy Boundaries
 
-GOFF ledger details represent internal personnel accounting. The privacy boundary is strictly established via `scrubGoffViewerDto(transaction)`:
-- **Roster Viewers**: See only the projected `GOFF` shift string on the public roster schedule.
-- **Sanitized DTO**: Standard viewers and public endpoints receive only:
-  - `TransactionId`, `PeriodId`, `PersonId`, `DutyDomain`, `TransactionType`, `Amount`, `EffectiveDate`, `Status`.
-- **Stripped Metadata**: Internal identifiers (`OperationId`, `CreatedBy`, `CreatedAt`), private notes (`AdminNote`), and sensitive source IDs are strictly stripped from public DTOs.
+- **MasterRoster Projections**:
+  - Consumed GOFF $\rightarrow$ `ShiftCode = 'GOFF'`.
+  - Consumed GHKA $\rightarrow$ `ShiftCode = 'GHKA'`.
+  - Rest on Public Holiday $\rightarrow$ `ShiftCode = 'HKA'`.
+- **Requests Boundary**:
+  - Staff requests for "GOFF" or "GHKA" represent administrative requests/preferences. They do **not** automatically execute ledger transactions during Slice 1.1.
+- **Privacy Scrubber**:
+  - `scrubEntitlementViewerDto(transaction)` strips confidential notes (`AdminNote`), client IDs (`OperationId`), and audit tracking (`CreatedBy`, `CreatedAt`, `SourceId`).
+  - Public viewers receive only operational metadata and `EntitlementType`.
 
 ---
 
-## 13. Summary of Slice 1 Verification
+## 10. Summary of Slice 1.1 Verification
 
-- **Domain Tests**: 36/36 tests passing in [`tests/phase7/domain.test.mjs`](file:///C:/Dev/REQUEST-APP/tests/phase7/domain.test.mjs).
-- **Full Test Suite**: Legacy, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6, and Phase 7 suites all pass with 0 errors.
-- **Apps Script Build**: Verified with `--check` parity.
-- **Vite Production Build**: Verified.
+- **Domain Test Suite**: **39/39** tests passed in [`tests/phase7/domain.test.mjs`](file:///C:/Dev/REQUEST-APP/tests/phase7/domain.test.mjs).
+- **Full Test Suite**: All test suites pass (legacy + phases 1–7) with 0 errors.
+- **Build Checks**: Apps Script `--check` and Vite build succeeded.
+- **Working Tree**: Clean.
