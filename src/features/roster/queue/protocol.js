@@ -331,7 +331,7 @@ const DraftProtocol = (() => {
       const payload = operation.payload?.payload || operation.payload || operation;
       const personId = String(payload.personId || '').trim();
       ensure(uuid(personId), 'VALIDATION_FAILED');
-      const date = String(payload.date || '').trim();
+      const date = String(payload.date || payload.effectiveDate || operation.date || operation.effectiveDate || '').trim();
       ensure(/^\d{4}-\d{2}-\d{2}$/.test(date), 'VALIDATION_FAILED');
       const adminNote = String(payload.adminNote || '').trim();
 
@@ -357,7 +357,7 @@ const DraftProtocol = (() => {
       const payload = operation.payload?.payload || operation.payload || operation;
       const personId = String(payload.personId || '').trim();
       ensure(uuid(personId), 'VALIDATION_FAILED');
-      const date = String(payload.date || '').trim();
+      const date = String(payload.date || payload.holidayDate || payload.effectiveDate || operation.date || operation.holidayDate || operation.effectiveDate || '').trim();
       ensure(/^\d{4}-\d{2}-\d{2}$/.test(date), 'VALIDATION_FAILED');
       const adminNote = String(payload.adminNote || '').trim();
 
@@ -385,13 +385,13 @@ const DraftProtocol = (() => {
       ensure(uuid(personId), 'VALIDATION_FAILED');
       const entitlementType = String(payload.entitlementType || '').trim().toUpperCase();
       ensure(entitlementType === 'GOFF' || entitlementType === 'GHKA', 'VALIDATION_FAILED');
-      const amount = Number(payload.amount);
+      const amount = Number(payload.amount !== undefined ? payload.amount : operation.amount);
       ensure(amount === 1, 'VALIDATION_FAILED');
-      const effectiveDate = String(payload.effectiveDate || payload.date || '').trim();
+      const effectiveDate = String(payload.effectiveDate || payload.date || operation.effectiveDate || operation.date || '').trim();
       ensure(/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate), 'VALIDATION_FAILED');
-      const reasonCode = String(payload.reasonCode || '').trim();
+      const reasonCode = String(payload.reasonCode || operation.reasonCode || '').trim();
       ensure(reasonCode.length > 0, 'VALIDATION_FAILED');
-      const adminNote = String(payload.adminNote || '').trim();
+      const adminNote = String(payload.adminNote || operation.adminNote || '').trim();
       ensure(adminNote.length > 0, 'VALIDATION_FAILED');
 
       return {
@@ -421,10 +421,10 @@ const DraftProtocol = (() => {
       ensure(uuid(personId), 'VALIDATION_FAILED');
       const entitlementType = String(payload.entitlementType || '').trim().toUpperCase();
       ensure(entitlementType === 'GOFF' || entitlementType === 'GHKA', 'VALIDATION_FAILED');
-      const date = String(payload.date || '').trim();
+      const date = String(payload.date || payload.effectiveDate || operation.date || operation.effectiveDate || '').trim();
       ensure(/^\d{4}-\d{2}-\d{2}$/.test(date), 'VALIDATION_FAILED');
       const expectedRevision = Number.isSafeInteger(payload.expectedRevision) ? payload.expectedRevision : (Number.isSafeInteger(operation.expectedRevision) ? operation.expectedRevision : 0);
-      const adminNote = String(payload.adminNote || '').trim();
+      const adminNote = String(payload.adminNote || operation.adminNote || '').trim();
 
       return {
         operationId: operation.operationId,
@@ -448,9 +448,9 @@ const DraftProtocol = (() => {
       const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
       RosterCompatibility.validatePeriod(periodId);
       const payload = operation.payload?.payload || operation.payload || operation;
-      const transactionId = String(payload.transactionId || '').trim();
+      const transactionId = String(payload.transactionId || payload.targetTransactionId || operation.transactionId || operation.targetTransactionId || '').trim();
       ensure(typeof transactionId === 'string' && transactionId.length > 0, 'VALIDATION_FAILED');
-      const adminNote = String(payload.adminNote || '').trim();
+      const adminNote = String(payload.adminNote || operation.adminNote || '').trim();
 
       return {
         operationId: operation.operationId,
@@ -471,10 +471,10 @@ const DraftProtocol = (() => {
       const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
       RosterCompatibility.validatePeriod(periodId);
       const payload = operation.payload?.payload || operation.payload || operation;
-      const transactionId = String(payload.transactionId || '').trim();
+      const transactionId = String(payload.transactionId || payload.targetTransactionId || operation.transactionId || operation.targetTransactionId || '').trim();
       ensure(typeof transactionId === 'string' && transactionId.length > 0, 'VALIDATION_FAILED');
       const expectedRevision = Number.isSafeInteger(payload.expectedRevision) ? payload.expectedRevision : (Number.isSafeInteger(operation.expectedRevision) ? operation.expectedRevision : 0);
-      const adminNote = String(payload.adminNote || '').trim();
+      const adminNote = String(payload.adminNote || operation.adminNote || '').trim();
 
       return {
         operationId: operation.operationId,
