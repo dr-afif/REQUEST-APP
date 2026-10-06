@@ -150,6 +150,7 @@ test('4. MC form submits authoritative PersonId', async () => {
   assert.equal(typeVal, 'MC');
 
   // Acknowledge shortage since 2026-03-10 is a working duty
+  await page.waitForSelector('#shortage-accept-checkbox');
   await page.click('#shortage-accept-checkbox');
   await page.type('#shortage-reason-input', 'Medical leave coverage required');
 
@@ -171,6 +172,7 @@ test('5. EL supported', async () => {
   await page.waitForSelector('#absence-modal');
 
   await page.select('#absence-type-select', 'EL');
+  await page.waitForSelector('#shortage-accept-checkbox');
   await page.click('#shortage-accept-checkbox');
   await page.type('#shortage-reason-input', 'Family emergency');
 
@@ -189,6 +191,7 @@ test('6. AL supported', async () => {
   await page.waitForSelector('#absence-modal');
 
   await page.select('#absence-type-select', 'AL');
+  await page.waitForSelector('#shortage-accept-checkbox');
   await page.click('#shortage-accept-checkbox');
   await page.type('#shortage-reason-input', 'Approved annual leave');
 
@@ -207,6 +210,7 @@ test('7. COURSE supported', async () => {
   await page.waitForSelector('#absence-modal');
 
   await page.select('#absence-type-select', 'COURSE');
+  await page.waitForSelector('#shortage-accept-checkbox');
   await page.click('#shortage-accept-checkbox');
   await page.type('#shortage-reason-input', 'Clinical ultrasound training');
 
@@ -228,6 +232,7 @@ test('8. start/end range handled', async () => {
   await setInputValue('#absence-start-date', '2026-03-10');
   await setInputValue('#absence-end-date', '2026-03-12');
 
+  await page.waitForSelector('#shortage-accept-checkbox');
   await page.click('#shortage-accept-checkbox');
   await page.type('#shortage-reason-input', 'Multi-day course');
 
@@ -610,6 +615,7 @@ test('29. working-duty absence lifecycle becomes AMENDED', async () => {
 
   await page.click('#btn-record-absence-p-1-2026-03-10-MO');
   await page.waitForSelector('#absence-modal');
+  await page.waitForSelector('#shortage-accept-checkbox');
 
   await page.click('#shortage-accept-checkbox');
   await page.type('#shortage-reason-input', 'Leave accepted');
@@ -787,6 +793,7 @@ test('39. revision conflict triggers authoritative reload', async () => {
   await page.click('#btn-record-absence-p-1-2026-03-10-MO');
   await page.waitForSelector('#absence-modal');
 
+  await page.waitForSelector('#shortage-accept-checkbox');
   await page.click('#shortage-accept-checkbox');
   await page.type('#shortage-reason-input', 'Testing revision conflict');
   await page.click('#btn-submit-absence');
