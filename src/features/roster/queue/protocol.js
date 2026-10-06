@@ -11,7 +11,11 @@ const DraftProtocol = (() => {
     'AMENDED_RESERVED_PHASE5','TRANSITION_BLOCKED','LIFECYCLE_OPERATION_PENDING',
     'MALFORMED_EVENT','INCOMPLETE_SWAP','EVENT_ALREADY_REVERSED','REVERSAL_DEPENDENCY_CONFLICT',
     'CANNOT_REVERSE_LIFECYCLE_EVENT','CANNOT_REVERSE_REVERSAL','DUTY_DOMAIN_REQUIRED','EVENT_NOT_FOUND',
-    'INVALID_OPERATOR','REVERSAL_CONFLICT','ALREADY_REVERSED','CANNOT_REVERSE','INVALID_AMENDMENT_TYPE'
+    'INVALID_OPERATOR','REVERSAL_CONFLICT','ALREADY_REVERSED','CANNOT_REVERSE','INVALID_AMENDMENT_TYPE',
+    'INVALID_ABSENCE_TYPE','INVALID_DATE_RANGE','OVERLAPPING_ABSENCE','ABSENCE_NOT_FOUND',
+    'ABSENCE_ALREADY_REVERSED','REPLACEMENT_DEPENDENCY_CONFLICT','REPLACEMENT_NOT_FOUND',
+    'REPLACEMENT_ALREADY_REVERSED','DUTY_DOMAIN_MISMATCH','INVALID_PERSON_IDENTITY',
+    'INVALID_ASSIGNMENT','SHORTAGE_ACCEPTANCE_REQUIRED'
   ];
   const fail = (code, details = {}) => Object.assign(new Error(code), { code, details });
   const ensure = (ok, code = 'VALIDATION_FAILED') => { if (!ok) throw fail(code); };
@@ -189,6 +193,128 @@ const DraftProtocol = (() => {
           periodId: periodId,
           targetEventId: targetEventId,
           adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'ABSENCE_CREATE') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const personId = String(payload.personId || '').trim();
+      const absenceType = String(payload.absenceType || '').trim().toUpperCase();
+      const startDate = String(payload.startDate || '').trim();
+      const endDate = String(payload.endDate || '').trim();
+      const dutyDomain = String(payload.dutyDomain || 'MO').trim();
+      ensure(personId && absenceType && startDate && endDate && dutyDomain, 'VALIDATION_FAILED');
+      const publicReason = String(payload.publicReason || absenceType).trim();
+      const adminNote = String(payload.adminNote || '').trim();
+      const shortageAccepted = Boolean(payload.shortageAccepted);
+      const shortageReason = String(payload.shortageReason || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ABSENCE_CREATE',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          personId: personId,
+          absenceType: absenceType,
+          startDate: startDate,
+          endDate: endDate,
+          dutyDomain: dutyDomain,
+          publicReason: publicReason,
+          adminNote: adminNote,
+          shortageAccepted: shortageAccepted,
+          shortageReason: shortageReason
+        }
+      };
+    }
+
+    if (operation.operationType === 'REPLACEMENT_CREATE') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const absenceId = String(payload.absenceId || '').trim();
+      const originalAssignmentId = String(payload.originalAssignmentId || '').trim();
+      const replacementPersonId = String(payload.replacementPersonId || '').trim();
+      const date = String(payload.date || '').trim();
+      const dutyDomain = String(payload.dutyDomain || 'MO').trim();
+      const shiftCode = String(payload.shiftCode || '').trim();
+      ensure(absenceId && replacementPersonId && date && dutyDomain && shiftCode, 'VALIDATION_FAILED');
+      const publicReason = String(payload.publicReason || 'DUTY_COVERAGE').trim();
+      const adminNote = String(payload.adminNote || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'REPLACEMENT_CREATE',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          absenceId: absenceId,
+          originalAssignmentId: originalAssignmentId,
+          replacementPersonId: replacementPersonId,
+          date: date,
+          dutyDomain: dutyDomain,
+          shiftCode: shiftCode,
+          publicReason: publicReason,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'ABSENCE_REVERSE') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const absenceId = String(payload.absenceId || '').trim();
+      ensure(absenceId.length > 0, 'VALIDATION_FAILED');
+      const adminNote = String(payload.adminNote || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'ABSENCE_REVERSE',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          absenceId: absenceId,
+          adminNote: adminNote
+        }
+      };
+    }
+
+    if (operation.operationType === 'REPLACEMENT_REVERSE') {
+      const periodId = operation.payload?.periodId || operation.periodId || (typeof operation.entityKey === 'string' ? operation.entityKey.replace(/^(draft|period):/, '') : '');
+      RosterCompatibility.validatePeriod(periodId);
+      const payload = operation.payload?.payload || operation.payload || operation;
+      const replacementId = String(payload.replacementId || '').trim();
+      ensure(replacementId.length > 0, 'VALIDATION_FAILED');
+      const adminNote = String(payload.adminNote || '').trim();
+      const shortageAccepted = Boolean(payload.shortageAccepted);
+      const shortageReason = String(payload.shortageReason || '').trim();
+
+      return {
+        operationId: operation.operationId,
+        clientId: operation.clientId,
+        tabId: operation.tabId,
+        operationType: 'REPLACEMENT_REVERSE',
+        entityKey: 'period:' + periodId,
+        expectedRevision: operation.expectedRevision === 0 ? 0 : operation.expectedRevision,
+        payload: {
+          periodId: periodId,
+          replacementId: replacementId,
+          adminNote: adminNote,
+          shortageAccepted: shortageAccepted,
+          shortageReason: shortageReason
         }
       };
     }
