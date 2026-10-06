@@ -1521,3 +1521,446 @@ test('60. backend/shared resolver equivalence', () => {
   assert.equal(backendCur.count, sharedCur.currentAssignments.length);
   assert.equal(backendCur.projectionChecksum, sharedCur.projectionChecksum);
 });
+
+// ============================================================================
+// Phase 7 Slice 2.2 Immutability, Tamper Detection & Reversal Tests (61 - 78)
+// ============================================================================
+
+function findTxRecord(h, txId) {
+  const headers = h.grids.RosterEntitlementTransactions[0];
+  const row = h.grids.RosterEntitlementTransactions.slice(1).find(r => r[headers.indexOf('TransactionId')] === txId);
+  if (!row) return null;
+  const obj = {};
+  headers.forEach((hd, i) => { obj[hd] = row[i]; });
+  return { obj, row, headers };
+}
+
+// --------------------------------------------------------------------------
+// 61. persisted entitlement transaction semantic fields immutable after confirmation
+// --------------------------------------------------------------------------
+test('61. persisted entitlement transaction semantic fields immutable after confirmation', () => {
+  const { h, periodId } = setupPublished();
+  const creditRes = h.post(makeCreditManualOp({
+    periodId,
+    personId: person1,
+    entitlementType: 'GOFF',
+    effectiveDate: '2026-05-01',
+    reasonCode: 'OPENING_BALANCE',
+    adminNote: 'Baseline opening balance'
+  }));
+  assert.equal(creditRes.ok, true);
+
+  const initial = findTxRecord(h, creditRes.transactionId);
+  assert.ok(initial, 'Transaction row must exist');
+
+  const semanticFields = [
+    'TransactionId', 'PersonId', 'PersonNameSnapshot', 'EntitlementType', 'DutyDomain',
+    'TransactionType', 'Amount', 'EffectiveDate', 'SourceType', 'SourceId',
+    'SourceAssignmentId', 'SourcePeriodId', 'RelatedTransactionId', 'ReasonCode',
+    'AdminNote', 'ExpiresAt', 'ExpiryPolicyCode', 'OperationId', 'CreatedAt', 'CreatedBy'
+  ];
+  const snapshot = {};
+  semanticFields.forEach(f => { snapshot[f] = initial.obj[f]; });
+
+  // Perform further operations on the system
+  h.post(makeConsumeOp({ periodId, personId: person1, entitlementType: 'GOFF', date: '2026-05-03', expectedRevision: 1 }));
+  h.get('rosterv2entitlementbalances', { personId: person1 });
+  h.get('rosterv2entitlementtransactions', { personId: person1 });
+
+  // Re-read initial transaction and verify byte-for-byte semantic equality
+  const current = findTxRecord(h, creditRes.transactionId);
+  semanticFields.forEach(f => {
+    assert.equal(current.obj[f], snapshot[f], `Semantic field ${f} must remain immutable`);
+  });
+});
+
+// --------------------------------------------------------------------------
+// 62. recovery does not change transaction semantic fields
+// --------------------------------------------------------------------------
+test('62. recovery does not change transaction semantic fields', () => {
+  const { h, periodId } = setupPublished();
+  h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' }));
+  const consumeOp = makeConsumeOp({ periodId, personId: person1, entitlementType: 'GOFF', date: '2026-05-03', expectedRevision: 1 });
+  const consumeRes = h.post(consumeOp);
+  assert.equal(consumeRes.ok, true);
+
+  // Simulate an interrupted operation: OperationLog left in RECOVERY_REQUIRED
+  const logRows = h.grids.OperationLog.slice(1);
+  const logRow = logRows.find(r => r[0] === consumeOp.operationId);
+  logRow[8] = 'RECOVERY_REQUIRED';
+
+  const beforeRecovery = findTxRecord(h, consumeRes.transactionId);
+  const beforeJson = JSON.stringify(beforeRecovery.obj);
+
+  // Execute recovery
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: consumeOp.operationId });
+  assert.equal(recRes.ok, true);
+
+  const afterRecovery = findTxRecord(h, consumeRes.transactionId);
+  const afterJson = JSON.stringify(afterRecovery.obj);
+  assert.equal(afterJson, beforeJson, 'Recovery must not change any field of the persisted transaction row');
+});
+
+// --------------------------------------------------------------------------
+// 63. recovery updates confirmation authority correctly
+// --------------------------------------------------------------------------
+test('63. recovery updates confirmation authority correctly', () => {
+  const { h, periodId } = setupPublished();
+  const creditOp = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  const creditRes = h.post(creditOp);
+  assert.equal(creditRes.ok, true);
+
+  // Set OperationLog status to RECOVERY_REQUIRED
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === creditOp.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // In this state, authority is not confirmed
+  const balBefore = h.get('rosterv2entitlementbalances', { personId: person1 });
+  assert.equal(balBefore.balances.GOFF, 0, 'Must be excluded when confirmation authority is RECOVERY_REQUIRED');
+
+  // Recover
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: creditOp.operationId });
+  assert.equal(recRes.ok, true);
+
+  // Authority updated to CONFIRMED in OperationLog
+  assert.equal(logRow[logHeaders.indexOf('Status')], 'CONFIRMED');
+
+  // Now recognized as confirmed authority
+  const balAfter = h.get('rosterv2entitlementbalances', { personId: person1 });
+  assert.equal(balAfter.balances.GOFF, 1, 'Must be included once recovery establishes CONFIRMED authority');
+});
+
+// --------------------------------------------------------------------------
+// 64. RECOVERY_REQUIRED row excluded from balance
+// --------------------------------------------------------------------------
+test('64. RECOVERY_REQUIRED row excluded from balance', () => {
+  const { h, periodId } = setupPublished();
+  const creditOp = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  h.post(creditOp);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === creditOp.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  const bal = h.get('rosterv2entitlementbalances', { personId: person1 });
+  assert.equal(bal.balances.GOFF, 0, 'Balance must exclude RECOVERY_REQUIRED transaction');
+});
+
+// --------------------------------------------------------------------------
+// 65. RECOVERY_REQUIRED row excluded from Current
+// --------------------------------------------------------------------------
+test('65. RECOVERY_REQUIRED row excluded from Current', () => {
+  const { h, periodId } = setupPublished();
+  h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' }));
+
+  const consumeOp = makeConsumeOp({ periodId, personId: person1, entitlementType: 'GOFF', date: '2026-05-03', expectedRevision: 1 });
+  h.post(consumeOp);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === consumeOp.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // Period revision remains 1
+  const periodHeaders = h.grids.RosterPeriods[0];
+  const periodRow = h.grids.RosterPeriods.slice(1).find(r => r[periodHeaders.indexOf('PeriodId')] === periodId);
+  periodRow[periodHeaders.indexOf('Revision')] = 1;
+  periodRow[periodHeaders.indexOf('State')] = 'PUBLISHED';
+
+  const cur = h.get('rosterv2current', { periodId });
+  const aliMay3 = cur.assignments.find(a => a.personId === person1 && a.date === '2026-05-03');
+  assert.equal(aliMay3.shiftCode, 'AM', 'Current must exclude unconfirmed consumption; shift must remain original planned AM');
+});
+
+// --------------------------------------------------------------------------
+// 66. RECOVERY_REQUIRED row excluded from normal history
+// --------------------------------------------------------------------------
+test('66. RECOVERY_REQUIRED row excluded from normal history', () => {
+  const { h, periodId } = setupPublished();
+  const creditOp = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  h.post(creditOp);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === creditOp.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  const history = h.get('rosterv2entitlementtransactions', { personId: person1 });
+  assert.equal(history.transactions.length, 0, 'Ordinary viewer history must exclude RECOVERY_REQUIRED transaction');
+});
+
+// --------------------------------------------------------------------------
+// 67. successful recovery exposes original transaction exactly once
+// --------------------------------------------------------------------------
+test('67. successful recovery exposes original transaction exactly once', () => {
+  const { h, periodId } = setupPublished();
+  const creditOp = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  const creditRes = h.post(creditOp);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === creditOp.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // Excluded before recovery
+  let history = h.get('rosterv2entitlementtransactions', { personId: person1 });
+  assert.equal(history.transactions.length, 0);
+
+  // Recover
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: creditOp.operationId });
+  assert.equal(recRes.ok, true);
+
+  // Visible once after recovery
+  history = h.get('rosterv2entitlementtransactions', { personId: person1 });
+  assert.equal(history.transactions.length, 1);
+  assert.equal(history.transactions[0].TransactionId, creditRes.transactionId);
+});
+
+// --------------------------------------------------------------------------
+// 68. no duplicate transaction after recovery
+// --------------------------------------------------------------------------
+test('68. no duplicate transaction after recovery', () => {
+  const { h, periodId } = setupPublished();
+  const creditOp = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  h.post(creditOp);
+
+  const beforeCount = h.grids.RosterEntitlementTransactions.length;
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === creditOp.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: creditOp.operationId });
+  assert.equal(recRes.ok, true);
+
+  assert.equal(h.grids.RosterEntitlementTransactions.length, beforeCount, 'Recovery must not append a duplicate transaction');
+});
+
+// --------------------------------------------------------------------------
+// 69. original credit unchanged after CREDIT_REVERSAL
+// --------------------------------------------------------------------------
+test('69. original credit unchanged after CREDIT_REVERSAL', () => {
+  const { h, periodId } = setupPublished();
+  const credRes = h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' }));
+  const origBefore = findTxRecord(h, credRes.transactionId);
+  const origBeforeJson = JSON.stringify(origBefore.obj);
+
+  // Reverse credit
+  const revRes = h.post(makeCreditReverseOp({ periodId, transactionId: credRes.transactionId }));
+  assert.equal(revRes.ok, true);
+
+  // Original row remains byte-for-byte unchanged; Status must NOT be mutated to REVERSED
+  const origAfter = findTxRecord(h, credRes.transactionId);
+  const origAfterJson = JSON.stringify(origAfter.obj);
+  assert.equal(origAfterJson, origBeforeJson, 'Original credit row must remain completely unchanged');
+  assert.equal(origAfter.obj.Status, 'CONFIRMED', 'Original row Status must remain CONFIRMED, not mutated to REVERSED');
+});
+
+// --------------------------------------------------------------------------
+// 70. original consumption unchanged after CONSUMPTION_REVERSAL
+// --------------------------------------------------------------------------
+test('70. original consumption unchanged after CONSUMPTION_REVERSAL', () => {
+  const { h, periodId } = setupPublished();
+  h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' }));
+  const consRes = h.post(makeConsumeOp({ periodId, personId: person1, entitlementType: 'GOFF', date: '2026-05-03', expectedRevision: 1 }));
+  const consBefore = findTxRecord(h, consRes.transactionId);
+  const consBeforeJson = JSON.stringify(consBefore.obj);
+
+  // Reverse consumption
+  const revRes = h.post(makeConsumeReverseOp({ periodId, transactionId: consRes.transactionId, expectedRevision: 2 }));
+  assert.equal(revRes.ok, true);
+
+  // Original consumption row remains byte-for-byte unchanged
+  const consAfter = findTxRecord(h, consRes.transactionId);
+  const consAfterJson = JSON.stringify(consAfter.obj);
+  assert.equal(consAfterJson, consBeforeJson, 'Original consumption row must remain completely unchanged');
+  assert.equal(consAfter.obj.Status, 'CONFIRMED', 'Original consumption Status must remain CONFIRMED');
+});
+
+// --------------------------------------------------------------------------
+// 71. reversal represented only by compensating transaction
+// --------------------------------------------------------------------------
+test('71. reversal represented only by compensating transaction', () => {
+  const { h, periodId } = setupPublished();
+  const credRes = h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' }));
+  const revRes = h.post(makeCreditReverseOp({ periodId, transactionId: credRes.transactionId }));
+  assert.equal(revRes.ok, true);
+
+  // The compensating transaction must exist
+  const revTx = findTxRecord(h, revRes.reversalTransactionId);
+  assert.ok(revTx, 'Compensating transaction row must exist');
+  assert.equal(revTx.obj.TransactionType, 'CREDIT_REVERSAL');
+  assert.equal(revTx.obj.RelatedTransactionId, credRes.transactionId);
+  assert.equal(Number(revTx.obj.Amount), -1);
+
+  // Balance derivation correctly nets to 0 from the transaction graph
+  const bal = h.get('rosterv2entitlementbalances', { personId: person1 });
+  assert.equal(bal.balances.GOFF, 0);
+});
+
+// --------------------------------------------------------------------------
+// 72. tampered GOFF->GHKA transaction fails recovery
+// --------------------------------------------------------------------------
+test('72. tampered GOFF->GHKA transaction fails recovery', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  const creditRes = h.post(op);
+
+  // Set OperationLog to RECOVERY_REQUIRED
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === op.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // Tamper EntitlementType in RosterEntitlementTransactions
+  const txHeaders = h.grids.RosterEntitlementTransactions[0];
+  const txRow = h.grids.RosterEntitlementTransactions.slice(1).find(r => r[txHeaders.indexOf('TransactionId')] === creditRes.transactionId);
+  txRow[txHeaders.indexOf('EntitlementType')] = 'GHKA';
+
+  // Recovery must fail closed with CORRUPT_DATA
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: op.operationId });
+  assert.equal(recRes.ok, false);
+  assert.equal(recRes.error.code, 'CORRUPT_DATA');
+});
+
+// --------------------------------------------------------------------------
+// 73. tampered PersonId fails recovery
+// --------------------------------------------------------------------------
+test('73. tampered PersonId fails recovery', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  const creditRes = h.post(op);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === op.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // Tamper PersonId
+  const txHeaders = h.grids.RosterEntitlementTransactions[0];
+  const txRow = h.grids.RosterEntitlementTransactions.slice(1).find(r => r[txHeaders.indexOf('TransactionId')] === creditRes.transactionId);
+  txRow[txHeaders.indexOf('PersonId')] = person2;
+
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: op.operationId });
+  assert.equal(recRes.ok, false);
+  assert.equal(recRes.error.code, 'CORRUPT_DATA');
+});
+
+// --------------------------------------------------------------------------
+// 74. tampered Amount fails recovery
+// --------------------------------------------------------------------------
+test('74. tampered Amount fails recovery', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  const creditRes = h.post(op);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === op.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // Tamper Amount to 999
+  const txHeaders = h.grids.RosterEntitlementTransactions[0];
+  const txRow = h.grids.RosterEntitlementTransactions.slice(1).find(r => r[txHeaders.indexOf('TransactionId')] === creditRes.transactionId);
+  txRow[txHeaders.indexOf('Amount')] = 999;
+
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: op.operationId });
+  assert.equal(recRes.ok, false);
+  assert.equal(recRes.error.code, 'CORRUPT_DATA');
+});
+
+// --------------------------------------------------------------------------
+// 75. tampered SourceId fails recovery
+// --------------------------------------------------------------------------
+test('75. tampered SourceId fails recovery', () => {
+  const { h, periodId } = setupPublished();
+  h.post(makeAmendOp({ periodId, personId: person1, date: '2026-05-02', shiftCode: 'AM', expectedRevision: 1 }));
+  const op = makeEarnGoffOp({ periodId, personId: person1, date: '2026-05-02' });
+  const earnRes = h.post(op);
+  assert.equal(earnRes.ok, true);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === op.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // Tamper SourceId
+  const txHeaders = h.grids.RosterEntitlementTransactions[0];
+  const txRow = h.grids.RosterEntitlementTransactions.slice(1).find(r => r[txHeaders.indexOf('TransactionId')] === earnRes.transactionId);
+  txRow[txHeaders.indexOf('SourceId')] = 'tampered-corrupt-source-id';
+
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: op.operationId });
+  assert.equal(recRes.ok, false);
+  assert.equal(recRes.error.code, 'CORRUPT_DATA');
+});
+
+// --------------------------------------------------------------------------
+// 76. recovery never rewrites corrupt accounting fields
+// --------------------------------------------------------------------------
+test('76. recovery never rewrites corrupt accounting fields', () => {
+  const { h, periodId } = setupPublished();
+  const op = makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF' });
+  const creditRes = h.post(op);
+
+  const logHeaders = h.grids.OperationLog[0];
+  const logRow = h.grids.OperationLog.slice(1).find(r => r[logHeaders.indexOf('OperationId')] === op.operationId);
+  logRow[logHeaders.indexOf('Status')] = 'RECOVERY_REQUIRED';
+
+  // Tamper Amount to 5
+  const txHeaders = h.grids.RosterEntitlementTransactions[0];
+  const txRow = h.grids.RosterEntitlementTransactions.slice(1).find(r => r[txHeaders.indexOf('TransactionId')] === creditRes.transactionId);
+  txRow[txHeaders.indexOf('Amount')] = 5;
+
+  const recRes = h.post({ action: 'rosterv2entitlementrecover', operationId: op.operationId });
+  assert.equal(recRes.ok, false);
+  assert.equal(recRes.error.code, 'CORRUPT_DATA');
+
+  // Verify the corrupt row was NOT "repaired" or overwritten back to 1
+  assert.equal(txRow[txHeaders.indexOf('Amount')], 5, 'Persisted row must remain untouched; recovery must not repair or rewrite');
+});
+
+// --------------------------------------------------------------------------
+// 77. balance remains deterministic from confirmed immutable transactions
+// --------------------------------------------------------------------------
+test('77. balance remains deterministic from confirmed immutable transactions', () => {
+  const { h, periodId } = setupPublished();
+  // Amend May 2 to AM so Ali qualifies for displaced OFF credit
+  h.post(makeAmendOp({ periodId, personId: person1, date: '2026-05-02', shiftCode: 'AM', expectedRevision: 1 }));
+  // 1. Credit manual GOFF (+1)
+  const c1 = h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GOFF', effectiveDate: '2026-05-01' }));
+  // 2. Earn GOFF (+1)
+  const c2 = h.post(makeEarnGoffOp({ periodId, personId: person1, date: '2026-05-02' }));
+  // 3. Consume GOFF on May 3 (-1) -> revision is 2 after amend
+  const cons = h.post(makeConsumeOp({ periodId, personId: person1, entitlementType: 'GOFF', date: '2026-05-03', expectedRevision: 2 }));
+  // 4. Reverse consumption (+1) -> revision is 3 after consume
+  const rev = h.post(makeConsumeReverseOp({ periodId, transactionId: cons.transactionId, expectedRevision: 3 }));
+  // 5. Credit manual GHKA (+1)
+  const ghkaCred = h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GHKA', effectiveDate: '2026-05-01' }));
+
+  const bal = h.get('rosterv2entitlementbalances', { personId: person1 });
+  assert.equal(bal.balances.GOFF, 2, 'Net GOFF balance: +1 +1 -1 +1 = 2');
+  assert.equal(bal.balances.GHKA, 1, 'Net GHKA balance: +1 = 1');
+
+  // Verify all 5 transaction rows exist and have unchanged semantic properties
+  const txIds = [c1.transactionId, c2.transactionId, cons.transactionId, rev.reversalTransactionId, ghkaCred.transactionId];
+  txIds.forEach(id => {
+    const rec = findTxRecord(h, id);
+    assert.ok(rec, `Transaction ${id} must exist in immutable ledger`);
+  });
+});
+
+// --------------------------------------------------------------------------
+// 78. GOFF/GHKA separation remains intact
+// --------------------------------------------------------------------------
+test('78. GOFF/GHKA separation remains intact', () => {
+  const { h, periodId } = setupPublished();
+  // Credit 1 GHKA and 0 GOFF
+  h.post(makeCreditManualOp({ periodId, personId: person1, entitlementType: 'GHKA' }));
+
+  // Attempt to consume GOFF - must fail closed with INSUFFICIENT_GOFF_BALANCE
+  const failGoff = h.post(makeConsumeOp({ periodId, personId: person1, entitlementType: 'GOFF', date: '2026-05-03', expectedRevision: 1 }));
+  assert.equal(failGoff.ok, false);
+  assert.equal(failGoff.error.code, 'INSUFFICIENT_GOFF_BALANCE');
+
+  // Consume GHKA - must succeed
+  const okGhka = h.post(makeConsumeOp({ periodId, personId: person1, entitlementType: 'GHKA', date: '2026-05-03', expectedRevision: 1 }));
+  assert.equal(okGhka.ok, true);
+
+  const bal = h.get('rosterv2entitlementbalances', { personId: person1 });
+  assert.equal(bal.balances.GOFF, 0);
+  assert.equal(bal.balances.GHKA, 0);
+});

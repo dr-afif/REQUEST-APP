@@ -84,39 +84,58 @@ Execution of `git show --no-patch --format=fuller 17712a4f7e177771ff3cf44d02d7ba
 
 ---
 
-## 5. Canonical Table Schema & Identity
+## 5. Canonical Table Schema & Identity (Strict Append-Only Immutability)
 
 ### Authoritative Ledger Name:
-`RosterEntitlementTransactions` (append-only sheet/table).
+`RosterEntitlementTransactions` (100% append-only accounting ledger).
+
+### Append-Only Invariant Contract (Option A):
+1. **Completely Immutable After Append**:
+   - A row appended to `RosterEntitlementTransactions` is **never edited, updated, or deleted**.
+   - Zero columns are permitted to mutate after insertion.
+   - There are zero in-place row writes (`rosterLifecycleWriteRow_`) executed against `RosterEntitlementTransactions` across the entire codebase.
+2. **Authoritative Confirmation State**:
+   - Transaction validity and confirmation are derived strictly from `OperationLog.Status === 'CONFIRMED'`.
+   - The `Status` column in `RosterEntitlementTransactions` is static metadata assigned upon creation (`CONFIRMED`).
+   - If an operation fails or enters `RECOVERY_REQUIRED`, its transaction row exists in the grid but is excluded from balances, `Current` roster projections, and user history because `OperationLog.Status !== 'CONFIRMED'`.
+   - Recovery updates `OperationLog.Status` to `CONFIRMED` upon validating roster projection; it **never** mutates the ledger row.
+3. **Compensating Transactions for Corrections & Reversals**:
+   - Corrections and reversals are strictly represented by appending new compensating transactions (`CREDIT_REVERSAL`, `CONSUMPTION_REVERSAL`) referencing `RelatedTransactionId = <originalTxId>`.
+   - The original transaction row remains untouched byte-for-byte; its `Status` is **never** mutated to `REVERSED`.
+   - Active accounting effect is derived dynamically from the transaction graph.
+4. **Tamper Detection (Fail Closed)**:
+   - Recovery executes cryptographic tamper detection by comparing persisted transaction fields against canonical expectations computed via SHA-256 (`rosterV2Digest_`).
+   - If any accounting-semantic field (`EntitlementType`, `PersonId`, `Amount`, `SourceId`, `RelatedTransactionId`, etc.) has been altered, recovery immediately aborts with `CORRUPT_DATA` and sets `OperationLog.Status = 'RECOVERY_REQUIRED'`.
+   - Recovery **never** repairs or rewrites corrupt accounting rows in place.
 
 ### Record Fields:
-| Field Name | Type | Description |
-| :--- | :--- | :--- |
-| `TransactionId` | `string` | Deterministic UUID (`etx-...`) |
-| `PeriodId` | `string` | Monthly period context (`YYYY-MM`) |
-| `PersonId` | `string` | Authoritative doctor UUID |
-| `PersonNameSnapshot` | `string` | Display snapshot at transaction time |
-| `EntitlementType` | `string` | `'GOFF'` \| `'GHKA'` (strictly typed) |
-| `DutyDomain` | `string` | Must be `'MO'` (EP strictly excluded) |
-| `TransactionType` | `string` | `CREDIT_EARNED`, `CREDIT_MANUAL`, `GOFF_CONSUMED`, `GHKA_CONSUMED`, etc. |
-| `Amount` | `number` | Integer amount (+1 for credit, -1 for consumption) |
-| `EffectiveDate` | `string` | ISO date (`YYYY-MM-DD`) |
-| `SourceType` | `string` | `DISPLACED_WEEKLY_OFF`, `PUBLIC_HOLIDAY_DUTY`, `OPENING_BALANCE`, `ADMIN_ADJUSTMENT`, `ROSTER_ASSIGNMENT` |
-| `SourceId` | `string` | Lineage reference |
-| `SourceAssignmentId` | `string` | Authoritative source assignment ID if applicable |
-| `SourcePeriodId` | `string` | Source roster month |
-| `PublicHolidayDate` | `string` | Qualifying holiday date if applicable |
-| `PublicHolidayName` | `string` | Holiday title if applicable |
-| `RosterAssignmentId` | `string` | Target assignment where entitlement is taken |
-| `RelatedTransactionId` | `string` | Target TransactionId for reversals |
-| `ReasonCode` | `string` | Public reason code |
-| `AdminNote` | `string` | Confidential managerial note |
-| `ExpiresAt` | `string` \| `null` | Expiry date (`null` for current policy) |
-| `ExpiryPolicyCode` | `string` \| `null` | Expiry policy identifier (`null` for current policy) |
-| `Status` | `string` | `CONFIRMED`, `PENDING`, `REVERSED`, `REJECTED` |
-| `OperationId` | `string` | Client operation UUID for idempotency |
-| `CreatedAt` | `string` | ISO 8601 timestamp |
-| `CreatedBy` | `string` | Operator identifier / email |
+| Field Name | Type | Immutability | Description |
+| :--- | :--- | :--- | :--- |
+| `TransactionId` | `string` | Immutable | Deterministic SHA-256 digest (`etx-...`) |
+| `PeriodId` | `string` | Immutable | Monthly period context (`YYYY-MM`) |
+| `PersonId` | `string` | Immutable | Authoritative doctor UUID |
+| `PersonNameSnapshot` | `string` | Immutable | Display snapshot at transaction time |
+| `EntitlementType` | `string` | Immutable | `'GOFF'` \| `'GHKA'` (strictly typed) |
+| `DutyDomain` | `string` | Immutable | Must be `'MO'` (EP strictly excluded) |
+| `TransactionType` | `string` | Immutable | `CREDIT_EARNED`, `CREDIT_MANUAL`, `GOFF_CONSUMED`, `GHKA_CONSUMED`, `CREDIT_REVERSAL`, `CONSUMPTION_REVERSAL` |
+| `Amount` | `number` | Immutable | Integer amount (+1 for credit/reversal, -1 for consumption/reversal) |
+| `EffectiveDate` | `string` | Immutable | ISO date (`YYYY-MM-DD`) |
+| `SourceType` | `string` | Immutable | `DISPLACED_WEEKLY_OFF`, `PUBLIC_HOLIDAY_DUTY`, `OPENING_BALANCE`, `ADMIN_ADJUSTMENT`, `ROSTER_ASSIGNMENT` |
+| `SourceId` | `string` | Immutable | Lineage reference |
+| `SourceAssignmentId` | `string` | Immutable | Authoritative source assignment ID if applicable |
+| `SourcePeriodId` | `string` | Immutable | Source roster month |
+| `PublicHolidayDate` | `string` | Immutable | Qualifying holiday date if applicable |
+| `PublicHolidayName` | `string` | Immutable | Holiday title if applicable |
+| `RosterAssignmentId` | `string` | Immutable | Target assignment where entitlement is taken |
+| `RelatedTransactionId` | `string` | Immutable | Target TransactionId for reversals |
+| `ReasonCode` | `string` | Immutable | Public reason code |
+| `AdminNote` | `string` | Immutable | Confidential managerial note |
+| `ExpiresAt` | `string` \| `null` | Immutable | Expiry date (`null` for current policy) |
+| `ExpiryPolicyCode` | `string` \| `null` | Immutable | Expiry policy identifier (`null` for current policy) |
+| `Status` | `string` | Immutable | Static creation metadata (`CONFIRMED`) |
+| `OperationId` | `string` | Immutable | Operation UUID; authoritative confirmation derived from `OperationLog` |
+| `CreatedAt` | `string` | Immutable | ISO 8601 timestamp |
+| `CreatedBy` | `string` | Immutable | Operator identifier / email |
 
 ---
 
@@ -159,9 +178,13 @@ $$\text{Current Balance} = \text{Active Net Credits} - \text{Active Net Consumpt
 
 ---
 
-## 8. Reversal & Dependency Rules
+## 8. Reversal & Dependency Rules (Compensating Transactions)
 
 Compensating reversal transactions append to `RosterEntitlementTransactions`:
+- **Original Row Untouched**:
+  - The original transaction row remains completely immutable. It is **never** mutated to `Status = 'REVERSED'`.
+  - The reversal is represented solely by appending a new compensating transaction (`CREDIT_REVERSAL` or `CONSUMPTION_REVERSAL`) with `RelatedTransactionId = <originalTxId>`.
+  - Balances, available entitlements, and active status are derived directly from the transaction graph.
 - **Scoped Dependencies**:
   - A GOFF credit cannot be reversed if an active GOFF consumption depends upon it (`DEPENDENT_CONSUMPTION_EXISTS`).
   - A GHKA credit cannot be reversed if an active GHKA consumption depends upon it (`DEPENDENT_CONSUMPTION_EXISTS`).

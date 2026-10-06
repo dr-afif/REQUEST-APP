@@ -339,11 +339,12 @@ function rosterLifecycleFindConfirmedEntitlementsByPeriod_(periodId, currentOper
     const inPeriod = (tx.PeriodId === periodId) ||
       (tx.EffectiveDate && String(tx.EffectiveDate).slice(0, 7) === periodId);
     if (!inPeriod) return false;
-    if (tx.Status !== 'CONFIRMED') return false;
-    if (confirmedOpIds.has(tx.OperationId)) return true;
-    if (currentOperationIdToInclude && tx.OperationId === currentOperationIdToInclude) return true;
-    if (!tx.OperationId && tx.Status === 'CONFIRMED') return true;
-    return false;
+    if (tx.OperationId) {
+      if (confirmedOpIds.has(tx.OperationId)) return true;
+      if (currentOperationIdToInclude && tx.OperationId === currentOperationIdToInclude) return true;
+      return false;
+    }
+    return tx.Status === 'CONFIRMED';
   });
 }
 
@@ -352,11 +353,12 @@ function rosterLifecycleFindAllConfirmedEntitlementsByPerson_(personId, currentO
   const confirmedOpIds = rosterLifecycleGetConfirmedOperationIdsAll_();
   return records.filter(function(tx) {
     if (tx.PersonId !== personId) return false;
-    if (tx.Status !== 'CONFIRMED') return false;
-    if (confirmedOpIds.has(tx.OperationId)) return true;
-    if (currentOperationIdToInclude && tx.OperationId === currentOperationIdToInclude) return true;
-    if (!tx.OperationId && tx.Status === 'CONFIRMED') return true;
-    return false;
+    if (tx.OperationId) {
+      if (confirmedOpIds.has(tx.OperationId)) return true;
+      if (currentOperationIdToInclude && tx.OperationId === currentOperationIdToInclude) return true;
+      return false;
+    }
+    return tx.Status === 'CONFIRMED';
   });
 }
 
@@ -3911,10 +3913,10 @@ function rosterLifecycleGetEntitlementTransactions_(parameters, principal) {
     const records = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
     const confirmedOpIds = rosterLifecycleGetConfirmedOperationIdsAll_();
     confirmedTx = records.filter(function(tx) {
-      if (tx.Status !== 'CONFIRMED') return false;
-      if (confirmedOpIds.has(tx.OperationId)) return true;
-      if (!tx.OperationId && tx.Status === 'CONFIRMED') return true;
-      return false;
+      if (tx.OperationId) {
+        return confirmedOpIds.has(tx.OperationId);
+      }
+      return tx.Status === 'CONFIRMED';
     });
   }
 
@@ -4066,12 +4068,23 @@ function rosterLifecycleEntitlementEarnGoff_(data, actor) {
   // 4. Duplicate credit check: deterministic SourceId
   const sourceId = 'displaced-off:' + periodId + ':' + personId + ':' + date;
   const existingRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const confirmedOpIds = rosterLifecycleGetConfirmedOperationIdsAll_();
+  const confirmedReversals = new Set(
+    existingRecords
+      .filter(function(tx) {
+        return tx.TransactionType === 'CREDIT_REVERSAL' &&
+          tx.RelatedTransactionId &&
+          (confirmedOpIds.has(tx.OperationId) || !tx.OperationId);
+      })
+      .map(function(tx) { return tx.RelatedTransactionId; })
+  );
   const duplicateCredit = existingRecords.find(function(tx) {
     return tx.PersonId === personId &&
       tx.EffectiveDate === date &&
       tx.EntitlementType === 'GOFF' &&
       tx.SourceType === 'DISPLACED_WEEKLY_OFF' &&
-      tx.Status !== 'REVERSED';
+      (confirmedOpIds.has(tx.OperationId) || !tx.OperationId) &&
+      !confirmedReversals.has(tx.TransactionId);
   });
   if (duplicateCredit && duplicateCredit.OperationId !== operationId) {
     throw DraftProtocol.fail('DUPLICATE_CREDIT_SOURCE', {
@@ -4291,12 +4304,23 @@ function rosterLifecycleEntitlementEarnGhka_(data, actor) {
   // 4. Max one GHKA per person per holiday date
   const sourceId = 'holiday-duty:' + date + ':' + personId;
   const existingRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
+  const confirmedOpIds = rosterLifecycleGetConfirmedOperationIdsAll_();
+  const confirmedReversals = new Set(
+    existingRecords
+      .filter(function(tx) {
+        return tx.TransactionType === 'CREDIT_REVERSAL' &&
+          tx.RelatedTransactionId &&
+          (confirmedOpIds.has(tx.OperationId) || !tx.OperationId);
+      })
+      .map(function(tx) { return tx.RelatedTransactionId; })
+  );
   const duplicateCredit = existingRecords.find(function(tx) {
     return tx.PersonId === personId &&
       tx.EffectiveDate === date &&
       tx.EntitlementType === 'GHKA' &&
       tx.SourceType === 'PUBLIC_HOLIDAY_DUTY' &&
-      tx.Status !== 'REVERSED';
+      (confirmedOpIds.has(tx.OperationId) || !tx.OperationId) &&
+      !confirmedReversals.has(tx.TransactionId);
   });
   if (duplicateCredit && duplicateCredit.OperationId !== operationId) {
     throw DraftProtocol.fail('DUPLICATE_CREDIT_SOURCE', {
@@ -4837,10 +4861,8 @@ function rosterLifecycleEntitlementConsume_(data, actor) {
     };
 
     const existingRecords = rosterLifecycleGetRecords_('RosterEntitlementTransactions');
-    const existingCons = existingRecords.find(function(tx) { return tx.TransactionId === transactionId; });
-    if (existingCons) {
-      rosterLifecycleWriteRow_('RosterEntitlementTransactions', Object.assign({}, existingCons, consumptionRecord), existingCons._row);
-    } else {
+    const existingCons = existingRecords.find(function(tx) { return tx.TransactionId === transactionId || tx.OperationId === operationId; });
+    if (!existingCons) {
       rosterLifecycleAppendRows_('RosterEntitlementTransactions', [consumptionRecord]);
     }
     entityPersisted = true;
@@ -5406,13 +5428,100 @@ function rosterLifecycleEntitlementRecover_(operationId, actor) {
     return rosterLifecycleStatus_(operationId);
   }
 
+  // Tamper detection: verify accounting-semantic fields match canonical expectations
+  let tamperError = null;
+  if (!targetTx.PersonId || targetTx.DutyDomain !== 'MO') {
+    tamperError = 'Invalid PersonId or DutyDomain';
+  } else if (periodId && targetTx.PeriodId && targetTx.PeriodId !== periodId) {
+    tamperError = 'PeriodId mismatch';
+  } else if (log.OperationType === 'ENTITLEMENT_EARN_GOFF') {
+    const expectedTxId = 'etx-goff-' + rosterV2Digest_(operationId + ':' + targetTx.PersonId + ':' + targetTx.EffectiveDate).slice(0, 16);
+    const expectedSourceId = 'displaced-off:' + periodId + ':' + targetTx.PersonId + ':' + targetTx.EffectiveDate;
+    if (targetTx.EntitlementType !== 'GOFF' ||
+        targetTx.TransactionType !== 'CREDIT_EARNED' ||
+        Number(targetTx.Amount) !== 1 ||
+        targetTx.SourceType !== 'DISPLACED_WEEKLY_OFF' ||
+        targetTx.SourceId !== expectedSourceId ||
+        targetTx.TransactionId !== expectedTxId) {
+      tamperError = 'GOFF credit accounting fields corrupted';
+    }
+  } else if (log.OperationType === 'ENTITLEMENT_EARN_GHKA') {
+    const expectedTxId = 'etx-ghka-' + rosterV2Digest_(operationId + ':' + targetTx.PersonId + ':' + targetTx.EffectiveDate).slice(0, 16);
+    const expectedSourceId = 'holiday-duty:' + targetTx.EffectiveDate + ':' + targetTx.PersonId;
+    if (targetTx.EntitlementType !== 'GHKA' ||
+        targetTx.TransactionType !== 'CREDIT_EARNED' ||
+        Number(targetTx.Amount) !== 1 ||
+        targetTx.SourceType !== 'PUBLIC_HOLIDAY_DUTY' ||
+        targetTx.SourceId !== expectedSourceId ||
+        targetTx.TransactionId !== expectedTxId) {
+      tamperError = 'GHKA credit accounting fields corrupted';
+    }
+  } else if (log.OperationType === 'ENTITLEMENT_CREDIT_MANUAL') {
+    const expectedTxId = 'etx-man-' + rosterV2Digest_(operationId + ':' + targetTx.PersonId + ':' + targetTx.EffectiveDate).slice(0, 16);
+    let expectedType = null;
+    if (log.ResultJson) {
+      try { expectedType = JSON.parse(log.ResultJson).entitlementType; } catch (_) {}
+    }
+    if ((expectedType && targetTx.EntitlementType !== expectedType) ||
+        (targetTx.EntitlementType !== 'GOFF' && targetTx.EntitlementType !== 'GHKA') ||
+        targetTx.TransactionType !== 'CREDIT_MANUAL' ||
+        Number(targetTx.Amount) !== 1 ||
+        targetTx.SourceType !== 'ADMIN_ADJUSTMENT' ||
+        targetTx.SourceId !== ('manual:' + operationId) ||
+        targetTx.TransactionId !== expectedTxId) {
+      tamperError = 'Manual credit accounting fields corrupted';
+    }
+  } else if (log.OperationType === 'ENTITLEMENT_CONSUME') {
+    const expectedTxId = 'etx-cons-' + rosterV2Digest_(operationId + ':' + targetTx.PersonId + ':' + targetTx.EffectiveDate).slice(0, 16);
+    let expectedType = null;
+    if (log.ResultJson) {
+      try { expectedType = JSON.parse(log.ResultJson).entitlementType; } catch (_) {}
+    }
+    if ((expectedType && targetTx.EntitlementType !== expectedType) ||
+        (targetTx.EntitlementType !== 'GOFF' && targetTx.EntitlementType !== 'GHKA') ||
+        Number(targetTx.Amount) !== -1 ||
+        targetTx.SourceType !== 'ROSTER_ASSIGNMENT' ||
+        targetTx.TransactionId !== expectedTxId) {
+      tamperError = 'Consumption accounting fields corrupted';
+    }
+  } else if (log.OperationType === 'ENTITLEMENT_CREDIT_REVERSAL') {
+    const expectedTxId = 'etx-rev-' + rosterV2Digest_(operationId + ':' + targetTx.RelatedTransactionId).slice(0, 16);
+    const relatedTarget = records.find(function(tx) { return tx.TransactionId === targetTx.RelatedTransactionId; });
+    if (targetTx.TransactionType !== 'CREDIT_REVERSAL' ||
+        Number(targetTx.Amount) !== -1 ||
+        !targetTx.RelatedTransactionId ||
+        targetTx.TransactionId !== expectedTxId ||
+        !relatedTarget ||
+        relatedTarget.EntitlementType !== targetTx.EntitlementType) {
+      tamperError = 'Credit reversal accounting fields corrupted';
+    }
+  } else if (log.OperationType === 'ENTITLEMENT_CONSUMPTION_REVERSAL') {
+    const expectedTxId = 'etx-rev-' + rosterV2Digest_(operationId + ':' + targetTx.RelatedTransactionId).slice(0, 16);
+    const relatedTarget = records.find(function(tx) { return tx.TransactionId === targetTx.RelatedTransactionId; });
+    if (targetTx.TransactionType !== 'CONSUMPTION_REVERSAL' ||
+        Number(targetTx.Amount) !== 1 ||
+        !targetTx.RelatedTransactionId ||
+        targetTx.TransactionId !== expectedTxId ||
+        !relatedTarget ||
+        relatedTarget.EntitlementType !== targetTx.EntitlementType) {
+      tamperError = 'Consumption reversal accounting fields corrupted';
+    }
+  }
+
+  if (tamperError) {
+    log.Status = 'RECOVERY_REQUIRED';
+    log.ErrorCode = 'CORRUPT_DATA';
+    rosterLifecycleWriteLog_(log);
+    throw DraftProtocol.fail('CORRUPT_DATA', {
+      message: 'Tamper detected: ' + tamperError,
+      operationId: operationId,
+      transactionId: targetTx.TransactionId
+    });
+  }
+
   const isRosterChanging = (log.OperationType === 'ENTITLEMENT_CONSUME' || log.OperationType === 'ENTITLEMENT_CONSUMPTION_REVERSAL');
 
   if (!isRosterChanging) {
-    if (targetTx.Status !== 'CONFIRMED') {
-      targetTx.Status = 'CONFIRMED';
-      rosterLifecycleWriteRow_('RosterEntitlementTransactions', targetTx, targetTx._row);
-    }
     const confirmedResult = {
       ok: true,
       operationId: operationId,
