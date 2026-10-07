@@ -24,7 +24,7 @@ Phase 7 resolves the long-standing compensatory leave and holiday replacement en
 Phase 7 introduces the first-class entitlement accounting ledger:
 1. **Two-Bucket Entitlement Domain**: Strict separation between **Ganti OFF (GOFF)** (earned from working on a scheduled weekly OFF) and **Ganti HKA (GHKA)** (earned from working on a gazetted public holiday).
 2. **Zero Balance Pooling**: GOFF and GHKA are tracked in completely distinct accounts. They never combine into a generic "days off" pool and cannot substitute for one another during operational consumption.
-3. **Immutable Double-Entry Compensating Ledger**: The `RosterEntitlementTransactions` table is append-only. Transactions are never edited or deleted in-place. Reversals append compensating records (`CREDIT_REVERSAL`, `CONSUMPTION_REVERSAL`).
+3. **Immutable Append-Only Entitlement Ledger**: The `RosterEntitlementTransactions` table is an append-only compensating transaction ledger. Transactions are never edited or deleted in-place. Reversals append compensating records (`CREDIT_REVERSAL`, `CONSUMPTION_REVERSAL`).
 4. **OperationLog Authority**: Only transactions confirmed via the authoritative `OperationLog` (`Status === 'CONFIRMED'`) participate in balance derivation, Current roster resolution, and normal ledger views. Unconfirmed, pending, failed, and ambiguous transactions are strictly excluded.
 5. **Durable Recovery**: The `rosterv2entitlementrecover` endpoint provides idempotent replay for ambiguous transactions without duplicate row creation or double revision increments.
 6. **Cross-Period Carry-Forward**: Entitlements do not expire or reset at month/year boundaries (`ExpiresAt = null` by current policy). December balances naturally carry forward into January.
@@ -232,6 +232,13 @@ The `RosterEntitlementTransactions` table schema:
 2. **Zero Row Deletion**: Reversals append new rows; existing rows are never removed.
 3. **Zero Column Repurposing**: Unused optional fields remain empty strings; schema headers remain strictly fixed in canonical order.
 
+### 9.1 Ledger Architectural Paradigm: Append-Only Compensating Transaction Ledger
+The entitlement ledger is an **Immutable Append-Only Entitlement Ledger** utilizing **compensating transactions** rather than classical balanced double-entry bookkeeping:
+- **No Paired Multi-Account Balancing**: Classical double-entry requires simultaneous balanced debits and credits across dual accounts (e.g., assets vs. liabilities). In this clinical entitlement ledger, each event is an atomic, discrete journal entry (+1 credit or -1 debit) belonging to an individual doctor's bucket (`GOFF` or `GHKA`).
+- **Immutable Original Transactions**: When an operational credit or consumption is reversed, the original transaction is never modified or marked inactive in-place.
+- **Compensating Transactions**: Reversals are recorded as explicit, distinct compensating rows (`CREDIT_REVERSAL`, `CONSUMPTION_REVERSAL`) referencing `RelatedTransactionId`.
+- **Derived Balances**: Balances are calculated dynamically as a deterministic mathematical fold over all confirmed immutable records.
+
 ---
 
 ## 10. Confirmation Authority (`OperationLog.Status`)
@@ -319,11 +326,54 @@ The legacy Google Sheets `MasterRoster` sheet is updated as a pure synchronized 
 
 ---
 
-## 16. Complete Regression Accounting
+## 16. Production Separation & Cutover Status
+
+To maintain strict operational clinical safety and prevent accidental disruption to live hospital staff schedules, Phase 7 enforces absolute isolation between the development branches and production environments:
+
+### 16.1 Production Branch Status
+- **Production `main` Checkpoint**: `17712a4f7e177771ff3cf44d02d7ba570f567d21` (`fix(roster): backport safe historical month uploads`).
+- **Remote `origin/main` Checkpoint**: `17712a4f7e177771ff3cf44d02d7ba570f567d21` (exact SHA parity).
+- **Branch Lineage Separation**: Production `main` contains solely the legacy production frontend application combined with the historical roster upload month-scoping safety hotfix. It remains completely isolated from all Phase 4, Phase 5, Phase 6, and Phase 7 major update developments.
+
+### 16.2 Production Frontend Deployment Status
+- **GitHub Pages Deployment Branch**: `origin/gh-pages`.
+- **Active Production Deployment SHA**: `4ec7843f992fa0e05540274085a83464470f262e` (deployed on May 20, 2026).
+- **Deployment Content**: Legacy clinical request application and historical roster viewer.
+- **Zero Phase 5–7 Deployment**: Zero frontend artifacts from Phase 4 (lifecycle), Phase 5 (amendments), Phase 6 (absences/replacements), or Phase 7 (entitlements) have been built or pushed to `gh-pages`.
+
+### 16.3 Production Google Apps Script Status
+- **Active Production Backend**: The production Google Apps Script deployment remains on the manually deployed **V1.1 legacy MasterRoster safety backend** from the historical roster data-loss hotfix.
+- **Deployed Backend Scope**: Contains legacy read/write endpoints and month-scoped `MasterRoster` update handlers.
+- **Un-deployed Phase 4–7 Backend**: Production Apps Script does **NOT** contain:
+  - Phase 4 lifecycle state machine backend;
+  - Phase 5 amendment/swap backend;
+  - Phase 6 absence and replacement backend;
+  - Phase 7 GOFF/GHKA entitlement ledger backend.
+- **Verifiable Boundary**: The local `appscript.txt` bundle was generated strictly for local automated contract validation (`scripts/build-appscript.mjs --check`). No deployment command (`clasp push`, Google Apps Script API call, or manual script editor upload) was executed during Phase 7. Production Apps Script remains independently and manually managed.
+
+### 16.4 Production Sheet Safety
+- **Zero Production Sheet Mutations**: No Phase 7 unit tests, contract validations, integration tests, or end-to-end certification scenarios connected to or modified any live production Google Spreadsheet.
+- **Harness Isolation**: All tests executed strictly against the in-memory `apps-script-harness.mjs` test sandbox, unit fixtures, and local in-memory Mock Spreadsheets. No live production Sheet IDs or API keys are configured in the test runner.
+
+### 16.5 Production Cutover Boundary
+- **Current Production**: Legacy frontend + legacy V1.1 safe roster upload backend.
+- **Development Branch (`feature/phase-7-goff-ledger`)**: Certified Phase 4–7 major update architecture.
+- **Not Yet In Production**:
+  - Roster lifecycle engine (`DRAFT`, `PUBLISHED`, `AMENDED`, `CLOSED`);
+  - Assignment amendments and swap workflows;
+  - Operational absences (`MC`, `EL`, `AL`, `COURSE`) and replacement coverage bridges;
+  - GOFF and GHKA entitlement ledger and compensation mechanisms;
+  - New `Current`, `Planned`, `Changes`, and `Entitlements` UI views.
+- **Phase 8 Scope**: UI / UX polish, clinical workflow ergonomics, and non-breaking presentation refinements only. Strictly non-production.
+- **Phase 9 Scope**: Dedicated production cutover, live schema initialization, baseline roster publishing, and administrative migration.
+
+---
+
+## 17. Complete Regression Accounting
 
 All tests across all development phases run and pass with zero failures:
 
-### 16.1 Exact Test File Count:
+### 17.1 Exact Test File Count:
 - **Total Test Files**: 31 files
   - Legacy Utilities: 5 files (`src/utils/*.test.js`)
   - Phase 1: 5 files (`tests/phase1/*.test.mjs`)
@@ -334,7 +384,7 @@ All tests across all development phases run and pass with zero failures:
   - Phase 6: 3 files (`tests/phase6/*.test.mjs`)
   - Phase 7: 4 files (`tests/phase7/*.test.mjs`)
 
-### 16.2 Exact node:test Test Case Count:
+### 17.2 Exact node:test Test Case Count:
 - **Expected before certification additions**: 763
 - **Certification additions in Slice 4**: 9
 - **Total node:test Test Cases**: **772**
@@ -342,7 +392,7 @@ All tests across all development phases run and pass with zero failures:
 - **Fail**: **0**
 - **Skipped**: **0**
 
-### 16.3 Suite Breakdown:
+### 17.3 Suite Breakdown:
 1. `npm run test:legacy`:
    - `adapters.test.js`: PASS
    - `cache.test.js`: PASS
@@ -362,7 +412,7 @@ All tests across all development phases run and pass with zero failures:
    - `ui.test.mjs`: 50 passed
 9. `npm test`: **772 tests, 772 passed, 0 failed**
 
-### 16.4 Build & Bundle Checks:
+### 17.4 Build & Bundle Checks:
 - `node scripts/build-appscript.mjs --check`: PASS (bundle matches shared contracts and backend adapter).
 - `npm run build`: PASS (Vite production bundle built cleanly in 28.42s).
 - `git status --porcelain dist/index.html`: Clean (restored to baseline; zero drift).
@@ -370,9 +420,9 @@ All tests across all development phases run and pass with zero failures:
 
 ---
 
-## 17. Readiness Determination for Phase 8
+## 18. Readiness Determination for Phase 8
 
-Phase 7 is fully implemented, immutability-hardened, privacy-certified, and verified end-to-end against all functional and regression requirements.
+Phase 7 is fully implemented, immutability-hardened, privacy-certified, verified for production separation, and tested end-to-end against all functional and regression requirements.
 
 ### Final Certification Status:
 ```text
