@@ -57,7 +57,12 @@ export default function AmendmentHistoryPanel({
   };
 
   return (
-    <div className="space-y-4" aria-label="Amendment and Reversal History">
+    <div
+      className="space-y-4"
+      aria-label="Amendment and Reversal History"
+      id="amendment-history-panel"
+      data-testid="amendment-history-panel"
+    >
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-2xl bg-purple-50/70 border border-purple-200 gap-2">
         <div>

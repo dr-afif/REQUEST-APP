@@ -83,6 +83,9 @@ export default function Phase5RosterContainer({
   // 10-second Undo for amendments
   const [undoEvent, setUndoEvent] = useState(null);
 
+  // Desktop lightweight focus mode
+  const [isFocusMode, setIsFocusMode] = useState(false);
+
   // Monotonic generation counter to prevent stale async responses across month switching
   const requestGenRef = useRef(0);
 
@@ -667,21 +670,40 @@ export default function Phase5RosterContainer({
         </div>
       )}
 
-      {/* Header Bar: View Mode Selector */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-slate-200">
-        <RosterViewModeSelector
-          mode={viewMode}
-          onChange={setViewMode}
-          amendmentCount={activeAmendmentCount}
-        />
+      {/* Header Bar: View Mode Selector & Desktop Toolbar */}
+      <div
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-2 border-b border-slate-200 roster-toolbar-header"
+        id="roster-toolbar-header"
+        data-testid="roster-toolbar-header"
+      >
+        <div className="flex items-center gap-2 flex-wrap">
+          <RosterViewModeSelector
+            mode={viewMode}
+            onChange={setViewMode}
+            amendmentCount={activeAmendmentCount}
+          />
+        </div>
 
-        <div className="text-xs text-slate-500 font-medium">
-          Period: <strong className="text-slate-700">{period}</strong>
-          {state && (
-            <span className="ml-2 font-mono text-[11px] text-slate-400">
-              (rev {lifecycle?.revision || 1})
-            </span>
-          )}
+        <div className="flex items-center gap-3 text-xs text-slate-500 font-medium self-end sm:self-auto">
+          <button
+            type="button"
+            id="btn-toggle-focus-mode"
+            data-testid="btn-toggle-focus-mode"
+            onClick={() => setIsFocusMode(prev => !prev)}
+            className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition shadow-2xs cursor-pointer"
+            title={isFocusMode ? 'Exit high-density focus mode' : 'Expand roster workspace focus'}
+          >
+            <span>{isFocusMode ? '🗗 Exit Focus' : '🗖 Focus Mode'}</span>
+          </button>
+
+          <div>
+            Period: <strong className="text-slate-700">{period}</strong>
+            {state && (
+              <span className="ml-2 font-mono text-[11px] text-slate-400">
+                (rev {lifecycle?.revision || 1})
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

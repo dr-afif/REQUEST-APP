@@ -123,6 +123,7 @@ export default function AmendmentModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="amendment-modal-title"
+      id="amendment-modal"
     >
       <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-slate-100 animate-fadeIn">
         {/* Header */}

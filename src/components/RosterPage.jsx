@@ -2319,9 +2319,15 @@ export default function RosterPage({
     }
   };
 
+  const isV2Active = Boolean(
+    lifecycleInfo.isEnrolled &&
+    ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
+    settings?.roster_v2_read_enabled !== false
+  );
+
   return (
     <div className={`mx-auto px-2 sm:px-6 py-6 sm:py-8 md:px-8 animate-fadeIn ${
-      activeTab === 'table' ? 'w-full max-w-none' : 'max-w-5xl'
+      isV2Active || activeTab === 'table' ? 'w-full max-w-none' : 'max-w-5xl'
     }`}>
       {selectedName?.trim().toLowerCase() === 'admin' && rosterPanelEnabled(settings) && <DraftQueuePanel key={rosterMonth} period={rosterMonth} settings={settings} />}
       {/* 🧭 Header Details */}
