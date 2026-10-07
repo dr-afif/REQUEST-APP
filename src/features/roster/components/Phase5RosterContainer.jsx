@@ -139,16 +139,17 @@ export default function Phase5RosterContainer({
 
       // 2. Concurrently fetch Current, Planned, Changes, Absences, Replacements, and Entitlements
       const personForEntitlements = selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId;
+      const shouldFetchEntitlements = isAdmin && Boolean(personForEntitlements);
       const [currRes, planRes, histRes, absRes, replRes, balRes, txRes] = await Promise.all([
         targetQueue.getCurrentRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getPlannedRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getAmendmentHistory(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getAbsences?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, absences: [] }),
         targetQueue.getReplacements?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, replacements: [] }),
-        personForEntitlements && targetQueue.getEntitlementBalances
+        shouldFetchEntitlements && targetQueue.getEntitlementBalances
           ? targetQueue.getEntitlementBalances({ personId: personForEntitlements }).catch((e) => ({ ok: false, error: e }))
           : Promise.resolve({ ok: true, balances: { GOFF: 0, GHKA: 0 } }),
-        targetQueue.getEntitlementTransactions
+        shouldFetchEntitlements && targetQueue.getEntitlementTransactions
           ? targetQueue.getEntitlementTransactions({ periodId: targetPeriod, ...(personForEntitlements ? { personId: personForEntitlements } : {}) }).catch((e) => ({ ok: false, error: e }))
           : Promise.resolve({ ok: true, transactions: [] })
       ]);
@@ -421,7 +422,7 @@ export default function Phase5RosterContainer({
   // Handle selecting another person in EntitlementPanel
   const handleSelectPersonForEntitlement = useCallback(async (pId) => {
     setSelectedPersonForEntitlement(pId);
-    if (!queue || !pId) return;
+    if (!isAdmin || !queue || !pId) return;
     try {
       const [bRes, tRes] = await Promise.all([
         queue.getEntitlementBalances?.({ personId: pId }).catch(() => null),
@@ -430,7 +431,7 @@ export default function Phase5RosterContainer({
       if (bRes?.ok && bRes.balances) setEntitlementBalances(bRes.balances);
       if (tRes?.ok && tRes.transactions) setEntitlementTransactions(tRes.transactions);
     } catch (_) {}
-  }, [queue, period]);
+  }, [isAdmin, queue, period]);
 
   // Handle opening consume modal from Current duty cell
   const handleOpenConsumeModal = useCallback(async (cellData, type) => {
@@ -705,11 +706,11 @@ export default function Phase5RosterContainer({
             setIsAbsenceModalOpen(true);
           }}
           onSelectDutyForEntitlement={handleOpenConsumeModal}
-          onSelectPersonForEntitlement={(pId) => {
+          onSelectPersonForEntitlement={isAdmin ? (pId) => {
             handleSelectPersonForEntitlement(pId);
             setViewMode('ENTITLEMENTS');
-          }}
-          onOpenEntitlementsPanel={() => setViewMode('ENTITLEMENTS')}
+          } : undefined}
+          onOpenEntitlementsPanel={isAdmin ? () => setViewMode('ENTITLEMENTS') : undefined}
         />
       )}
 

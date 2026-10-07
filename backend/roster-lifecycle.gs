@@ -3853,6 +3853,9 @@ function rosterLifecycleGetReplacements_(parameters, principal) {
 }
 
 function rosterLifecycleGetEntitlementBalances_(parameters, principal) {
+  if (!principal || !principal.isAdmin) {
+    throw DraftProtocol.fail('AUTHORIZATION_REQUIRED', { message: 'Administrator authorization required to view entitlement balances' });
+  }
   const personId = String(parameters.personId || parameters.person || '').trim();
   const asOfDate = parameters.asOfDate ? String(parameters.asOfDate).trim() : null;
   if (!personId) {
@@ -3897,6 +3900,11 @@ function rosterLifecycleGetEntitlementBalances_(parameters, principal) {
 function rosterLifecycleGetEntitlementTransactions_(parameters, principal) {
   const periodId = parameters.periodId || parameters.period ? RosterCompatibility.validatePeriod(String(parameters.periodId || parameters.period)) : null;
   const personId = parameters.personId || parameters.person ? String(parameters.personId || parameters.person).trim() : null;
+  const isAdmin = Boolean(principal && principal.isAdmin);
+
+  if (!isAdmin && personId) {
+    throw DraftProtocol.fail('AUTHORIZATION_REQUIRED', { message: 'Administrator authorization required to view individual staff entitlement history' });
+  }
 
   rosterLifecycleEnsureAllSchemas_();
   let confirmedTx;
@@ -3920,7 +3928,6 @@ function rosterLifecycleGetEntitlementTransactions_(parameters, principal) {
     });
   }
 
-  const isAdmin = Boolean(principal && principal.isAdmin);
   const transactions = confirmedTx.map(function(tx) {
     if (isAdmin) {
       return {

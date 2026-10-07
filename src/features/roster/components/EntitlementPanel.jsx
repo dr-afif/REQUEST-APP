@@ -54,6 +54,27 @@ export default function EntitlementPanel({
     return available >= 1;
   };
 
+  if (!isAdmin) {
+    return (
+      <div
+        id="entitlement-panel"
+        data-testid="entitlement-panel"
+        className="p-6 rounded-2xl bg-white border border-slate-200 shadow-2xs space-y-3 text-center"
+      >
+        <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 text-slate-500 text-xl mx-auto">
+          🔒
+        </div>
+        <h3 className="text-sm font-bold text-slate-800">
+          Entitlement Ledger Restricted
+        </h3>
+        <p className="text-xs text-slate-600 max-w-md mx-auto">
+          Administrator authorization is required to browse staff entitlement balances and transaction history.
+          Duty status (GOFF, GHKA, HKA) is displayed on the working roster.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
       id="entitlement-panel"

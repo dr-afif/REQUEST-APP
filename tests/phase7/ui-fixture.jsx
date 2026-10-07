@@ -200,6 +200,9 @@ window.mountPhase7Test = (options = {}) => {
     getEntitlementBalances: async (params) => {
       const pId = typeof params === 'object' ? params.personId : params;
       callLog.getEntitlementBalances.push({ personId: pId });
+      if (!currentAdmin) {
+        throw new Error('AUTHORIZATION_REQUIRED: Administrator authorization required to view entitlement balances');
+      }
       const currentBal = storeBalances.get(pId) || { GOFF: 0, GHKA: 0 };
       return {
         ok: true,
@@ -209,25 +212,14 @@ window.mountPhase7Test = (options = {}) => {
     },
     getEntitlementTransactions: async (params) => {
       callLog.getEntitlementTransactions.push(params);
+      if (!currentAdmin) {
+        throw new Error('AUTHORIZATION_REQUIRED: Administrator authorization required to view entitlement transactions');
+      }
       const pId = params?.personId;
       const periodId = params?.periodId;
       let txs = structuredClone(storeTransactions);
       if (pId) txs = txs.filter(t => t.PersonId === pId || t.personId === pId);
       if (periodId) txs = txs.filter(t => (t.EffectiveDate || t.date || '').startsWith(periodId));
-
-      // Privacy scrubbing: if not admin, scrub AdminNote
-      if (!currentAdmin) {
-        txs = txs.map(t => {
-          const scrubbed = { ...t };
-          delete scrubbed.AdminNote;
-          delete scrubbed.adminNote;
-          delete scrubbed.OperationId;
-          delete scrubbed.operationId;
-          delete scrubbed.SourceId;
-          delete scrubbed.sourceId;
-          return scrubbed;
-        });
-      }
 
       return {
         ok: true,
