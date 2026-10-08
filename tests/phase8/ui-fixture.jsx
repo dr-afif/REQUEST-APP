@@ -99,7 +99,7 @@ window.mountPhase8Test = (options = {}) => {
       Revision: initialRevision,
       SchemaVersion: 1
     });
-    ['2026-04', '2026-06'].forEach(p => {
+    ['2026-04', '2026-06', '2026-09', '2026-10'].forEach(p => {
       periodLifecycleMap.set(p, {
         PeriodId: p,
         State: initialState,
@@ -334,6 +334,9 @@ window.mountPhase8Test = (options = {}) => {
       if (simulateRevisionConflict) {
         throw { code: 'REVISION_CONFLICT', message: 'Revision conflict simulated' };
       }
+      if (window.phase8Test?.simulateGenericQueueFailure || options.simulateGenericQueueFailure) {
+        throw new Error('Simulated network/queue persistence failure');
+      }
       (patches || []).forEach(p => {
         const targetShift = p.assignments?.[0]?.shiftCode || 'OFF';
         const cellIdx = storeCurrent.findIndex(a => a.personId === p.personId && a.date === p.date);
@@ -399,7 +402,10 @@ window.mountPhase8Test = (options = {}) => {
               <button
                 type="button"
                 id="btn-prev-month"
-                onClick={() => setPeriod('2026-04')}
+                onClick={() => {
+                  if (period === '2026-10') setPeriod('2026-09');
+                  else setPeriod('2026-04');
+                }}
                 className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 ‹ Prev
@@ -407,7 +413,7 @@ window.mountPhase8Test = (options = {}) => {
               <button
                 type="button"
                 id="btn-current-month"
-                onClick={() => setPeriod('2026-05')}
+                onClick={() => setPeriod(initialPeriod)}
                 className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Current Month
@@ -415,7 +421,10 @@ window.mountPhase8Test = (options = {}) => {
               <button
                 type="button"
                 id="btn-next-month"
-                onClick={() => setPeriod('2026-06')}
+                onClick={() => {
+                  if (period === '2026-09') setPeriod('2026-10');
+                  else setPeriod('2026-06');
+                }}
                 className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Next ›
@@ -458,6 +467,7 @@ window.mountPhase8Test = (options = {}) => {
     storeTransactions,
     storeCurrent,
     storePlanned,
+    simulateGenericQueueFailure: Boolean(options.simulateGenericQueueFailure),
     setPeriod: (p) => window.__setPeriod?.(p),
     setAdmin: (a) => window.__setAdmin?.(a),
     enrollPeriod: (p, state = 'PUBLISHED', rev = 1) => {

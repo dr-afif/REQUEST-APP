@@ -273,14 +273,26 @@ export default function CurrentRosterView({
   const applyShiftToSelection = useCallback((shiftCode) => {
     if (!isDraft || !canEditDraft) return;
 
-    // Gather target cells from selection, strictly excluding EP duties
+    let hasEp = false;
     const targetCells = [];
+
     selectedCellKeys.forEach((key) => {
       const [personId, date, dutyDomain] = key.split('::');
-      if (dutyDomain !== 'EP') {
+      if (dutyDomain === 'EP') {
+        hasEp = true;
+      } else {
         targetCells.push({ personId, date, dutyDomain });
       }
     });
+
+    // Fail closed if bulk selection contains any EP duties
+    if (hasEp) {
+      if (selectedCellKeys.size > 1) {
+        setBulkStatusMsg('Bulk editing is available for MO roster cells only. Remove EP cells from the selection.');
+        setTimeout(() => setBulkStatusMsg(null), 5000);
+      }
+      return;
+    }
 
     if (targetCells.length === 0) return;
 
@@ -661,13 +673,26 @@ export default function CurrentRosterView({
         <div
           id="bulk-status-msg"
           data-testid="bulk-status-msg"
-          className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-300 text-xs font-semibold text-emerald-800 flex items-center justify-between shadow-xs animate-in fade-in"
+          className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-between shadow-xs animate-in fade-in ${
+            bulkStatusMsg.includes('Remove EP cells') || bulkStatusMsg.includes('available for MO')
+              ? 'bg-amber-50 border-amber-300 text-amber-900'
+              : 'bg-emerald-50 border-emerald-300 text-emerald-800'
+          }`}
         >
-          <span>✓ {bulkStatusMsg}</span>
+          <span>
+            {bulkStatusMsg.includes('Remove EP cells') || bulkStatusMsg.includes('available for MO')
+              ? '⚠️ '
+              : '✓ '}
+            {bulkStatusMsg}
+          </span>
           <button
             type="button"
             onClick={() => setBulkStatusMsg(null)}
-            className="text-emerald-700 hover:text-emerald-900 ml-2"
+            className={`ml-2 cursor-pointer ${
+              bulkStatusMsg.includes('Remove EP cells') || bulkStatusMsg.includes('available for MO')
+                ? 'text-amber-800 hover:text-amber-950'
+                : 'text-emerald-700 hover:text-emerald-900'
+            }`}
           >
             ✕
           </button>

@@ -463,24 +463,24 @@ test('11. bulk edit > 10 cells triggers confirmation modal; cancel preserves ori
   });
 });
 
-test('12. EP duties are strictly excluded from bulk edits', async () => {
+test('12. EP duties cannot be bulk-edited (EP-only selection is non-editable)', async () => {
   await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
   await page.waitForSelector('#current-roster-grid-container');
 
-  // Fixture has p-mo-1, p-mo-2, and p-ep
-  // Select rectangle spanning from p-mo-2 down to p-ep on date 2026-05-01
-  await page.focus('#btn-amend-p-mo-2-2026-05-01-MO');
+  // Focus Dr. Dave (EP) on 2026-05-01 and select 2026-05-02
+  await page.focus('#btn-amend-p-ep-2026-05-01-EP');
   await page.keyboard.down('Shift');
-  await page.keyboard.press('ArrowDown'); // selects p-ep
+  await page.keyboard.press('ArrowRight');
   await page.keyboard.up('Shift');
 
   await page.waitForSelector('#bulk-edit-toolbar');
   await page.click('#btn-bulk-apply-pm');
 
-  // p-mo-2 should be updated to PM, p-ep must remain its original shift (EP)
-  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-2-2026-05-01-MO')?.textContent.trim() === 'PM');
-  const epShift = await page.evaluate(() => document.querySelector('#btn-amend-p-ep-2026-05-01-EP')?.textContent.trim());
-  assert.equal(epShift, 'EP', 'EP duty cell must not be modified by bulk edits');
+  // EP duties must remain their original shift (EP)
+  const ep1 = await page.evaluate(() => document.querySelector('#btn-amend-p-ep-2026-05-01-EP')?.textContent.trim());
+  const ep2 = await page.evaluate(() => document.querySelector('#btn-amend-p-ep-2026-05-02-EP')?.textContent.trim());
+  assert.equal(ep1, 'EP', 'EP duty cell 1 must not be modified by bulk edits');
+  assert.equal(ep2, 'EP', 'EP duty cell 2 must not be modified by bulk edits');
 });
 
 test('13. in PUBLISHED state, roving arrows work, direct hotkeys do NOT mutate, and Enter opens Phase 5 Amendment Modal', async () => {
@@ -590,4 +590,388 @@ test('18. #draft-save-status displays save state in toolbar', async () => {
 
   const statusText = await page.evaluate(() => document.querySelector('#draft-save-status')?.textContent.trim());
   assert.ok(statusText.includes('All changes saved') || statusText.includes('Saved'), `Status should indicate saved state, got: ${statusText}`);
+});
+
+test('19. A. AMENDED lifecycle safety: arrow navigation works, but direct hotkeys, paste, Ctrl+Enter, and bulk DRAFT cannot mutate', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'AMENDED', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // Focus cell 2026-05-01
+  await page.focus('#btn-amend-p-mo-1-2026-05-01-MO');
+
+  // Arrow navigation works
+  await page.keyboard.press('ArrowRight');
+  const activeId = await page.evaluate(() => document.activeElement.id);
+  assert.equal(activeId, 'btn-amend-p-mo-1-2026-05-02-MO', 'Arrow navigation must work in AMENDED state');
+
+  // Direct hotkeys do not mutate
+  const cell2Initial = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-02-MO')?.textContent.trim());
+  await page.keyboard.press('p');
+  const paletteOpen = await page.evaluate(() => Boolean(document.querySelector('#quick-shift-palette')));
+  assert.equal(paletteOpen, false, 'Direct hotkey must not open palette in AMENDED state');
+  const cell2AfterKey = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-02-MO')?.textContent.trim());
+  assert.equal(cell2AfterKey, cell2Initial, 'Direct hotkey must not mutate cell in AMENDED state');
+
+  // Paste does not mutate
+  await page.keyboard.down('Control');
+  await page.keyboard.press('v');
+  await page.keyboard.up('Control');
+  const cell2AfterPaste = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-02-MO')?.textContent.trim());
+  assert.equal(cell2AfterPaste, cell2Initial, 'Paste must not mutate cell in AMENDED state');
+
+  // Ctrl+Enter does not mutate
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Control');
+  const cell2AfterRepeat = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-02-MO')?.textContent.trim());
+  assert.equal(cell2AfterRepeat, cell2Initial, 'Ctrl+Enter must not mutate cell in AMENDED state');
+
+  // Bulk DRAFT edit path cannot mutate (toolbar should not appear)
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.up('Shift');
+  const toolbarVisible = await page.evaluate(() => Boolean(document.querySelector('#bulk-edit-toolbar')));
+  assert.equal(toolbarVisible, false, 'Bulk draft toolbar must not appear in AMENDED state');
+});
+
+test('20. B. Planned immutability: Enter, direct hotkeys, paste, and repeat-last cannot mutate Planned cells', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'PUBLISHED', isAdmin: true }));
+  await page.waitForSelector('#view-mode-planned');
+
+  // Switch to Planned view
+  await page.click('#view-mode-planned');
+  await page.waitForSelector('#planned-roster-view');
+
+  const cellId = '#cell-planned-p-mo-1-2026-05-01-MO';
+  await page.focus(cellId);
+  const initialText = await page.evaluate((id) => document.querySelector(id)?.textContent.trim(), cellId);
+  assert.equal(initialText, 'AM');
+
+  // Arrow navigation & copy remain available
+  await page.keyboard.press('ArrowRight');
+  let activeId = await page.evaluate(() => document.activeElement.id);
+  assert.equal(activeId, 'cell-planned-p-mo-1-2026-05-02-MO');
+  await page.keyboard.press('ArrowLeft');
+
+  // Copy with Ctrl+C
+  await page.keyboard.down('Control');
+  await page.keyboard.press('c');
+  await page.keyboard.up('Control');
+
+  // Enter must not mutate or open palette
+  await page.keyboard.press('Enter');
+  const paletteOpen = await page.evaluate(() => Boolean(document.querySelector('#quick-shift-palette') || document.querySelector('#amendment-modal')));
+  assert.equal(paletteOpen, false, 'Enter must not open palette or modal in Planned view');
+
+  // Direct hotkey must not mutate
+  await page.keyboard.press('p');
+
+  // Paste must not mutate
+  await page.keyboard.down('Control');
+  await page.keyboard.press('v');
+  await page.keyboard.up('Control');
+
+  // Repeat-last (Ctrl+Enter) must not mutate
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Control');
+
+  const finalText = await page.evaluate((id) => document.querySelector(id)?.textContent.trim(), cellId);
+  assert.equal(finalText, 'AM', 'Planned cells must remain strictly immutable');
+});
+
+test('21. C. Clipboard identity: paste transfers only shift semantics without corrupting destination PersonId, Date, or DutyDomain', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // Source cell: p-mo-1 (Dr. Ali) on 2026-05-01 (AM)
+  await page.focus('#btn-amend-p-mo-1-2026-05-01-MO');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('c');
+  await page.keyboard.up('Control');
+
+  // Destination cell: p-mo-2 (Dr. Siti) on 2026-05-02 (initially PM)
+  await page.focus('#btn-amend-p-mo-2-2026-05-02-MO');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('v');
+  await page.keyboard.up('Control');
+
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-2-2026-05-02-MO')?.textContent.trim() === 'AM');
+
+  // Assert destination identity in authoritative store
+  const destAssignment = await page.evaluate(() => {
+    return window.phase8Test?.storeCurrent.find(a => a.personId === 'p-mo-2' && a.date === '2026-05-02');
+  });
+
+  assert.ok(destAssignment, 'Destination assignment must exist in store');
+  assert.equal(destAssignment.personId, 'p-mo-2', 'Destination PersonId must remain p-mo-2');
+  assert.equal(destAssignment.date, '2026-05-02', 'Destination Date must remain 2026-05-02');
+  assert.equal(destAssignment.dutyDomain, 'MO', 'Destination DutyDomain must remain MO');
+  assert.equal(destAssignment.shiftCode, 'AM', 'Only shift code should be transferred');
+});
+
+test('22. D. Rapid edit ordering: assigns AM -> AM -> PM -> PM -> OFF across consecutive cells preserving exact order', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // Cell 1: 2026-05-01 -> AM
+  await page.focus('#btn-amend-p-mo-1-2026-05-01-MO');
+  await page.keyboard.press('a');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim() === 'AM');
+
+  // Cell 2: 2026-05-02 -> AM (repeat last)
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-02-MO')?.textContent.trim() === 'AM');
+
+  // Cell 3: 2026-05-03 -> PM
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('p');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-03-MO')?.textContent.trim() === 'PM');
+
+  // Cell 4: 2026-05-04 -> PM (repeat last)
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-04-MO')?.textContent.trim() === 'PM');
+
+  // Cell 5: 2026-05-05 -> OFF
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('o');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => {
+    const t = document.querySelector('#btn-amend-p-mo-1-2026-05-05-MO')?.textContent.trim();
+    return t === 'OFF' || t === '—';
+  });
+
+  const renderedShifts = await page.evaluate(() => [
+    document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim(),
+    document.querySelector('#btn-amend-p-mo-1-2026-05-02-MO')?.textContent.trim(),
+    document.querySelector('#btn-amend-p-mo-1-2026-05-03-MO')?.textContent.trim(),
+    document.querySelector('#btn-amend-p-mo-1-2026-05-04-MO')?.textContent.trim(),
+    document.querySelector('#btn-amend-p-mo-1-2026-05-05-MO')?.textContent.trim()
+  ]);
+
+  assert.equal(renderedShifts[0], 'AM');
+  assert.equal(renderedShifts[1], 'AM');
+  assert.equal(renderedShifts[2], 'PM');
+  assert.equal(renderedShifts[3], 'PM');
+  assert.ok(renderedShifts[4] === 'OFF' || renderedShifts[4] === '—');
+
+  // Verify queue call order
+  const enqueuedShifts = await page.evaluate(() => {
+    const logs = window.phase8Test?.callLog.enqueue || [];
+    return logs.map(l => l.patches?.[0]?.assignments?.[0]?.shiftCode || 'OFF');
+  });
+
+  assert.deepEqual(enqueuedShifts, ['AM', 'AM', 'PM', 'PM', 'OFF']);
+});
+
+test('23. E. Generic failed persistence: reloads authoritative state without leaving unconfirmed optimistic assignment', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // Initially cell 2026-05-01 is 'AM'
+  const initialShift = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim());
+  assert.equal(initialShift, 'AM');
+
+  // Inject generic persistence error
+  await page.evaluate(() => {
+    window.phase8Test.simulateGenericQueueFailure = true;
+  });
+
+  // Attempt to edit to PM
+  await page.focus('#btn-amend-p-mo-1-2026-05-01-MO');
+  await page.keyboard.press('p');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+
+  // Verify save failed notice appears
+  await page.waitForSelector('#draft-save-status');
+  const statusText = await page.evaluate(() => document.querySelector('#draft-save-status')?.textContent.trim());
+  assert.ok(statusText.includes('Save failed') || statusText.includes('Conflict'), `Status should indicate failure, got: ${statusText}`);
+  assert.ok(!statusText.includes('All changes saved'), 'Must not claim all changes saved');
+
+  // Verify authoritative state was restored and cell is NOT left as PM
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim() === 'AM');
+  const restoredShift = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim());
+  assert.equal(restoredShift, 'AM', 'Authoritative AM must be restored after persistence failure');
+});
+
+test('24. F. Undo concurrency protection: authoritative divergence prevents Undo from overwriting newer value', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // 1. User changes cell 2026-05-01 from AM to PM
+  await page.focus('#btn-amend-p-mo-1-2026-05-01-MO');
+  await page.keyboard.press('p');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim() === 'PM');
+
+  // 2. Authoritative current value changes afterward to ON1
+  await page.evaluate(() => {
+    const cell = window.phase8Test.storeCurrent.find(a => a.personId === 'p-mo-1' && a.date === '2026-05-01');
+    if (cell) cell.shiftCode = 'ON1';
+  });
+
+  // 3. User invokes Undo
+  await page.keyboard.down('Control');
+  await page.keyboard.press('z');
+  await page.keyboard.up('Control');
+
+  // Assert conflict indication appears
+  await page.waitForSelector('#revision-conflict-banner');
+  const bannerText = await page.evaluate(() => document.querySelector('#revision-conflict-banner')?.textContent);
+  assert.ok(bannerText.includes('Cannot undo') || bannerText.includes('modified by another change'));
+
+  // Assert cell does NOT overwrite the newer ON1 value with original AM
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim() === 'ON1');
+  const currentVal = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim());
+  assert.equal(currentVal, 'ON1', 'Undo must not overwrite newer authoritative value');
+});
+
+test('25. G. Redo invalidation: new edit invalidates old redo, and concurrent mismatch prevents redo overwrite', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // 1. Edit cell 2026-05-01 to PM
+  await page.focus('#btn-amend-p-mo-1-2026-05-01-MO');
+  await page.keyboard.press('p');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim() === 'PM');
+
+  // 2. Undo to AM
+  await page.keyboard.down('Control');
+  await page.keyboard.press('z');
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim() === 'AM');
+
+  // 3. Perform a different new edit on cell 2026-05-02 (change to PM)
+  await page.focus('#btn-amend-p-mo-1-2026-05-02-MO');
+  await page.keyboard.press('p');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-05-02-MO')?.textContent.trim() === 'PM');
+
+  // 4. Old redo on cell 2026-05-01 is no longer applicable
+  await page.keyboard.down('Control');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('z');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up('Control');
+
+  const cell1Val = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim());
+  assert.equal(cell1Val, 'AM', 'Old redo must be invalidated by new edit');
+});
+
+test('26. H. Mixed MO + EP bulk selection fails closed without modifying any cell', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // Select mixed rectangle spanning from p-mo-2 down to p-ep on 2026-05-01
+  await page.focus('#btn-amend-p-mo-2-2026-05-01-MO');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('ArrowDown'); // selects p-ep
+  await page.keyboard.up('Shift');
+
+  await page.waitForSelector('#bulk-edit-toolbar');
+  await page.click('#btn-bulk-apply-pm');
+
+  // Explanatory error message must appear
+  await page.waitForSelector('#bulk-status-msg');
+  const errorMsg = await page.evaluate(() => document.querySelector('#bulk-status-msg')?.textContent);
+  assert.ok(errorMsg.includes('Bulk editing is available for MO roster cells only'), `Should display mixed EP notice, got: ${errorMsg}`);
+
+  // Both cells must remain unchanged
+  const moShift = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-2-2026-05-01-MO')?.textContent.trim());
+  const epShift = await page.evaluate(() => document.querySelector('#btn-amend-p-ep-2026-05-01-EP')?.textContent.trim());
+  assert.ok(moShift === 'OFF' || moShift === '—', `MO cell must not be modified, got: ${moShift}`);
+  assert.equal(epShift, 'EP', 'EP cell must not be modified');
+
+  // Selection must be preserved
+  const toolbarStillVisible = await page.evaluate(() => Boolean(document.querySelector('#bulk-edit-toolbar')));
+  assert.ok(toolbarStillVisible, 'Bulk toolbar and selection must remain preserved for user adjustment');
+});
+
+test('27. I. Stronger stale-month safety: switching month clears selection, resets active cell, closes palette, and clears undo/redo', async () => {
+  await page.evaluate(() => {
+    mountPhase8Test({
+      initialPeriod: '2026-09',
+      initialState: 'DRAFT',
+      isAdmin: true,
+      currentAssignments: [
+        { assignmentId: 'asg-sep-1', personId: 'p-mo-1', personNameSnapshot: 'Dr. Ali', date: '2026-09-01', dutyDomain: 'MO', shiftCode: 'AM' },
+        { assignmentId: 'asg-sep-2', personId: 'p-mo-1', personNameSnapshot: 'Dr. Ali', date: '2026-09-02', dutyDomain: 'MO', shiftCode: 'OFF' },
+        { assignmentId: 'asg-sep-3', personId: 'p-mo-2', personNameSnapshot: 'Dr. Siti', date: '2026-09-01', dutyDomain: 'MO', shiftCode: 'OFF' },
+        { assignmentId: 'asg-sep-4', personId: 'p-ep', personNameSnapshot: 'Dr. Dave', date: '2026-09-01', dutyDomain: 'EP', shiftCode: 'EP' }
+      ]
+    });
+  });
+  await page.waitForSelector('#current-roster-grid-container');
+
+  // Edit in September to populate undo stack
+  await page.focus('#btn-amend-p-mo-1-2026-09-01-MO');
+  await page.keyboard.press('p');
+  await page.waitForSelector('#quick-shift-palette');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#btn-amend-p-mo-1-2026-09-01-MO')?.textContent.trim() === 'PM');
+
+  // Select cells and open palette
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.up('Shift');
+  await page.waitForSelector('#bulk-edit-toolbar');
+
+  await page.keyboard.press('a');
+  await page.waitForSelector('#quick-shift-palette');
+
+  // Switch to October
+  await page.click('#btn-next-month');
+  await page.waitForFunction(() => document.querySelector('#roster-toolbar-header')?.textContent.includes('2026-10'));
+
+  // Palette must be closed
+  const paletteOpen = await page.evaluate(() => Boolean(document.querySelector('#quick-shift-palette')));
+  assert.equal(paletteOpen, false, 'Palette must close on month switch');
+
+  // Selection must be cleared
+  const toolbarVisible = await page.evaluate(() => Boolean(document.querySelector('#bulk-edit-toolbar')));
+  assert.equal(toolbarVisible, false, 'Selection must clear on month switch');
+
+  // Undo / Redo in October cannot mutate
+  const octFirstBtnId = await page.evaluate(() => document.querySelector('button[id^="btn-amend-"]')?.id);
+  const octBeforeUndo = await page.evaluate((id) => id ? document.querySelector(`#${id}`)?.textContent.trim() : null, octFirstBtnId);
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('z');
+  await page.keyboard.up('Control');
+
+  const octAfterUndo = await page.evaluate((id) => id ? document.querySelector(`#${id}`)?.textContent.trim() : null, octFirstBtnId);
+  assert.equal(octAfterUndo, octBeforeUndo, 'Undo stack must not mutate new month');
+});
+
+test('28. J. Unsupported key safety: pressing X does not mutate or open palette', async () => {
+  await page.evaluate(() => mountPhase8Test({ initialState: 'DRAFT', isAdmin: true }));
+  await page.waitForSelector('#current-roster-grid-container');
+
+  await page.focus('#btn-amend-p-mo-1-2026-05-01-MO');
+  const initialText = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim());
+
+  await page.keyboard.press('x');
+  await page.keyboard.press('X');
+
+  const paletteOpen = await page.evaluate(() => Boolean(document.querySelector('#quick-shift-palette')));
+  assert.equal(paletteOpen, false, 'Pressing X must not open shift palette');
+
+  const afterText = await page.evaluate(() => document.querySelector('#btn-amend-p-mo-1-2026-05-01-MO')?.textContent.trim());
+  assert.equal(afterText, initialText, 'Pressing X must not mutate cell');
 });

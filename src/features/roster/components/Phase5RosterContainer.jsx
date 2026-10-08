@@ -605,6 +605,7 @@ export default function Phase5RosterContainer({
     if (!queue || lifecycle?.state !== 'DRAFT') return;
     setIsSavingDraft(true);
     setDraftSaveStatus('saving');
+    setActionError(null);
 
     const existing = (currentRoster?.assignments || []).find(
       a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
@@ -653,24 +654,29 @@ export default function Phase5RosterContainer({
       setDraftSaveStatus('saved');
     } catch (err) {
       const code = err.code || err.message;
+      setDraftUndoStack(prev => prev.slice(0, -1));
+
       if (code === 'REVISION_CONFLICT') {
         setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
         setDraftSaveStatus('conflict');
-        await loadAuthoritativeData(queue, period, requestGenRef.current);
       } else {
-        setDraftSaveStatus('conflict');
-        setActionError(err.message || code);
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to save roster change');
       }
+
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      syncRecoveryState(queue, period);
     } finally {
       setIsSavingDraft(false);
     }
-  }, [queue, lifecycle, currentRoster, period, loadAuthoritativeData]);
+  }, [queue, lifecycle, currentRoster, period, loadAuthoritativeData, syncRecoveryState]);
 
   // Phase 8 Slice 2: Handle bulk shift edit in DRAFT
   const handleBulkDraftChange = useCallback(async (cellsWithShift) => {
     if (!queue || lifecycle?.state !== 'DRAFT' || !cellsWithShift.length) return;
     setIsSavingDraft(true);
     setDraftSaveStatus('saving');
+    setActionError(null);
 
     const previous = [];
     const next = [];
@@ -719,12 +725,23 @@ export default function Phase5RosterContainer({
       }
       setDraftSaveStatus('saved');
     } catch (err) {
-      setDraftSaveStatus('conflict');
-      setActionError(err.message || err.code);
+      const code = err.code || err.message;
+      setDraftUndoStack(prev => prev.slice(0, -1));
+
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+      } else {
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to apply bulk roster change');
+      }
+
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      syncRecoveryState(queue, period);
     } finally {
       setIsSavingDraft(false);
     }
-  }, [queue, lifecycle, period]);
+  }, [queue, lifecycle, period, loadAuthoritativeData, syncRecoveryState]);
 
   // Phase 8 Slice 2: Handle undo in DRAFT
   const handleUndoDraft = useCallback(async () => {
@@ -732,12 +749,26 @@ export default function Phase5RosterContainer({
     const lastOp = draftUndoStack[draftUndoStack.length - 1];
 
     // Concurrency check: Ensure current state matches what this operation produced (lastOp.next)
-    const hasConflict = lastOp.next.some(item => {
+    let hasConflict = lastOp.next.some(item => {
       const cur = (currentRoster?.assignments || []).find(
         a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
       );
       return cur && cur.shiftCode !== item.shiftCode;
     });
+
+    if (!hasConflict && queue?.getCurrentRoster) {
+      try {
+        const authRes = await queue.getCurrentRoster(period);
+        if (authRes?.ok && authRes.assignments) {
+          hasConflict = lastOp.next.some(item => {
+            const auth = authRes.assignments.find(
+              a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+            );
+            return auth && auth.shiftCode !== item.shiftCode;
+          });
+        }
+      } catch (_) {}
+    }
 
     if (hasConflict) {
       setRevisionConflictMsg('Cannot undo: roster was modified by another change. Refreshing latest version.');
@@ -772,9 +803,24 @@ export default function Phase5RosterContainer({
           assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
         }));
         await queue.enqueue(`draft:${period}`, patches);
+        setDraftSaveStatus('saved');
       }
-    } catch (_) {}
-  }, [draftUndoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData]);
+    } catch (err) {
+      const code = err.code || err.message;
+      setDraftUndoStack(prev => [...prev, lastOp]);
+      setDraftRedoStack(prev => prev.slice(0, -1));
+
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+      } else {
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to persist undo');
+      }
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      syncRecoveryState(queue, period);
+    }
+  }, [draftUndoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData, syncRecoveryState]);
 
   // Phase 8 Slice 2: Handle redo in DRAFT
   const handleRedoDraft = useCallback(async () => {
@@ -782,12 +828,26 @@ export default function Phase5RosterContainer({
     const lastOp = draftRedoStack[draftRedoStack.length - 1];
 
     // Concurrency check: Ensure current state matches what was undone (lastOp.previous)
-    const hasConflict = lastOp.previous.some(item => {
+    let hasConflict = lastOp.previous.some(item => {
       const cur = (currentRoster?.assignments || []).find(
         a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
       );
       return cur && cur.shiftCode !== item.shiftCode;
     });
+
+    if (!hasConflict && queue?.getCurrentRoster) {
+      try {
+        const authRes = await queue.getCurrentRoster(period);
+        if (authRes?.ok && authRes.assignments) {
+          hasConflict = lastOp.previous.some(item => {
+            const auth = authRes.assignments.find(
+              a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+            );
+            return auth && auth.shiftCode !== item.shiftCode;
+          });
+        }
+      } catch (_) {}
+    }
 
     if (hasConflict) {
       setRevisionConflictMsg('Cannot redo: roster was modified by another change. Refreshing latest version.');
@@ -823,9 +883,24 @@ export default function Phase5RosterContainer({
           assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
         }));
         await queue.enqueue(`draft:${period}`, patches);
+        setDraftSaveStatus('saved');
       }
-    } catch (_) {}
-  }, [draftRedoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData]);
+    } catch (err) {
+      const code = err.code || err.message;
+      setDraftRedoStack(prev => [...prev, lastOp]);
+      setDraftUndoStack(prev => prev.slice(0, -1));
+
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+      } else {
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to persist redo');
+      }
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      syncRecoveryState(queue, period);
+    }
+  }, [draftRedoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData, syncRecoveryState]);
 
   // If not enrolled or V2 read is disabled: container does not render
   const state = lifecycle?.state;
@@ -945,6 +1020,8 @@ export default function Phase5RosterContainer({
                   ? 'bg-rose-100 text-rose-800 border border-rose-300'
                   : revisionConflictMsg
                   ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                  : (actionError || draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
+                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
                   : isSavingDraft
                   ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
                   : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
@@ -954,6 +1031,8 @@ export default function Phase5RosterContainer({
                 ? '🚨 Recovery required'
                 : revisionConflictMsg
                 ? '⚠️ Conflict — review required'
+                : (actionError || draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
+                ? '⚠️ Save failed'
                 : isSavingDraft
                 ? '⏳ Saving…'
                 : '✓ All changes saved'}
