@@ -19,7 +19,8 @@
         "test:phase5": "node --test tests/phase5/*.test.mjs",
         "test:phase6": "node --test tests/phase6/*.test.mjs",
         "test:phase7": "node --test tests/phase7/*.test.mjs",
-        "test:phase8": "node --test tests/phase8/*.test.mjs"
+        "test:phase8": "node --test tests/phase8/*.test.mjs",
+        "test:phase9": "node --test tests/phase9/*.test.mjs"
     },
     "dependencies": {
         "docxtemplater": "^3.69.0",

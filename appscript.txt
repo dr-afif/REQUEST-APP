@@ -6347,6 +6347,16 @@ function rosterLifecycleSchemas_() {
   if (typeof RosterEntitlement !== 'undefined' && RosterEntitlement.ROSTER_ENTITLEMENT_SCHEMAS) {
     Object.assign(schemas, RosterEntitlement.ROSTER_ENTITLEMENT_SCHEMAS);
   }
+  if (typeof RosterCompatibility !== 'undefined' && RosterCompatibility.schemas) {
+    if (RosterCompatibility.schemas.RosterPeople) schemas.RosterPeople = RosterCompatibility.schemas.RosterPeople;
+    if (RosterCompatibility.schemas.ShiftSemantics) schemas.ShiftSemantics = RosterCompatibility.schemas.ShiftSemantics;
+  }
+  if (typeof ROSTER_DRAFT_SCHEMAS !== 'undefined') {
+    Object.assign(schemas, ROSTER_DRAFT_SCHEMAS);
+  }
+  if (typeof RosterGuidance !== 'undefined' && RosterGuidance.OFF_POLICY_HEADERS) {
+    schemas.OffPolicies = RosterGuidance.OFF_POLICY_HEADERS;
+  }
   return schemas;
 }
 
@@ -6423,6 +6433,61 @@ function rosterLifecycleEnsureAllSchemas_() {
     logSheet.getRange(1, 1, 1, ROSTER_DRAFT_SCHEMAS.OperationLog.length).setValues([ROSTER_DRAFT_SCHEMAS.OperationLog]);
     SpreadsheetApp.flush();
   }
+}
+
+function rosterEnsureDefaultSettings_() {
+  const table = rosterV2ReadTable_('Settings');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('Settings');
+  if (!sheet) {
+    sheet = ss.insertSheet('Settings');
+    sheet.getRange(1, 1, 1, 2).setValues([['Key', 'Value']]);
+  }
+  const existingKeys = new Set();
+  if (table.exists) {
+    table.rows.forEach(function(row) {
+      const k = String(row[0] || '').trim();
+      if (k) existingKeys.add(k);
+    });
+  }
+  const defaults = [
+    ['roster_v2_read_enabled', 'false'],
+    ['roster_v2_write_enabled', 'false'],
+    ['shift_semantics_v2_enabled', 'false'],
+    ['weekly_off_guidance_enabled', 'false'],
+    ['night_safety_guidance_enabled', 'false'],
+    ['goff_ledger_enabled', 'false'],
+    ['write_queue_v2_enabled', 'false'],
+    ['roster_workspace_v2_enabled', 'false'],
+    ['legacy_upload_enabled', 'true']
+  ];
+  const toAppend = defaults.filter(function(pair) { return !existingKeys.has(pair[0]); });
+  if (toAppend.length > 0) {
+    const startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, toAppend.length, 2).setValues(toAppend);
+    SpreadsheetApp.flush();
+  }
+}
+
+function rosterProvisionAllSchemas_() {
+  const provisionOrder = [
+    'RosterPeople',
+    'ShiftSemantics',
+    'OperationLog',
+    'RosterDraftPatches',
+    'OffPolicies',
+    'RosterPeriods',
+    'RosterAssignments',
+    'WeeklyOffSnapshots',
+    'RosterEvents',
+    'RosterAbsences',
+    'RosterReplacements',
+    'RosterEntitlementTransactions'
+  ];
+  provisionOrder.forEach(function(name) {
+    rosterLifecycleEnsureSchema_(name);
+  });
+  rosterEnsureDefaultSettings_();
 }
 
 function rosterLifecycleGetRecords_(sheetName) {
