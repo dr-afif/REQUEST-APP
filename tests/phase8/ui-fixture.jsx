@@ -11,18 +11,26 @@ const DEFAULT_PEOPLE = [
 ];
 
 const DEFAULT_PLANNED_ASSIGNMENTS = [
-  // Dr. Ali (MO): 2026-05-01 Labour Day AM, 2026-05-02 Sat OFF, 2026-05-03 Sun PM
+  // Dr. Ali (MO): 2026-05-01 Labour Day AM, 2026-05-02 Sat OFF, 2026-05-03 Sun PM, 2026-05-04 Mon AM, 2026-05-05 Tue OFF
   { assignmentId: 'asg-ali-1', personId: 'p-mo-1', personNameSnapshot: 'Dr. Ali', date: '2026-05-01', dutyDomain: 'MO', shiftCode: 'AM' },
   { assignmentId: 'asg-ali-2', personId: 'p-mo-1', personNameSnapshot: 'Dr. Ali', date: '2026-05-02', dutyDomain: 'MO', shiftCode: 'OFF' },
   { assignmentId: 'asg-ali-3', personId: 'p-mo-1', personNameSnapshot: 'Dr. Ali', date: '2026-05-03', dutyDomain: 'MO', shiftCode: 'PM' },
+  { assignmentId: 'asg-ali-4', personId: 'p-mo-1', personNameSnapshot: 'Dr. Ali', date: '2026-05-04', dutyDomain: 'MO', shiftCode: 'AM' },
+  { assignmentId: 'asg-ali-5', personId: 'p-mo-1', personNameSnapshot: 'Dr. Ali', date: '2026-05-05', dutyDomain: 'MO', shiftCode: 'OFF' },
 
-  // Dr. Siti (MO): 2026-05-01 Labour Day OFF, 2026-05-02 Sat PM, 2026-05-03 Sun OFF
+  // Dr. Siti (MO): 2026-05-01 Labour Day OFF, 2026-05-02 Sat PM, 2026-05-03 Sun OFF, 2026-05-04 Mon PM, 2026-05-05 Tue AM
   { assignmentId: 'asg-siti-1', personId: 'p-mo-2', personNameSnapshot: 'Dr. Siti', date: '2026-05-01', dutyDomain: 'MO', shiftCode: 'OFF' },
   { assignmentId: 'asg-siti-2', personId: 'p-mo-2', personNameSnapshot: 'Dr. Siti', date: '2026-05-02', dutyDomain: 'MO', shiftCode: 'PM' },
   { assignmentId: 'asg-siti-3', personId: 'p-mo-2', personNameSnapshot: 'Dr. Siti', date: '2026-05-03', dutyDomain: 'MO', shiftCode: 'OFF' },
+  { assignmentId: 'asg-siti-4', personId: 'p-mo-2', personNameSnapshot: 'Dr. Siti', date: '2026-05-04', dutyDomain: 'MO', shiftCode: 'PM' },
+  { assignmentId: 'asg-siti-5', personId: 'p-mo-2', personNameSnapshot: 'Dr. Siti', date: '2026-05-05', dutyDomain: 'MO', shiftCode: 'AM' },
 
-  // Dr. Dave (EP): 2026-05-01 EP_DUTY
-  { assignmentId: 'asg-ep-1', personId: 'p-ep', personNameSnapshot: 'Dr. Dave', date: '2026-05-01', dutyDomain: 'EP', shiftCode: 'EP_DUTY' }
+  // Dr. Dave (EP): 2026-05-01 to 2026-05-05 EP
+  { assignmentId: 'asg-ep-1', personId: 'p-ep', personNameSnapshot: 'Dr. Dave', date: '2026-05-01', dutyDomain: 'EP', shiftCode: 'EP' },
+  { assignmentId: 'asg-ep-2', personId: 'p-ep', personNameSnapshot: 'Dr. Dave', date: '2026-05-02', dutyDomain: 'EP', shiftCode: 'EP' },
+  { assignmentId: 'asg-ep-3', personId: 'p-ep', personNameSnapshot: 'Dr. Dave', date: '2026-05-03', dutyDomain: 'EP', shiftCode: 'EP' },
+  { assignmentId: 'asg-ep-4', personId: 'p-ep', personNameSnapshot: 'Dr. Dave', date: '2026-05-04', dutyDomain: 'EP', shiftCode: 'EP' },
+  { assignmentId: 'asg-ep-5', personId: 'p-ep', personNameSnapshot: 'Dr. Dave', date: '2026-05-05', dutyDomain: 'EP', shiftCode: 'EP' }
 ];
 
 window.mountPhase8Test = (options = {}) => {
@@ -319,6 +327,30 @@ window.mountPhase8Test = (options = {}) => {
       if (rec) { rec.State = 'AMENDED'; rec.Revision = currentRev; }
       notify();
       return { ok: true, state: 'AMENDED', revision: currentRev };
+    },
+    enqueue: async (key, patches) => {
+      callLog.enqueue = callLog.enqueue || [];
+      callLog.enqueue.push({ key, patches });
+      if (simulateRevisionConflict) {
+        throw { code: 'REVISION_CONFLICT', message: 'Revision conflict simulated' };
+      }
+      (patches || []).forEach(p => {
+        const targetShift = p.assignments?.[0]?.shiftCode || 'OFF';
+        const cellIdx = storeCurrent.findIndex(a => a.personId === p.personId && a.date === p.date);
+        if (cellIdx !== -1) {
+          storeCurrent[cellIdx] = { ...storeCurrent[cellIdx], shiftCode: targetShift };
+        } else {
+          storeCurrent.push({
+            assignmentId: `asg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            personId: p.personId,
+            date: p.date,
+            dutyDomain: p.dutyDomain || 'MO',
+            shiftCode: targetShift
+          });
+        }
+      });
+      notify();
+      return { ok: true };
     }
   };
 
@@ -342,7 +374,7 @@ window.mountPhase8Test = (options = {}) => {
 
     const isV2Active = Boolean(
       lifecycleInfo.isEnrolled &&
-      ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
+      ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
       settings?.roster_v2_read_enabled !== false
     );
 
@@ -410,6 +442,7 @@ window.mountPhase8Test = (options = {}) => {
           queue={mockQueue}
           people={people}
           onLifecycleStateChange={setLifecycleInfo}
+          allowDraft={true}
         />
       </div>
     );

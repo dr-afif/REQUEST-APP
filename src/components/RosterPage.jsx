@@ -2321,7 +2321,7 @@ export default function RosterPage({
 
   const isV2Active = Boolean(
     lifecycleInfo.isEnrolled &&
-    ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
+    ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
     settings?.roster_v2_read_enabled !== false
   );
 
@@ -2378,14 +2378,15 @@ export default function RosterPage({
         </div>
       </div>
 
-      {/* Phase 5 V2 Authoritative Roster (Current / Planned / Changes) for Enrolled Published/Amended/Closed Periods */}
-      {lifecycleInfo.isEnrolled && ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false ? (
+      {/* Phase 5 V2 Authoritative Roster (Current / Planned / Changes) for Enrolled Periods */}
+      {lifecycleInfo.isEnrolled && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false ? (
         <div className="mb-6">
           <Phase5RosterContainer
             period={rosterMonth}
             settings={settings}
             isAdmin={isAdmin}
             onLifecycleStateChange={setLifecycleInfo}
+            allowDraft={true}
           />
         </div>
       ) : (

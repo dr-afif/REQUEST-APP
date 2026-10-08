@@ -30,7 +30,8 @@ export default function Phase5RosterContainer({
   runtimeFactory = draftRuntime,
   onLifecycleStateChange = null,
   undoDurationMs = 10000,
-  people = []
+  people = [],
+  allowDraft = false
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [viewMode, setViewMode] = useState('CURRENT');
@@ -86,6 +87,12 @@ export default function Phase5RosterContainer({
   // Desktop lightweight focus mode
   const [isFocusMode, setIsFocusMode] = useState(false);
 
+  // Phase 8 Slice 2: DRAFT Fast Editing State
+  const [draftUndoStack, setDraftUndoStack] = useState([]);
+  const [draftRedoStack, setDraftRedoStack] = useState([]);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [draftSaveStatus, setDraftSaveStatus] = useState('saved');
+
   // Monotonic generation counter to prevent stale async responses across month switching
   const requestGenRef = useRef(0);
 
@@ -130,13 +137,24 @@ export default function Phase5RosterContainer({
       setLifecycle({ state, revision });
       onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: true, state, revision });
 
-      // If DRAFT, Phase 5/6 view modes and mutation controls are not active
+      // If DRAFT, check if allowDraft is active
       if (state === 'DRAFT') {
-        setCurrentRoster(null);
+        if (!allowDraft) {
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setAmendmentHistory(null);
+          setAbsences([]);
+          setReplacements([]);
+          return;
+        }
+        const draftRes = await targetQueue.getCurrentRoster(targetPeriod).catch(() => ({ ok: true, assignments: [] }));
+        if (gen !== requestGenRef.current) return;
+        setCurrentRoster(draftRes?.ok ? draftRes : { ok: true, assignments: [] });
         setPlannedRoster(null);
         setAmendmentHistory(null);
         setAbsences([]);
         setReplacements([]);
+        syncRecoveryState(targetQueue, targetPeriod);
         return;
       }
 
@@ -578,12 +596,206 @@ export default function Phase5RosterContainer({
     }
   }, [queue, period, isReversingEntitlement, loadAuthoritativeData]);
 
-  // If not enrolled or in DRAFT state or V2 read is disabled: container does not render Phase 5/6 modes
+  // Phase 8 Slice 2: Handle single cell edit in DRAFT
+  const handleDraftCellChange = useCallback(async (personId, date, dutyDomain, newShiftCode) => {
+    if (!queue || lifecycle?.state !== 'DRAFT') return;
+    setIsSavingDraft(true);
+    setDraftSaveStatus('saving');
+
+    const existing = (currentRoster?.assignments || []).find(
+      a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+    );
+    const oldShift = existing?.shiftCode || '';
+
+    // Optimistic local update
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      const idx = assignments.findIndex(
+        a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+      );
+      if (idx !== -1) {
+        assignments[idx] = { ...assignments[idx], shiftCode: newShiftCode };
+      } else {
+        assignments.push({
+          assignmentId: `draft-asg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          personId,
+          date,
+          dutyDomain: dutyDomain || 'MO',
+          shiftCode: newShiftCode
+        });
+      }
+      return { ...prev, assignments };
+    });
+
+    setDraftUndoStack(prev => [...prev, {
+      type: 'SINGLE',
+      previous: [{ personId, date, dutyDomain, shiftCode: oldShift }],
+      next: [{ personId, date, dutyDomain, shiftCode: newShiftCode }]
+    }]);
+    setDraftRedoStack([]);
+
+    try {
+      if (typeof queue.enqueue === 'function') {
+        const patch = {
+          personId,
+          date,
+          assignments: newShiftCode ? [{ rawShift: newShiftCode, shiftCode: newShiftCode, dutyDomain }] : []
+        };
+        await queue.enqueue(`draft:${period}`, [patch]);
+      } else if (typeof queue.amend === 'function') {
+        await queue.amend(period, { personId, date, dutyDomain, targetShiftCode: newShiftCode });
+      }
+      setDraftSaveStatus('saved');
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setDraftSaveStatus('conflict');
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSavingDraft(false);
+    }
+  }, [queue, lifecycle, currentRoster, period, loadAuthoritativeData]);
+
+  // Phase 8 Slice 2: Handle bulk shift edit in DRAFT
+  const handleBulkDraftChange = useCallback(async (cellsWithShift) => {
+    if (!queue || lifecycle?.state !== 'DRAFT' || !cellsWithShift.length) return;
+    setIsSavingDraft(true);
+    setDraftSaveStatus('saving');
+
+    const previous = [];
+    const next = [];
+
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      cellsWithShift.forEach(({ personId, date, dutyDomain, shiftCode }) => {
+        const idx = assignments.findIndex(
+          a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+        );
+        const old = idx !== -1 ? assignments[idx].shiftCode : '';
+        previous.push({ personId, date, dutyDomain, shiftCode: old });
+        next.push({ personId, date, dutyDomain, shiftCode });
+
+        if (idx !== -1) {
+          assignments[idx] = { ...assignments[idx], shiftCode };
+        } else {
+          assignments.push({
+            assignmentId: `draft-asg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            personId,
+            date,
+            dutyDomain: dutyDomain || 'MO',
+            shiftCode
+          });
+        }
+      });
+      return { ...prev, assignments };
+    });
+
+    setDraftUndoStack(prev => [...prev, { type: 'BULK', previous, next }]);
+    setDraftRedoStack([]);
+
+    try {
+      if (typeof queue.enqueue === 'function') {
+        const patches = cellsWithShift.map(({ personId, date, dutyDomain, shiftCode }) => ({
+          personId,
+          date,
+          assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
+        }));
+        await queue.enqueue(`draft:${period}`, patches);
+      } else if (typeof queue.amend === 'function') {
+        for (const c of cellsWithShift) {
+          await queue.amend(period, { personId: c.personId, date: c.date, dutyDomain: c.dutyDomain, targetShiftCode: c.shiftCode });
+        }
+      }
+      setDraftSaveStatus('saved');
+    } catch (err) {
+      setDraftSaveStatus('conflict');
+      setActionError(err.message || err.code);
+    } finally {
+      setIsSavingDraft(false);
+    }
+  }, [queue, lifecycle, period]);
+
+  // Phase 8 Slice 2: Handle undo in DRAFT
+  const handleUndoDraft = useCallback(async () => {
+    if (draftUndoStack.length === 0 || lifecycle?.state !== 'DRAFT') return;
+    const lastOp = draftUndoStack[draftUndoStack.length - 1];
+    setDraftUndoStack(prev => prev.slice(0, -1));
+    setDraftRedoStack(prev => [...prev, lastOp]);
+
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      lastOp.previous.forEach(({ personId, date, dutyDomain, shiftCode }) => {
+        const idx = assignments.findIndex(
+          a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+        );
+        if (idx !== -1) {
+          assignments[idx] = { ...assignments[idx], shiftCode };
+        }
+      });
+      return { ...prev, assignments };
+    });
+
+    try {
+      if (typeof queue?.enqueue === 'function') {
+        const patches = lastOp.previous.map(({ personId, date, dutyDomain, shiftCode }) => ({
+          personId,
+          date,
+          assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
+        }));
+        await queue.enqueue(`draft:${period}`, patches);
+      }
+    } catch (_) {}
+  }, [draftUndoStack, lifecycle, queue, period]);
+
+  // Phase 8 Slice 2: Handle redo in DRAFT
+  const handleRedoDraft = useCallback(async () => {
+    if (draftRedoStack.length === 0 || lifecycle?.state !== 'DRAFT') return;
+    const lastOp = draftRedoStack[draftRedoStack.length - 1];
+    setDraftRedoStack(prev => prev.slice(0, -1));
+    setDraftUndoStack(prev => [...prev, lastOp]);
+
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      lastOp.next.forEach(({ personId, date, dutyDomain, shiftCode }) => {
+        const idx = assignments.findIndex(
+          a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+        );
+        if (idx !== -1) {
+          assignments[idx] = { ...assignments[idx], shiftCode };
+        }
+      });
+      return { ...prev, assignments };
+    });
+
+    try {
+      if (typeof queue?.enqueue === 'function') {
+        const patches = lastOp.next.map(({ personId, date, dutyDomain, shiftCode }) => ({
+          personId,
+          date,
+          assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
+        }));
+        await queue.enqueue(`draft:${period}`, patches);
+      }
+    } catch (_) {}
+  }, [draftRedoStack, lifecycle, queue, period]);
+
+  // If not enrolled or V2 read is disabled: container does not render
   const state = lifecycle?.state;
   const isEnrolledAndActive = Boolean(
     readEnabled &&
     lifecycle &&
-    ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(state)
+    (allowDraft
+      ? ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(state)
+      : ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(state))
   );
 
   if (loading) {
@@ -684,7 +896,31 @@ export default function Phase5RosterContainer({
           />
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-slate-500 font-medium self-end sm:self-auto">
+        <div className="flex items-center gap-3 text-xs text-slate-500 font-medium self-end sm:self-auto flex-wrap">
+          {state === 'DRAFT' && (
+            <span
+              id="draft-save-status"
+              data-testid="draft-save-status"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                recoveryOp
+                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                  : revisionConflictMsg
+                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                  : isSavingDraft
+                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
+                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+              }`}
+            >
+              {recoveryOp
+                ? '🚨 Recovery required'
+                : revisionConflictMsg
+                ? '⚠️ Conflict — review required'
+                : isSavingDraft
+                ? '⏳ Saving…'
+                : '✓ All changes saved'}
+            </span>
+          )}
+
           <button
             type="button"
             id="btn-toggle-focus-mode"
@@ -733,6 +969,14 @@ export default function Phase5RosterContainer({
             setViewMode('ENTITLEMENTS');
           } : undefined}
           onOpenEntitlementsPanel={isAdmin ? () => setViewMode('ENTITLEMENTS') : undefined}
+          onDraftCellChange={handleDraftCellChange}
+          onBulkDraftChange={handleBulkDraftChange}
+          onUndoDraft={handleUndoDraft}
+          onRedoDraft={handleRedoDraft}
+          canUndoDraft={draftUndoStack.length > 0}
+          canRedoDraft={draftRedoStack.length > 0}
+          isSavingDraft={isSavingDraft}
+          draftSaveStatus={draftSaveStatus}
         />
       )}
 

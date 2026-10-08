@@ -365,6 +365,7 @@ export default function AmendmentModal({
         <div className="mt-6 flex justify-end gap-3 pt-3 border-t border-slate-100">
           <button
             type="button"
+            id="btn-cancel-amendment"
             onClick={onClose}
             disabled={isSubmitting}
             className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"

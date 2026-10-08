@@ -1,11 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { getHolidayName } from '../../../utils/holidays.js';
 
 /**
  * Planned Roster View:
  * Shows the immutable roster as originally published.
  * Visually and behaviorally read-only.
- * No edit triggers, no mutation popovers.
+ * Supports keyboard roving focus for scannability, but strictly prevents mutations.
  */
 export default function PlannedRosterView({
   assignments = [],
@@ -73,12 +73,64 @@ export default function PlannedRosterView({
     return map;
   }, [sortedDates]);
 
+  // Keyboard navigation state
+  const [activeCoord, setActiveCoord] = useState({ r: 0, c: 0 });
+
+  const focusPlannedCell = useCallback((r, c) => {
+    const row = groupedByPerson[r];
+    const d = sortedDates[c];
+    if (row && d) {
+      document.getElementById(`cell-planned-${row.personId}-${d}-${row.dutyDomain}`)?.focus();
+    }
+  }, [groupedByPerson, sortedDates]);
+
+  const handleKeyDown = useCallback((e) => {
+    const tag = e.target.tagName?.toLowerCase();
+    if (['input', 'textarea', 'select'].includes(tag)) return;
+
+    const R = groupedByPerson.length;
+    const C = sortedDates.length;
+    if (R === 0 || C === 0) return;
+    const { r, c } = activeCoord;
+
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      const nextC = Math.min(C - 1, c + 1);
+      setActiveCoord({ r, c: nextC });
+      focusPlannedCell(r, nextC);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const nextC = Math.max(0, c - 1);
+      setActiveCoord({ r, c: nextC });
+      focusPlannedCell(r, nextC);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextR = Math.min(R - 1, r + 1);
+      setActiveCoord({ r: nextR, c });
+      focusPlannedCell(nextR, c);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const nextR = Math.max(0, r - 1);
+      setActiveCoord({ r: nextR, c });
+      focusPlannedCell(nextR, c);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setActiveCoord({ r, c: 0 });
+      focusPlannedCell(r, 0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      setActiveCoord({ r, c: C - 1 });
+      focusPlannedCell(r, C - 1);
+    }
+  }, [activeCoord, groupedByPerson, sortedDates, focusPlannedCell]);
+
   return (
     <div
       id="planned-roster-view"
       data-testid="planned-roster-view"
       className="space-y-4"
       aria-label="Planned Roster Snapshot"
+      onKeyDown={handleKeyDown}
     >
       {/* Immutability Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3.5 lg:p-4 rounded-2xl bg-slate-100 border border-slate-300 gap-2">
@@ -102,7 +154,7 @@ export default function PlannedRosterView({
 
       {assignments.length === 0 ? (
         <div className="text-center py-12 rounded-2xl border border-dashed border-slate-300 bg-white">
-          <p className="text-sm font-semibold text-slate-700">No planned assignments found for {period}</p>
+          <p className="text-sm font-semibold text-slate-700">No planned snapshot available for {period}</p>
         </div>
       ) : (
         <div
@@ -119,7 +171,7 @@ export default function PlannedRosterView({
               <thead className="sticky top-0 z-20 bg-slate-50 shadow-xs">
                 <tr className="bg-slate-50 text-slate-600">
                   <th
-                    className="p-2 lg:p-2.5 font-bold sticky left-0 top-0 bg-slate-50 min-w-[150px] lg:min-w-[160px] z-30 border-r border-b border-slate-200 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]"
+                    className="p-2 lg:p-2.5 font-bold sticky left-0 top-0 bg-slate-50 min-w-[150px] lg:min-w-[170px] z-30 border-r border-b border-slate-200 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]"
                     scope="col"
                   >
                     <span>Doctor / Staff</span>
@@ -138,7 +190,7 @@ export default function PlannedRosterView({
                         key={d}
                         scope="col"
                         aria-label={headerAria}
-                        className={`p-1 lg:p-1.5 font-bold text-center min-w-[48px] lg:min-w-[46px] max-w-[60px] border-r border-b border-slate-200 sticky top-0 z-20 transition-colors ${
+                        className={`p-1 lg:p-1.5 font-bold text-center min-w-[48px] lg:min-w-[46px] max-w-[65px] border-r border-b border-slate-200 sticky top-0 z-20 transition-colors ${
                           meta.isToday
                             ? 'bg-indigo-50/95 text-indigo-900 ring-2 ring-inset ring-indigo-400'
                             : meta.isHoliday
@@ -189,7 +241,7 @@ export default function PlannedRosterView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                {groupedByPerson.map((row) => (
+                {groupedByPerson.map((row, rIdx) => (
                   <tr key={`${row.personId}::${row.dutyDomain}`} className="hover:bg-slate-50/50">
                     <td className="p-2 lg:p-2.5 font-semibold sticky left-0 bg-white z-10 border-r border-b border-slate-100 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
                       <div className="truncate max-w-[130px] lg:max-w-[145px]" title={row.personNameSnapshot}>
@@ -201,7 +253,7 @@ export default function PlannedRosterView({
                         {row.dutyDomain}
                       </span>
                     </td>
-                    {sortedDates.map((d) => {
+                    {sortedDates.map((d, cIdx) => {
                       const shift = row.dates[d] || '—';
                       const meta = dateMetaMap.get(d) || { isWeekend: false, isHoliday: false, isToday: false };
                       const cellAria = `${row.personNameSnapshot}, ${d}, Planned: ${shift}`;
@@ -211,17 +263,23 @@ export default function PlannedRosterView({
                         ? 'bg-slate-50/40'
                         : 'bg-white';
 
+                      const isFocused = activeCoord.r === rIdx && activeCoord.c === cIdx;
+
                       return (
                         <td
                           key={d}
                           id={`cell-planned-${row.personId}-${d}-${row.dutyDomain}`}
                           data-testid={`cell-planned-${row.personId}-${d}-${row.dutyDomain}`}
                           aria-label={cellAria}
-                          className={`p-1.5 lg:p-2 text-center border-r border-b border-slate-100 font-mono text-[11px] lg:text-xs font-semibold ${cellBg} ${
+                          tabIndex={isFocused ? 0 : -1}
+                          onFocus={() => setActiveCoord({ r: rIdx, c: cIdx })}
+                          className={`p-1.5 lg:p-2 text-center border-r border-b border-slate-100 font-mono text-[11px] lg:text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-1 ${cellBg} ${
                             meta.isToday ? 'ring-1 ring-inset ring-indigo-300/60' : ''
                           }`}
                         >
-                          {shift}
+                          <div className="min-h-[28px] lg:min-h-[30px] flex items-center justify-center">
+                            {shift}
+                          </div>
                         </td>
                       );
                     })}
