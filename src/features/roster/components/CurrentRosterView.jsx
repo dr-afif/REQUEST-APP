@@ -182,7 +182,7 @@ export default function CurrentRosterView({
   const [activeCoord, setActiveCoord] = useState({ r: 0, c: 0 });
   const [selectionAnchor, setSelectionAnchor] = useState(null);
   const [selectionTarget, setSelectionTarget] = useState(null);
-  const [lastAssignedShift, setLastAssignedShift] = useState('AM');
+  const [lastAssignedShift, setLastAssignedShift] = useState(null);
   const internalClipboardRef = useRef(null);
 
   // Quick palette state
