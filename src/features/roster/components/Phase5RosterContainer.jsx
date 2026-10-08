@@ -233,6 +233,10 @@ export default function Phase5RosterContainer({
     setReplacements([]);
     setLifecycle(null);
     setRecoveryOp(null);
+    setDraftUndoStack([]);
+    setDraftRedoStack([]);
+    setDraftSaveStatus(null);
+    setIsSavingDraft(false);
 
     (async () => {
       try {
@@ -726,6 +730,23 @@ export default function Phase5RosterContainer({
   const handleUndoDraft = useCallback(async () => {
     if (draftUndoStack.length === 0 || lifecycle?.state !== 'DRAFT') return;
     const lastOp = draftUndoStack[draftUndoStack.length - 1];
+
+    // Concurrency check: Ensure current state matches what this operation produced (lastOp.next)
+    const hasConflict = lastOp.next.some(item => {
+      const cur = (currentRoster?.assignments || []).find(
+        a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+      );
+      return cur && cur.shiftCode !== item.shiftCode;
+    });
+
+    if (hasConflict) {
+      setRevisionConflictMsg('Cannot undo: roster was modified by another change. Refreshing latest version.');
+      if (typeof loadAuthoritativeData === 'function') {
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      }
+      return;
+    }
+
     setDraftUndoStack(prev => prev.slice(0, -1));
     setDraftRedoStack(prev => [...prev, lastOp]);
 
@@ -753,12 +774,30 @@ export default function Phase5RosterContainer({
         await queue.enqueue(`draft:${period}`, patches);
       }
     } catch (_) {}
-  }, [draftUndoStack, lifecycle, queue, period]);
+  }, [draftUndoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData]);
 
   // Phase 8 Slice 2: Handle redo in DRAFT
   const handleRedoDraft = useCallback(async () => {
     if (draftRedoStack.length === 0 || lifecycle?.state !== 'DRAFT') return;
     const lastOp = draftRedoStack[draftRedoStack.length - 1];
+
+    // Concurrency check: Ensure current state matches what was undone (lastOp.previous)
+    const hasConflict = lastOp.previous.some(item => {
+      const cur = (currentRoster?.assignments || []).find(
+        a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+      );
+      return cur && cur.shiftCode !== item.shiftCode;
+    });
+
+    if (hasConflict) {
+      setRevisionConflictMsg('Cannot redo: roster was modified by another change. Refreshing latest version.');
+      setDraftRedoStack([]);
+      if (typeof loadAuthoritativeData === 'function') {
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      }
+      return;
+    }
+
     setDraftRedoStack(prev => prev.slice(0, -1));
     setDraftUndoStack(prev => [...prev, lastOp]);
 
@@ -786,7 +825,7 @@ export default function Phase5RosterContainer({
         await queue.enqueue(`draft:${period}`, patches);
       }
     } catch (_) {}
-  }, [draftRedoStack, lifecycle, queue, period]);
+  }, [draftRedoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData]);
 
   // If not enrolled or V2 read is disabled: container does not render
   const state = lifecycle?.state;
@@ -977,6 +1016,13 @@ export default function Phase5RosterContainer({
           canRedoDraft={draftRedoStack.length > 0}
           isSavingDraft={isSavingDraft}
           draftSaveStatus={draftSaveStatus}
+          isAnyModalOpen={Boolean(
+            selectedCellForAmend ||
+            isAbsenceModalOpen ||
+            selectedDutyForReplacement ||
+            selectedDutyForEntitlement ||
+            isCreditModalOpen
+          )}
         />
       )}
 

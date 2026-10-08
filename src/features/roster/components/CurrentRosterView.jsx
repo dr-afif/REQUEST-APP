@@ -41,7 +41,8 @@ export default function CurrentRosterView({
   canUndoDraft = false,
   canRedoDraft = false,
   isSavingDraft = false,
-  draftSaveStatus = 'saved'
+  draftSaveStatus = 'saved',
+  isAnyModalOpen = false
 }) {
   const normState = String(lifecycleState || 'PUBLISHED').toUpperCase();
   const isDraft = normState === 'DRAFT';
@@ -202,6 +203,8 @@ export default function CurrentRosterView({
     setIsPaletteOpen(false);
     setBulkConfirmTarget(null);
     setBulkStatusMsg(null);
+    setActiveCoord({ r: 0, c: 0 });
+    setLastAssignedShift(null);
   }, [period]);
 
   // Compute selected cell keys set
@@ -270,7 +273,7 @@ export default function CurrentRosterView({
   const applyShiftToSelection = useCallback((shiftCode) => {
     if (!isDraft || !canEditDraft) return;
 
-    // Gather target cells from selection
+    // Gather target cells from selection, strictly excluding EP duties
     const targetCells = [];
     selectedCellKeys.forEach((key) => {
       const [personId, date, dutyDomain] = key.split('::');
@@ -330,7 +333,7 @@ export default function CurrentRosterView({
       if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) {
         return;
       }
-      if (isPaletteOpen || isShortcutsOpen || bulkConfirmTarget) {
+      if (isPaletteOpen || isShortcutsOpen || bulkConfirmTarget || isAnyModalOpen) {
         return; // Modal or palette handles its own keys
       }
 
@@ -443,6 +446,8 @@ export default function CurrentRosterView({
       // Repeat Last Shift: Ctrl + Enter
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
+        const activeRow = groupedByPerson[r];
+        if (activeRow?.dutyDomain === 'EP') return;
         if (isDraft && canEditDraft && lastAssignedShift) {
           applyShiftToSelection(lastAssignedShift);
         }
@@ -455,6 +460,7 @@ export default function CurrentRosterView({
         const activeRow = groupedByPerson[r];
         const activeDate = sortedDates[c];
         if (!activeRow || !activeDate) return;
+        if (activeRow.dutyDomain === 'EP') return;
         const cellData = activeRow.cells[activeDate] || {
           personId: activeRow.personId,
           personNameSnapshot: activeRow.personNameSnapshot,
@@ -485,6 +491,8 @@ export default function CurrentRosterView({
       // Clipboard: Paste (Ctrl + V)
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
         e.preventDefault();
+        const activeRow = groupedByPerson[r];
+        if (activeRow?.dutyDomain === 'EP') return;
         if (isDraft && canEditDraft && internalClipboardRef.current) {
           applyShiftToSelection(internalClipboardRef.current);
         }
@@ -514,6 +522,7 @@ export default function CurrentRosterView({
         const activeRow = groupedByPerson[r];
         const activeDate = sortedDates[c];
         if (!activeRow || !activeDate) return;
+        if (activeRow.dutyDomain === 'EP') return;
         const cellData = activeRow.cells[activeDate] || {
           personId: activeRow.personId,
           personNameSnapshot: activeRow.personNameSnapshot,
@@ -565,6 +574,7 @@ export default function CurrentRosterView({
     isPaletteOpen,
     isShortcutsOpen,
     bulkConfirmTarget,
+    isAnyModalOpen,
     focusCell,
     clearSelection,
     openPaletteForCell,

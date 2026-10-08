@@ -115,12 +115,29 @@ export default function PlannedRosterView({
       focusPlannedCell(nextR, c);
     } else if (e.key === 'Home') {
       e.preventDefault();
-      setActiveCoord({ r, c: 0 });
-      focusPlannedCell(r, 0);
+      if (e.ctrlKey || e.metaKey) {
+        setActiveCoord({ r: 0, c: 0 });
+        focusPlannedCell(0, 0);
+      } else {
+        setActiveCoord({ r, c: 0 });
+        focusPlannedCell(r, 0);
+      }
     } else if (e.key === 'End') {
       e.preventDefault();
-      setActiveCoord({ r, c: C - 1 });
-      focusPlannedCell(r, C - 1);
+      if (e.ctrlKey || e.metaKey) {
+        setActiveCoord({ r: R - 1, c: C - 1 });
+        focusPlannedCell(R - 1, C - 1);
+      } else {
+        setActiveCoord({ r, c: C - 1 });
+        focusPlannedCell(r, C - 1);
+      }
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+      // Copy allowed from Planned
+      const row = groupedByPerson[r];
+      const d = sortedDates[c];
+      if (row && d && typeof window !== 'undefined') {
+        window.__rosterClipboard = row.dates[d] || 'OFF';
+      }
     }
   }, [activeCoord, groupedByPerson, sortedDates, focusPlannedCell]);
 
