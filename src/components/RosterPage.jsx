@@ -2368,18 +2368,21 @@ export default function RosterPage({
         </div>
 
         {/* Phase 4 Roster Lifecycle Status & Controls */}
-        <div className="flex flex-col sm:items-end gap-2 shrink-0">
-          <LifecycleControls
-            period={rosterMonth}
-            settings={settings}
-            isAdmin={isAdmin}
-            onLifecycleStateChange={setLifecycleInfo}
-          />
-        </div>
+        {Boolean(settings?.roster_workspace_v2_enabled === true || String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true') && (
+          <div className="flex flex-col sm:items-end gap-2 shrink-0">
+            <LifecycleControls
+              period={rosterMonth}
+              settings={settings}
+              isAdmin={isAdmin}
+              onLifecycleStateChange={setLifecycleInfo}
+            />
+          </div>
+        )}
       </div>
 
       {/* Phase 5 V2 Authoritative Roster (Current / Planned / Changes) for Enrolled Periods */}
-      {lifecycleInfo.isEnrolled && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false ? (
+      {Boolean(settings?.roster_workspace_v2_enabled === true || String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true') &&
+      lifecycleInfo.isEnrolled && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false ? (
         <div className="mb-6">
           <Phase5RosterContainer
             period={rosterMonth}

@@ -1,13 +1,13 @@
 # Major Update — Phase 9 Production Migration Manifest
 
-**Document Version**: 1.0.0  
-**Phase**: Phase 9 Slice 1 — Production Cutover Preflight & Non-Production Migration Rehearsal  
-**Execution Context**: Strict Non-Production Rehearsal (Zero Live Mutations, Zero Deployments)  
-**Authoritative Baseline**:  
-- `main` / `origin/main`: `17712a4f7e177771ff3cf44d02d7ba570f567d21`  
-- Deployed Frontend (`origin/gh-pages`): `4ec7843` (legacy SPA)  
-- Production Backend: Manually managed Apps Script V1.1 backend containing the historical MasterRoster month-safety fix.  
-- Phase 8 Certified Checkpoint: `dab0d8acf40c184b138d1d237a20f897d8bf277a`  
+**Document Version**: 1.1.0
+**Phase**: Phase 9 Slice 1.1 — Production Cutover Preflight & Non-Production Migration Rehearsal Hardening
+**Execution Context**: Strict Non-Production Rehearsal (Zero Live Mutations, Zero Deployments)
+**Authoritative Baseline**:
+- `main` / `origin/main`: `17712a4f7e177771ff3cf44d02d7ba570f567d21`
+- Deployed Frontend (`origin/gh-pages`): `4ec7843` (legacy SPA)
+- Production Backend: Manually managed Apps Script V1.1 backend containing the historical MasterRoster month-safety fix.
+- Phase 8 Certified Checkpoint: `dab0d8acf40c184b138d1d237a20f897d8bf277a`
 
 ---
 
@@ -42,10 +42,10 @@ The certified architecture requires 23 distinct Google Sheet tables across legac
 | 10 | `LeaveApplications` | Legacy | `ID`, `MemberName`, `LeaveType`, `StartDate`, `EndDate`, `Days`, `Status`, `SubmittedDate`, `ReferenceNo`, `Notes`, `UpdatedAt` | Yes | No | N/A | **Yes (All)** | **KEEP AS-IS** |
 | 11 | `Settings` | Legacy / P1 | `Key`, `Value` | Yes | No | Yes (Append keys) | **Yes (All)** | **ADD COLUMNS / ROWS** |
 | 12 | `RosterPeople` | Phase 1 | `PersonId`, `DirectoryType`, `CurrentDisplayName`, `LegacyNamesJson`, `Active`, `CreatedAt`, `UpdatedAt` | No | **Yes** | Yes | **Yes** | **CREATE / MIGRATE** |
-| 13 | `ShiftSemantics` | Phase 1 | `ShiftCode`, `RuleVersion`, `DirectoryType`, `CountsAsWorked`, `ConsecutiveBehavior`, `StaffingBucket`, `PolicyBQualifier`, `NormalOff`, `CanDisplaceOffEarnGoff`, `ExpectedPredecessorsJson`, `ExpectedFollowersJson` | No | **Yes** | Yes | **Yes** | **CREATE** |
+| 13 | `ShiftSemantics` | Phase 1 | `ShiftCode`, `RuleVersion`, `DirectoryType`, `CountsAsWorked`, `ConsecutiveBehavior`, `StaffingBucket`, `PolicyBQualifier`, `NormalOff`, `CanDisplaceOffEarnGoff`, `ExpectedPredecessorsJson`, `ExpectedFollowersJson` | No | **Yes** | Yes | **Yes** | **CREATE / SEED** |
 | 14 | `OperationLog` | Phase 2 | `OperationId`, `ClientId`, `TabId`, `OperationType`, `EntityKey`, `ExpectedRevision`, `ResultRevision`, `PayloadHash`, `Status`, `ResultJson`, `ErrorCode`, `CreatedAt`, `CompletedAt` | No | **Yes** | Yes | **Yes (Append-only)** | **CREATE** |
 | 15 | `RosterDraftPatches` | Phase 2 | `OperationId`, `EntityKey`, `BaseRevision`, `ResultRevision`, `PayloadJson`, `ResultChecksum` | No | **Yes** | Yes | **Yes (Append-only)** | **CREATE** |
-| 16 | `OffPolicies` | Phase 3 | `PolicyId`, `PolicyCode`, `EffectiveMonday`, `RuleVersion`, `RuleJson`, `Active`, `Reason`, `Revision`, `OperationId`, `CreatedAt`, `CreatedBy` | No | **Yes** | Yes | **Yes** | **CREATE** |
+| 16 | `OffPolicies` | Phase 3 | `PolicyId`, `PolicyCode`, `EffectiveMonday`, `RuleVersion`, `RuleJson`, `Active`, `Reason`, `Revision`, `OperationId`, `CreatedAt`, `CreatedBy` | No | **Yes** | Yes | **Yes** | **CREATE / SEED** |
 | 17 | `RosterPeriods` | Phase 4 (upg P1) | `PeriodId`, `State`, `Revision`, `DraftRevision`, `PlannedSnapshotId`, `PublishedAt`, `PublishedBy`, `ClosedAt`, `ClosedBy`, `ProjectionChecksum`, `SchemaVersion`, `LastOperationId`, `UpdatedAt` | No / P1 Staging | **Yes** | Yes (Additive) | **Yes** | **CREATE / ADD COLUMNS** |
 | 18 | `RosterAssignments` | Phase 4 | `AssignmentId`, `PeriodId`, `Layer`, `SnapshotId`, `PersonId`, `PersonNameSnapshot`, `Date`, `DutyDomain`, `ShiftCode`, `ModifiersJson`, `DraftRevision`, `Source`, `OperationId`, `CreatedAt`, `CreatedBy` | No | **Yes** | Yes | **Yes (Append-only)** | **CREATE** |
 | 19 | `WeeklyOffSnapshots` | Phase 4 | `WeekSnapshotId`, `WeekStart`, `WeekEnd`, `PolicyLockedByPeriodId`, `PublishedPeriodIdsJson`, `PublishedDateMask`, `EvaluationState`, `PlannedSnapshotIdsJson`, `PlannedWeekChecksum`, `PersonId`, `PersonNameSnapshot`, `PolicyId`, `PolicyCode`, `RuleVersion`, `HasQualifyingPlannedNight`, `RequiredOffCount`, `AssignedOffCountAtPublish`, `Revision`, `OperationId`, `CreatedAt`, `CompletedAt` | No | **Yes** | Yes | **Yes** | **CREATE** |
@@ -56,179 +56,194 @@ The certified architecture requires 23 distinct Google Sheet tables across legac
 
 ---
 
-## 3. Sheet Transformation Classifications
+## 3. Required Reference Data Seeding
 
-### KEEP AS-IS
-- `Requests`, `LeaveApplications`, `TeamMembers`, `EmergencyPhysicians`, `ShiftBlocks`, `ShiftTypes`, `LimitGroups`, `PublicHolidays`, `ActivityHistory`.
-- **Transformation**: Zero structure changes. Legacy rows, column order, formulas, and extra columns remain completely untouched. Read compatibility guaranteed for legacy endpoints.
+Provisioning schemas creates empty canonical tables. However, **empty tables are insufficient for V2 operations**. Publishing or operating a V2 period will strictly fail unless the following mandatory prerequisite tables are seeded prior to first period publish:
 
-### ADD COLUMNS / ROWS
-- `Settings`: Existing rows preserved. New reserved V2 configuration switches are appended if missing:
+### A. `ShiftSemantics`
+- **Requirement**: Must be pre-populated with catalog rules for all operational shift codes (`AM`, `PM`, `OH`, `COURT`, `ON1`, `ON2`, `ON`, `N`, `NIGHT`, `PN`, `OFF`, `GOFF`, `HKA`, `GHKA`, `AL`, `MC`, `EL`, `COURSE`, `EP_OFFICE_HOUR`, `EP_ONCALL`).
+- **Provisioning Action**: Created during schema provisioning.
+- **Seeding Action**: Populate canonical rows (`rosterV2CatalogRows_()`).
+
+### B. `OffPolicies`
+- **Requirement**: Must contain at least one valid, active weekly-off policy (`PolicyCode: 'A'`, `RuleVersion: 1`, `Active: true`) whose `EffectiveMonday` covers the cutover period's weeks.
+- **Critical Risk**: If `OffPolicies` is empty when `rosterv2publish` executes, `aggregateWeeklyOffSnapshots` throws `INVALID_OFF_POLICY`. Because Planned assignments were already written, the publish halts and transitions the operation to `RECOVERY_REQUIRED`.
+- **Seeding Action**: Seed canonical Policy A row (`aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`, `A`, `2026-10-26`, `1`, `guidance.policyRuleJson('A')`, `true`, ...).
+
+### C. `Settings`
+- **Requirement**: Must have all reserved feature switch keys initialized to safe defaults:
   - `roster_v2_read_enabled: 'false'`
   - `roster_v2_write_enabled: 'false'`
   - `shift_semantics_v2_enabled: 'false'`
-  - `weekly_off_guidance_enabled: 'false'`
-  - `night_safety_guidance_enabled: 'false'`
-  - `goff_ledger_enabled: 'false'`
+  - `weekly_off_guidance_enabled: 'true'`
+  - `night_safety_guidance_enabled: 'true'`
+  - `goff_ledger_enabled: 'true'`
   - `write_queue_v2_enabled: 'false'`
   - `roster_workspace_v2_enabled: 'false'`
-  - `legacy_upload_enabled: 'true'` (set to `'false'` after successful baseline verification)
-- `RosterPeriods`: If an earlier Phase 1 4-column iteration exists (`PeriodId`, `SchemaVersion`, `EnrolledAt`, `EnrolledBy`), missing columns are appended in canonical order while retaining `EnrolledAt`, `EnrolledBy`, and any custom columns at the end. Existing rows receive default values (`State: 'DRAFT'`, `Revision: 0`, `DraftRevision: 0`).
+  - `legacy_upload_enabled: 'true'`
 
-### CREATE
-- Newly provisioned sheets created with canonical headers:
-  - `RosterPeople`, `ShiftSemantics`, `OperationLog`, `RosterDraftPatches`, `OffPolicies`, `RosterAssignments`, `WeeklyOffSnapshots`, `RosterEvents`, `RosterAbsences`, `RosterReplacements`, `RosterEntitlementTransactions`.
-- Ensured idempotently via `rosterProvisionAllSchemas_()`. If sheet already exists, no destructive changes are made.
-
-### MIGRATE
-- `RosterPeople`: Deterministic population from `TeamMembers` (MO) and `EmergencyPhysicians` (EP).
-  - Every active/inactive staff member receives a durable RFC 4122 UUIDv4 `PersonId`.
-  - Name variants and known aliases populated in `LegacyNamesJson`.
-  - Ambiguous duplicate names fail closed and require admin review before seeding.
-
-### COMPATIBILITY ONLY
-- `MasterRoster`: Authoritative status transferred to `RosterPeriods` / `RosterAssignments`.
-  - `MasterRoster` acts as a month-scoped compatibility projection sheet for legacy viewers, external systems, and CSV exports.
-  - When a V2 period is published or amended, only rows matching the target month (`YYYY-MM`) are rewritten. Non-target months, unparseable dates, and blank rows are preserved.
-  - Full-roster uploads are blocked once any V2 period is enrolled.
+### D. `RosterPeople`
+- **Requirement**: Must contain canonical entries for all medical staff appearing in the cutover period's draft assignments.
+- **Critical Risk**: If an assigned doctor is not in `RosterPeople`, `generatePlannedSnapshot` fails with `VALIDATION_FAILED` (`PersonId not found in registered people`).
 
 ---
 
-## 4. Preservation Invariants
+## 4. Production Identity Migration Contract
 
-1. **Historical Month Survival**:
-   - `MasterRoster` contains historical roster schedules (e.g. July, August, September, October). Under no circumstances may rows with dates outside the active cutover month be modified or truncated.
-2. **Legacy Intent Preservation**:
-   - `Requests` and `LeaveApplications` contain historical administrative submissions. They must not be converted into V2 amendments, operational absences, or entitlement transactions automatically. They remain historical intent records.
-3. **Unknown Column Survival**:
-   - If spreadsheet administrators or legacy add-ons added custom columns to `RosterPeriods`, `TeamMembers`, or `Requests`, additive schema provisioning retains those columns at the end of the header row, and preserves all cell values.
-4. **Blank & Unparseable Row Survival**:
-   - Blank rows, delimiter rows, and notes present in legacy `MasterRoster` or `Requests` must not be pruned or dropped by parsers.
-5. **Emergency Physician Isolation**:
-   - EP rows in `MasterRoster` and directory listings survive, but are assigned `DirectoryType: 'EP'` and `DutyDomain: 'EP'`. They are strictly excluded from MO weekly-off guidance, shortage evaluations, and MO entitlement ledger accounting.
-6. **Canonical PersonId Authority**:
-   - Display names in Google Sheets are mutable presentation strings. All V2 mutations, events, and audit logs must reference the immutable `PersonId`.
+Identity migration transitions legacy `TeamMembers` (MO) and `EmergencyPhysicians` (EP) records into canonical `RosterPeople` rows. Display names are mutable presentation strings and **must never** be used as the sole basis for canonical identity.
 
----
+### A. Canonical Source Identity Priority
+1. **Priority 1**: `DirectoryType + StaffId` (Primary immutable identifier, e.g. `MO:staffId:MO-101`).
+2. **Priority 2**: `DirectoryType + Email` (Secondary unique identifier where StaffId is absent, e.g. `MO:email:doctor@hospital.gov.my`).
+3. **Priority 3**: Explicit reviewed manual mapping (For records missing both StaffId and Email).
 
-## 5. Production Roster Baseline Strategy
+### B. Deterministic RFC 4122 UUIDv4 Derivation
+- To ensure idempotency (rerunning migration produces identical `PersonId`s without duplicating or regenerating UUIDs), `PersonId` is deterministically derived from the canonical source key:
+  ```
+  sourceKey = "${directoryType}:${identifierType}:${identifierValue}"
+  UUID = deterministicUuid("person:" + sourceKey, digestFn)
+  ```
+- **Algorithm**: Compute SHA-256 hash of `person:${sourceKey}`. Format first 16 bytes as UUIDv4:
+  - Byte 6 set to `(byte & 0x0f) | 0x40` (UUID version 4)
+  - Byte 8 set to `(byte & 0x3f) | 0x80` (RFC 4122 variant 1)
+  - Output format: `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`
 
-### Explicit Architectural Answers:
-
-1. **Which month becomes the first enrolled V2 period?**
-   - The upcoming roster month scheduled for live cutover (e.g. `2026-11` or target production month).
-2. **How is its Planned snapshot established?**
-   - Roster administrators draft duty assignments in the V2 UI or staging draft. Upon review, the admin triggers `rosterv2publish`.
-   - The backend creates an immutable Planned snapshot:
-     - `Layer: 'PLANNED'`
-     - `SnapshotId: 'planned:<periodId>'`
-     - Computes SHA-256 `PlannedWeekChecksum` and `ProjectionChecksum`.
-     - Records initial weekly-off guidance snapshots in `WeeklyOffSnapshots`.
-3. **What becomes its initial lifecycle state?**
-   - Period is enrolled in `DRAFT` (`State: 'DRAFT'`, `Revision: 0`, `DraftRevision: 0`).
-   - Transitioned to `PUBLISHED` upon cutover publish (`State: 'PUBLISHED'`, `Revision: 1`, `DraftRevision: 1`).
-4. **How is Current initialized?**
-   - On publish, the `Current` working layer matches `Planned` exactly. In `RosterAssignments`, Current assignments mirror Planned assignments with `Layer: 'CURRENT'`.
-5. **How are historical months handled?**
-   - Historical months (all months prior to the cutover month) remain in `MasterRoster` as legacy read-only tabular data.
-6. **Are historical months enrolled into V2 or left legacy/read-only?**
-   - **Left legacy/read-only.** Historical months are NOT enrolled into V2 and NOT retroactively synthesized into fake V2 lifecycle events.
-7. **How is MasterRoster retained as compatibility projection rather than authority?**
-   - `MasterRoster` is retained as a downstream projection sink. Whenever a V2 period publishes or amends, `RosterLifecycle.mergeMasterRosterProjection()` merges the new month's projection into `MasterRoster` while leaving all historical months untouched.
+### C. Dry-Run Planning Categories
+The identity migration utility (`planIdentityMigration`) inspects directories without modifying Sheets and classifies each entry into one of 6 categories:
+1. `CREATE`: New staff with valid stable ID (`StaffId` or `Email`) not currently in `RosterPeople`.
+2. `REUSE`: Existing person in `RosterPeople` with matching `PersonId` and identical display name.
+3. `ALIAS_UPDATE`: Existing person whose display name changed. Former name is automatically preserved in `LegacyNamesJson`.
+4. `INACTIVE`: Staff member with `Active: false`. Retained in `RosterPeople` with `Active: false`.
+5. `AMBIGUOUS`: Fails closed immediately on:
+   - Duplicate `StaffId` or `Email` within a directory.
+   - Cross-domain collision (same `StaffId` or `Email` present in both MO and EP).
+6. `MISSING_STABLE_ID`: Record lacks both `StaffId` and valid `Email`. Cannot derive durable ID; manual admin mapping required before migration can proceed (`canProceed: false`).
 
 ---
 
-## 6. GOFF / GHKA Opening Balance Strategy
+## 5. Baseline Planned vs Current Persistence Semantics
 
-### Critical Safety Invariant:
-Legacy `MasterRoster` contains historical shift notations such as `GOFF*`, `GOFF`, `GHKA`, and `OFF`.
-- The certified domain contract specifies:
-  `GOFF*` remains `GOFF_STAR_SEMANTICS_UNRESOLVED`.
-- Historical `GOFF*` markers and past roster assignments **MUST NEVER** generate automatic entitlement balances.
-- Auto-crediting balances from unverified legacy sheet history is strictly forbidden.
+### Physical Persisted Rows vs Resolved Current Output:
+- **`RosterAssignments` Table**:
+  - Physically persists **ONLY** rows with `Layer: 'PLANNED'`.
+  - **Zero rows** with `Layer: 'CURRENT'` are written to Google Sheets upon publish or amendment.
+- **Dynamic Current Resolution**:
+  - `Current` roster assignments are dynamically derived in memory by `RosterLifecycle.resolveCurrentRoster()` by folding confirmed lifecycle events (`RosterEvents`), operational absences (`RosterAbsences`), replacements (`RosterReplacements`), and entitlement transactions (`RosterEntitlementTransactions`) on top of the immutable Planned snapshot.
+  - Immediately upon publish (with zero events), derived `Current` assignments match `PLANNED` assignments exactly, and are projected into `MasterRoster` for downstream legacy compatibility.
+  - Client endpoint `rosterv2current` returns client DTOs reflecting this resolved Current state.
 
-### Safe Opening Balance Import Approach:
-Opening balances must be established strictly via authorized, admin-reviewed manual credit transactions using the certified backend endpoint:
-- Endpoint: `rosterv2entitlementcreditmanual`
-- Provenance / Attributes:
-  - `TransactionType`: `'CREDIT_MANUAL'`
-  - `ReasonCode`: `'OPENING_BALANCE'`
-  - `EntitlementType`: `'GOFF'` or `'GHKA'`
-  - `SourceType`: `'MANUAL'`
-  - `AdminNote`: `'Verified opening balance as of cutover date by Head of Department'`
+---
 
-### Proposed Opening Balance Import Specification:
+## 6. GOFF / GHKA Opening Balance Contract
+
+1. **No Automatic Inference**: Past roster notations (including `GOFF*`, `GOFF`, `GHKA`) generate zero automatic entitlement balance.
+2. **Reviewed Opening Balances Only**: Opening balances must be established via authorized manual credit transactions using the certified backend action `rosterv2entitlementcreditmanual`.
+3. **Accepted ReasonCode**: The backend strictly validates `reasonCode`. `reasonCode: 'OPENING_BALANCE'` is natively accepted by the backend.
+4. **Transaction Constraints**:
+   - `amount`: must be atomic `+1` (multi-balance credits require individual atomic transactions).
+   - `effectiveDate`: first day of cutover period (e.g. `2026-11-01`).
+   - `adminNote`: mandatory reference to admin sign-off document.
+   - Guard: requires `roster_v2_write_enabled: 'true'`.
+
+### Opening Balance Non-Production Review & Import Template:
 ```json
 [
   {
     "personId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-    "personNameSnapshot": "Dr. Sarah Lee",
+    "displayName": "Dr. Sarah Lee",
+    "directoryType": "MO",
     "entitlementType": "GOFF",
-    "amount": 2,
-    "effectiveDate": "2026-11-01",
-    "reasonCode": "OPENING_BALANCE",
-    "adminNote": "Verified opening balance as of 2026-11-01 cutover"
-  },
-  {
-    "personId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-    "personNameSnapshot": "Dr. Ahmad Farhan",
-    "entitlementType": "GHKA",
     "amount": 1,
     "effectiveDate": "2026-11-01",
     "reasonCode": "OPENING_BALANCE",
-    "adminNote": "Verified opening balance as of 2026-11-01 cutover"
+    "adminNote": "October 2026 manual ledger reconciliation sign-off ref #GOFF-2026-10",
+    "reviewerSignOff": "Dr. Head of Department, MD"
   }
 ]
 ```
 
 ---
 
-## 7. Identity Migration Audit & Mapping Contract
+## 7. Technologically Sound Staged Cutover Sequence (Stages A–G)
 
-### Resolution Rules (`RosterCompatibility.personIndex`):
-1. **Exact Directory Match**: Staff names matching `TeamMembers.MemberName` map directly to `RosterPeople`.
-2. **Legacy Aliases**: Alternative spellings, nicknames, or historical name variations are cataloged in `RosterPeople.LegacyNamesJson` as a JSON array of strings (e.g. `["Dr. Ali", "Ali B."]` for canonical `Dr. Ali bin Hassan`).
-3. **Fail-Closed on Duplicate / Ambiguous Identity**:
-   - If two distinct individuals share the same display name or alias, resolution throws an error.
-   - If a name exists in both MO (`TeamMembers`) and EP (`EmergencyPhysicians`) without an explicit domain, resolution returns `identityStatus: 'AMBIGUOUS_DOMAIN'`, `personId: null`. The system never guesses.
-4. **Renamed Staff**: The canonical current display name is stored in `CurrentDisplayName`; former names are preserved in `LegacyNamesJson`.
-5. **Inactive Staff**: Former staff members are retained in `RosterPeople` with `Active: false` to ensure historical assignments remain linked.
-6. **EP Staff**: Emergency Physicians are tagged `DirectoryType: 'EP'`. They cannot participate in MO shift swaps, shortage acceptance, or MO entitlement accounting.
-7. **Unmapped Staff**: Records missing from `RosterPeople` receive `identityStatus: 'UNREGISTERED'`, `personId: null`.
+The cutover sequence must execute in the following strict staged order:
+
+### Stage A — Immutable Baseline
+1. **Maintenance & Freeze Window**: Announce scheduled cutover window; freeze all legacy roster edits.
+2. **Full Production Sheet Backup**: Create full copy of production Google Sheet (e.g. `PROD_BACKUP_YYYYMMDD_HHMMSS`).
+3. **Record Baseline Row Counts & Checksums**: Record row counts for `MasterRoster`, `Requests`, `LeaveApplications`, `TeamMembers`, `EmergencyPhysicians`.
+4. **Record Rollback References**: Record current Git commits for Apps Script and `gh-pages` (`17712a4`, `4ec7843`).
+*Zero sheet mutations permitted in Stage A.*
+
+### Stage B — Compatible Backend Deployment
+5. **Deploy Certified Apps Script Backend**: Deploy Phase 8 Apps Script bundle (`appscript.txt`) to production Apps Script project while V2 features remain disabled.
+6. **Set Initial Safe Flags**:
+   - `roster_workspace_v2_enabled: false`
+   - `roster_v2_read_enabled: false`
+   - `roster_v2_write_enabled: false`
+   - `legacy_upload_enabled: true`
+7. **Smoke-Test Legacy API**: Verify `getRequests`, `getLeaveApplications`, and legacy roster endpoints operate identically against the new backend bundle.
+
+### Stage C — Additive Provisioning & Seed Audit
+8. **Run Schema Provisioning**: Execute `rosterProvisionAllSchemas_()`.
+9. **Verify Non-Destructive Invariant**: Confirm all legacy rows and checksums remain 100% intact.
+10. **Verify Idempotency**: Run provisioning a second time; confirm zero destructive diff.
+11. **Seed Mandatory Reference Tables**:
+    - Seed `ShiftSemantics` with catalog rows (`rosterV2CatalogRows_()`).
+    - Seed `OffPolicies` with active Policy A covering cutover month.
+    - Seed `Settings` with standard feature keys.
+
+### Stage D — Identity Registry
+12. **Run Identity Migration Utility**: Execute `planIdentityMigration` in dry-run mode against `TeamMembers` and `EmergencyPhysicians`.
+13. **Fail-Closed on Ambiguity**: Halt immediately if any record is categorized as `AMBIGUOUS` or `MISSING_STABLE_ID`.
+14. **Populate `RosterPeople`**: Once clean, populate `RosterPeople` with deterministic `PersonId`s.
+
+### Stage E — Hidden V2 Initialization
+15. **Enable Temporary Initialization Flag Combination**:
+    While `roster_workspace_v2_enabled` remains `false` (workspace hidden from all users) and legacy frontend remains active:
+    - `roster_v2_write_enabled: true`
+    - `roster_v2_read_enabled: true`
+    - `legacy_upload_enabled: true`
+    - `goff_ledger_enabled: true`
+    - `weekly_off_guidance_enabled: true`
+16. **Enroll Cutover Period**: Enroll cutover month in `RosterPeriods` (`State: 'DRAFT'`).
+17. **Load DRAFT Assignments**: Populate draft duty cells.
+18. **Publish Baseline Period**: Execute `rosterv2publish`.
+19. **Verify Projections & Preservation**: Verify Planned snapshot created, Current derived, `MasterRoster` projection updated for cutover month only, and historical months preserved byte-for-byte.
+20. **Import Opening Credits**: Admin executes manual credit transactions with `reasonCode: 'OPENING_BALANCE'`.
+
+### Stage F — Frontend Compatibility Deployment
+21. **Deploy Certified Frontend Release**: Push certified build bundle to `gh-pages` while `roster_workspace_v2_enabled = false`.
+22. **Verify Legacy User Experience**: Confirm that with workspace flag disabled, the new frontend provides the intended safe legacy calendar/table views with zero V2 controls displayed.
+
+### Stage G — Activation
+23. **Enable V2 Feature Switches**: Set `write_queue_v2_enabled = true`.
+24. **Disable Legacy Upload**: Set `legacy_upload_enabled = false` (legacy upload no longer authoritative).
+25. **Activate Unified Workspace**: Set `roster_workspace_v2_enabled = true` as the final user-facing switch.
+26. **Post-Cutover Verification**: Verify full V2 desktop/mobile views, amendment workflows, and audit trail.
 
 ---
 
-## 8. Feature Flag Inventory
+## 8. Multi-Tier Rollback Architecture
 
-All V2 feature switches reside in the `Settings` sheet and are read via `rosterV2Settings_()`:
+Disabling feature flags alone provides immediate runtime safety, but does not rollback client code assets. The verified rollback architecture operates across three explicit tiers:
 
-| Switch Key | System Default | Pre-Cutover Value | Safe Cutover Value | Rollback Value | Architectural Purpose |
-|------------|----------------|-------------------|--------------------|----------------|-----------------------|
-| `roster_v2_read_enabled` | `false` | `false` | `true` | `false` | Gates official V2 period and read endpoints for clients. |
-| `roster_v2_write_enabled` | `false` | `false` | `true` | `false` | Gates V2 lifecycle mutations (publish, close, reopen, amend). |
-| `shift_semantics_v2_enabled` | `false` | `false` | `true` | `false` | Enables V2 shift semantic catalog validation and rules. |
-| `weekly_off_guidance_enabled`| `false` | `false` | `true` | `false` | Enables weekly-off policy evaluation and warnings. |
-| `night_safety_guidance_enabled`| `false` | `false` | `true` | `false` | Enforces consecutive night shift safety alerts. |
-| `goff_ledger_enabled` | `false` | `false` | `true` (post-import) | `false` | Enables Phase 7 GOFF/GHKA entitlement ledger operations. |
-| `write_queue_v2_enabled` | `false` | `false` | `true` | `false` | Activates client-side offline-first draft persistence queue. |
-| `roster_workspace_v2_enabled`| `false` | `false` | `true` | `false` | Activates unified Phase 8 desktop/mobile roster workspace. |
-| `legacy_upload_enabled` | `true` (unset) | `true` | `false` | `true` | Blocks full legacy CSV uploads to prevent overwriting V2 data. |
+### Tier 1 — Instant Feature Flag Rollback (Runtime Isolation)
+- **Action**: In `Settings` sheet, set:
+  - `roster_workspace_v2_enabled: false`
+  - `roster_v2_write_enabled: false`
+  - `roster_v2_read_enabled: false`
+  - `legacy_upload_enabled: true`
+- **Result**:
+  - Frontend immediately hides V2 workspace and displays legacy calendar/table views.
+  - V2 write mutations fail closed (`FEATURE_DISABLED`).
+  - Legacy endpoints (`getRequests`, `getLeaveApplications`) continue functioning.
+  - Audit structures (`OperationLog`, `RosterEvents`, `RosterAssignments`, `RosterEntitlementTransactions`) remain completely preserved.
 
----
+### Tier 2 — Frontend Asset Rollback (Asset Regression)
+- **Trigger**: Client-side JavaScript bundle crash, browser compatibility defect, or CSS corruption.
+- **Action**: Re-deploy previous certified commit (`4ec7843`) to `gh-pages`.
 
-## 9. Proposed Production Cutover Sequence
-
-The production cutover must be executed in 12 strictly decoupled, verifiable phases:
-
-1. **Pre-Cutover Freeze & Announcement**: Announce maintenance window; freeze legacy roster edits.
-2. **Authoritative Spreadsheet Backup**: Make an immutable copy of the production Google Sheet workbook.
-3. **Record Baseline Checksums**: Record row counts, column counts, and hash digests of `MasterRoster`, `Requests`, `LeaveApplications`, `TeamMembers`, `EmergencyPhysicians`.
-4. **Run Additive Schema Provisioning**: Execute `rosterProvisionAllSchemas_()` via Apps Script harness/editor to ensure all 12 V2 tables and default settings exist.
-5. **Populate Identity Registry (`RosterPeople`)**: Seed `RosterPeople` from `TeamMembers` and `EmergencyPhysicians`, resolving all ambiguities.
-6. **Deploy Compatible Apps Script Backend**: Deploy Phase 8 Apps Script bundle with all V2 flags set to `false`.
-7. **Legacy Compatibility Smoke-Test**: Verify legacy `Requests`, `LeaveApplications`, and `MasterRoster` endpoints respond identically to baseline.
-8. **Initialize Cutover Roster Period**: In V2 backend, enroll and publish the cutover month (`DRAFT` -> `PUBLISHED` planned snapshot).
-9. **Import Verified Opening Balances**: Admin imports verified GOFF/GHKA opening balance transactions (`CREDIT_MANUAL`).
-10. **Enable V2 Backend Feature Flags**: In `Settings`, set `roster_v2_read_enabled: 'true'`, `roster_v2_write_enabled: 'true'`, `goff_ledger_enabled: 'true'`, `legacy_upload_enabled: 'false'`.
-11. **Deploy Frontend Release**: Push certified build bundle to `gh-pages`.
-12. **Post-Cutover Verification & Sign-off**: Verify desktop workspace, roving focus, audit log appending, privacy redaction, and projection synchronization.
+### Tier 3 — Backend Deployment Rollback (Backend Logic Defect)
+- **Trigger**: Severe Google Apps Script runtime exception or quota exhaustion.
+- **Action**: Revert Apps Script deployment version to the pre-cutover version recorded in Stage A.
