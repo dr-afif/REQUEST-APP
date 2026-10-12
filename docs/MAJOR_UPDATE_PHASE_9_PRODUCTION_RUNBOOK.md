@@ -481,3 +481,32 @@ The table below governs the exact state of all 9 system feature switches in the 
   2. Select active Web App deployment, click **Edit**, and change version to pre-cutover version recorded in Step A.4.
   3. Click **Deploy**.
 - **Result**: Production web app executes pre-cutover backend bundle.
+
+---
+
+## 5. November Controlled Draft Cutover Strategy (`2026-11`)
+
+When `CUTOVER_PERIOD = 2026-11` is selected by the operator, the preliminary 98 `MasterRoster` assignments are preserved and migrated into the initial V2 DRAFT workspace using the certified offline migration utility (`scripts/phase9-draft-seed.mjs`).
+
+> [!IMPORTANT]
+> **Seeding DRAFT does NOT modify legacy `MasterRoster`.**
+> The 98 preliminary legacy rows in `MasterRoster` remain 100% physically preserved and untouched until explicit `PERIOD_PUBLISH` is authorized by the Clinical Director.
+
+### 13-Step Execution Sequence
+
+1. **Backup Production**: Complete full standalone Google Drive spreadsheet backup (`REQUEST-APP_PROD_BACKUP_YYYYMMDD_HHMMSS`) and record rollback deployment references.
+2. **Verify November MasterRoster Checksum**: Verify that the November partition checksum matches the captured baseline (`0a431b41419a7c055772e06d998f7823a9e78d1c3fc2e6aa8ef62ff59ec107cc`). If any discrepancy is detected, stop immediately with `SOURCE_MASTERROSTER_CHANGED`.
+3. **Provision V2 Schemas**: Additively provision V2 tables in Google Sheets while feature flags remain hidden.
+4. **Seed MO Identities**: Seed canonical `RosterPeople` from `TeamMembers` only (`EP_IDENTITY_MIGRATION_DEFERRED`).
+5. **Configure Approved Effective-Dated OffPolicy**: Insert active `OffPolicies` row (e.g. Policy A effective `2026-11-02`).
+6. **Enroll `2026-11` in DRAFT**: Create `RosterPeriods` record in state `DRAFT` (`Revision: 0`). `MasterRoster` remains completely untouched.
+7. **Seed 98 Preliminary Assignments into DRAFT**: Execute `scripts/phase9-draft-seed.mjs` to apply the 98 preliminary cells via a deterministic batch `DRAFT_PATCH` operation (`draft:2026-11` reaches `Revision: 1`).
+8. **Verify 98/98 Equivalence**: Run `verifyDraftSeedEquivalence` to prove that logical draft cells match the source legacy rows with zero discrepancies.
+9. **Review Outstanding Requests Separately**: Inspect the request reconciliation package (`.phase9/private/november-request-roster-reconciliation.csv`):
+   - Review the 23 requests still to apply (19 leave assignments + 4 course constraints).
+   - Review the 2 safety overrides (post-night `PN` overrides requested `AM`).
+   - Review the 6 preliminary roster assignments with no active request.
+10. **Continue Roster Completion in V2 Workspace**: Operators edit cells, allocate remaining requests, resolve shifts, and inspect real-time weekly off/night safety guidance in the V2 workspace.
+11. **Review Full Draft**: Verify complete roster draft with clinical leadership using dry-run cutover validators.
+12. **Authorize Publication**: Clinical Director grants formal sign-off for `PERIOD_PUBLISH`.
+13. **Publish Replaces Target-Month MasterRoster Projection**: `PERIOD_PUBLISH` creates immutable `Planned` assignments, snapshots `WeeklyOffSnapshots`, and atomistically updates the November month-partition projection in `MasterRoster`.
