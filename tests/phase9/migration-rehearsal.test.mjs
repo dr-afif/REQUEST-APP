@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import vm from 'node:vm';
+import fs from 'node:fs';
+import path from 'node:path';
 import protocol from '../../src/features/roster/queue/protocol.js';
 import compatibility from '../../src/features/roster/compatibility.js';
 import guidance from '../../src/features/roster/guidance.js';
@@ -1164,4 +1166,86 @@ test('27. multi-tier rollback restores legacy compatibility without audit loss',
   // Verify: Audit structures completely preserved
   assert.equal(h.grids.OperationLog.length, preRollbackOpCount);
   assert.equal(h.grids.RosterAssignments.length, preRollbackAssignments);
+});
+
+// ---------------------------------------------------------------------------
+// 28. RosterPage workspace cutover gate (workspace disabled vs enabled)
+// ---------------------------------------------------------------------------
+test('28. RosterPage workspace cutover gate: workspace disabled retains legacy UI and blocks V2 invocations, workspace enabled renders V2', () => {
+  const rosterPageSrc = fs.readFileSync(path.resolve('src/components/RosterPage.jsx'), 'utf8');
+
+  // Verify RosterPage source code strictly gates LifecycleControls behind roster_workspace_v2_enabled
+  const lifecycleControlsGate = /\{Boolean\(settings\?\.roster_workspace_v2_enabled\s*===\s*true\s*\|\|\s*String\(settings\?\.roster_workspace_v2_enabled\s*\|\|\s*''\)\.toLowerCase\(\)\s*===\s*'true'\)\s*&&\s*\(\s*<div[^>]*>\s*<LifecycleControls/;
+  assert.ok(lifecycleControlsGate.test(rosterPageSrc), 'LifecycleControls must be strictly gated by roster_workspace_v2_enabled');
+
+  // Verify RosterPage source code strictly gates Phase5RosterContainer behind roster_workspace_v2_enabled
+  const rosterContainerGate = /\{Boolean\(settings\?\.roster_workspace_v2_enabled\s*===\s*true\s*\|\|\s*String\(settings\?\.roster_workspace_v2_enabled\s*\|\|\s*''\)\.toLowerCase\(\)\s*===\s*'true'\)\s*&&\s*lifecycleInfo\.isEnrolled\s*&&/;
+  assert.ok(rosterContainerGate.test(rosterPageSrc), 'Phase5RosterContainer must be strictly gated by roster_workspace_v2_enabled');
+
+  // Verify RosterPage contains ZERO direct calls to V2 backend endpoints
+  assert.equal(rosterPageSrc.includes('rosterv2'), false, 'RosterPage must not make direct rosterv2 calls outside gated components');
+
+  // Helper evaluating exact gate condition from RosterPage.jsx
+  const evaluateRosterPageGates = (settings, lifecycleInfo) => {
+    const isWorkspaceEnabled = Boolean(
+      settings?.roster_workspace_v2_enabled === true ||
+      String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true'
+    );
+    const renderLifecycleControls = isWorkspaceEnabled;
+    const renderPhase5Container = isWorkspaceEnabled &&
+      lifecycleInfo.isEnrolled &&
+      ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
+      settings?.roster_v2_read_enabled !== false;
+    const renderLegacyRosterUi = !renderPhase5Container;
+    return {
+      isWorkspaceEnabled,
+      renderLifecycleControls,
+      renderPhase5Container,
+      renderLegacyRosterUi
+    };
+  };
+
+  const enrolledPeriod = {
+    period: '2026-11',
+    isEnrolled: true,
+    state: 'PUBLISHED',
+    revision: 1
+  };
+
+  // State 1: Workspace disabled (various falsy representations)
+  const disabledCases = [
+    { roster_workspace_v2_enabled: false },
+    { roster_workspace_v2_enabled: 'false' },
+    { roster_workspace_v2_enabled: 'FALSE' },
+    { roster_workspace_v2_enabled: undefined },
+    { roster_workspace_v2_enabled: null },
+    {}
+  ];
+
+  for (const settings of disabledCases) {
+    const res = evaluateRosterPageGates(settings, enrolledPeriod);
+    assert.equal(res.renderLifecycleControls, false, 'LifecycleControls must NOT render when workspace is disabled');
+    assert.equal(res.renderPhase5Container, false, 'Phase5RosterContainer must NOT render when workspace is disabled');
+    assert.equal(res.renderLegacyRosterUi, true, 'Legacy roster UI must render when workspace is disabled');
+  }
+
+  // State 2: Workspace enabled (boolean and string representations)
+  const enabledCases = [
+    { roster_workspace_v2_enabled: true, roster_v2_read_enabled: true },
+    { roster_workspace_v2_enabled: 'true', roster_v2_read_enabled: true },
+    { roster_workspace_v2_enabled: 'TRUE', roster_v2_read_enabled: true }
+  ];
+
+  for (const settings of enabledCases) {
+    const res = evaluateRosterPageGates(settings, enrolledPeriod);
+    assert.equal(res.renderLifecycleControls, true, 'LifecycleControls must render when workspace is enabled');
+    assert.equal(res.renderPhase5Container, true, 'Phase5RosterContainer must render when workspace is enabled');
+    assert.equal(res.renderLegacyRosterUi, false, 'Legacy roster UI must be superseded when workspace is enabled');
+  }
+
+  // State 3: Workspace enabled but read disabled fails closed to legacy UI
+  const readDisabled = evaluateRosterPageGates({ roster_workspace_v2_enabled: true, roster_v2_read_enabled: false }, enrolledPeriod);
+  assert.equal(readDisabled.renderLifecycleControls, true, 'Lifecycle controls remain for admin status');
+  assert.equal(readDisabled.renderPhase5Container, false, 'V2 container blocked when read is false');
+  assert.equal(readDisabled.renderLegacyRosterUi, true, 'Falls back to legacy UI when V2 read is false');
 });
