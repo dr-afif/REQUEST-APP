@@ -5,7 +5,7 @@
 **Execution Context**: Strict Non-Production Rehearsal (Zero Live Mutations, Zero Deployments)
 **Authoritative Baseline**:
 - `main` / `origin/main`: `17712a4f7e177771ff3cf44d02d7ba570f567d21`
-- Deployed Frontend (`origin/gh-pages`): `4ec7843` (legacy SPA)
+- Deployed Frontend (`origin/gh-pages`): `4ec7843f992fa0e05540274085a83464470f262e` (legacy SPA)
 - Production Backend: Manually managed Apps Script V1.1 backend containing the historical MasterRoster month-safety fix.
 - Phase 8 Certified Checkpoint: `dab0d8acf40c184b138d1d237a20f897d8bf277a`
 
@@ -172,7 +172,7 @@ The cutover sequence must execute in the following strict staged order:
 1. **Maintenance & Freeze Window**: Announce scheduled cutover window; freeze all legacy roster edits.
 2. **Full Production Sheet Backup**: Create full copy of production Google Sheet (e.g. `PROD_BACKUP_YYYYMMDD_HHMMSS`).
 3. **Record Baseline Row Counts & Checksums**: Record row counts for `MasterRoster`, `Requests`, `LeaveApplications`, `TeamMembers`, `EmergencyPhysicians`.
-4. **Record Rollback References**: Record current Git commits for Apps Script and `gh-pages` (`17712a4`, `4ec7843`).
+4. **Record Rollback References**: Record current Git commits for Apps Script and `gh-pages` (`17712a4f7e177771ff3cf44d02d7ba570f567d21`, `4ec7843f992fa0e05540274085a83464470f262e`).
 *Zero sheet mutations permitted in Stage A.*
 
 ### Stage B — Compatible Backend Deployment
@@ -242,7 +242,7 @@ Disabling feature flags alone provides immediate runtime safety, but does not ro
 
 ### Tier 2 — Frontend Asset Rollback (Asset Regression)
 - **Trigger**: Client-side JavaScript bundle crash, browser compatibility defect, or CSS corruption.
-- **Action**: Re-deploy previous certified commit (`4ec7843`) to `gh-pages`.
+- **Action**: Re-deploy previous certified commit (`4ec7843f992fa0e05540274085a83464470f262e`) to `gh-pages`.
 
 ### Tier 3 — Backend Deployment Rollback (Backend Logic Defect)
 - **Trigger**: Severe Google Apps Script runtime exception or quota exhaustion.

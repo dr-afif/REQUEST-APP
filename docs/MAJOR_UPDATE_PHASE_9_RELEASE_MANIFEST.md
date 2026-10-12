@@ -13,13 +13,17 @@
 |---|---|:---:|
 | **Source Branch** | `feature/phase-9-cutover` | Verified |
 | **Certified Runtime Checkpoint** | `e6970ad6dd7d2afef0130cc9bb1de65be33f2205` | Certified Baseline |
-| **Release Package Source Checkpoint** | `5ba7441a0cc1c6a2248834d164bcac56efbe34f7` | Verified |
+| **Preparation Parent Checkpoint** | `f27ad35b94b0b62944dd72642a90d41d76c79bc1` | Verified Parent |
 | **Apps Script Bundle SHA-256** | `b97f903155ef69bb72f9fcfbb38d57050c5fbe7b02c57424a9d5605669a98b47` | Verified |
 | **Apps Script Bundle Path** | `appscript.txt` (built via `npm run build:appscript`) | Synchronized |
 | **Frontend Source Checkpoint** | `e6970ad6dd7d2afef0130cc9bb1de65be33f2205` | Certified Runtime |
 | **Frontend Build Output** | Vite production bundle (`dist/assets/index-*.js`, `dist/assets/index-*.css`) | Clean Build |
 | **Production Baseline `main` SHA** | `17712a4f7e177771ff3cf44d02d7ba570f567d21` | Untouched |
 | **Production Baseline `gh-pages` SHA**| `4ec7843f992fa0e05540274085a83464470f262e` | Untouched |
+
+> [!NOTE]
+> **Release Package Commit Recording**: Final release-package commit SHA must be captured from `git rev-parse HEAD` after this manifest commit and recorded in the production cutover evidence/log. No self-referential final commit SHA is stored in this file.
+
 
 ---
 

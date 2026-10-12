@@ -5,7 +5,7 @@
 **Execution Context**: Strict Non-Production Rehearsal (Zero Live Mutations, Zero Deployments)
 **Authoritative Baseline**:
 - `main` / `origin/main`: `17712a4f7e177771ff3cf44d02d7ba570f567d21`
-- Legacy Deployed Frontend (`origin/gh-pages`): `4ec7843`
+- Legacy Deployed Frontend (`origin/gh-pages`): `4ec7843f992fa0e05540274085a83464470f262e`
 - Production Backend: Legacy V1.1 Apps Script with MasterRoster month-safety hotfix.
 - Phase 8 Certified Checkpoint: `dab0d8acf40c184b138d1d237a20f897d8bf277a`
 
@@ -28,7 +28,7 @@ Execute in strict sequential order. No out-of-order execution permitted.
   - `ActivityHistory` total row count recorded: `___________`
 - [ ] **Record Rollback References**:
   - Apps Script current deployment version: `___________`
-  - Frontend `gh-pages` commit SHA recorded: `4ec7843`
+  - Frontend `gh-pages` commit SHA recorded: `4ec7843f992fa0e05540274085a83464470f262e`
   - Git `main` commit SHA recorded: `17712a4f7e177771ff3cf44d02d7ba570f567d21`
 *Zero mutations allowed during Stage A.*
 
@@ -139,7 +139,7 @@ Execute in strict sequential order. No out-of-order execution permitted.
 - **Execution Time**: ~5 minutes.
 - **Trigger**: Client-side JavaScript bundle error, stylesheet breakage, or browser crash.
 - **Action**:
-  1. Revert `gh-pages` branch to pre-cutover commit `4ec7843`.
+  1. Revert `gh-pages` branch to pre-cutover commit `4ec7843f992fa0e05540274085a83464470f262e`.
   2. Invalidate CDN cache.
 
 ### Tier 3 — Backend Deployment Rollback (Backend Logic Regression)

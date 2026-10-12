@@ -637,21 +637,24 @@ test('26. Tier 1 rollback: preserves existing V2 audit and lifecycle rows while 
 // 7. Release Manifest References & Non-Mutation Tests
 // ---------------------------------------------------------------------------
 
-test('27. release manifest distinguishes certified checkpoint from release package checkpoint', () => {
+test('27. release manifest distinguishes certified checkpoint from preparation parent checkpoint without circular references', () => {
   const manifestContent = fs.readFileSync('docs/MAJOR_UPDATE_PHASE_9_RELEASE_MANIFEST.md', 'utf8');
 
   assert.ok(manifestContent.includes('feature/phase-9-cutover'));
   assert.ok(manifestContent.includes('e6970ad6dd7d2afef0130cc9bb1de65be33f2205'), 'Contains certified runtime checkpoint');
-  assert.ok(manifestContent.includes('5ba7441a0cc1c6a2248834d164bcac56efbe34f7'), 'Contains release package source checkpoint');
+  assert.ok(manifestContent.includes('f27ad35b94b0b62944dd72642a90d41d76c79bc1'), 'Contains preparation parent checkpoint');
   assert.ok(manifestContent.includes('17712a4f7e177771ff3cf44d02d7ba570f567d21'), 'Contains production main baseline SHA');
   assert.ok(manifestContent.includes('4ec7843f992fa0e05540274085a83464470f262e'), 'Contains production gh-pages baseline SHA');
   assert.ok(manifestContent.includes('b97f903155ef69bb72f9fcfbb38d57050c5fbe7b02c57424a9d5605669a98b47'), 'Contains appscript bundle SHA-256');
+  assert.ok(!manifestContent.includes('Current Hardened Preparation Head'), 'Must not claim self-referential current preparation head');
+  assert.ok(manifestContent.includes('captured from `git rev-parse HEAD` after this manifest commit'), 'Specifies non-circular commit capture contract');
   assert.ok(manifestContent.includes('RosterPeople'));
   assert.ok(manifestContent.includes('RosterEntitlementTransactions'));
   assert.ok(manifestContent.includes('Tier 1'));
   assert.ok(manifestContent.includes('Tier 2'));
   assert.ok(manifestContent.includes('Tier 3'));
 });
+
 
 test('28. baseline tools perform no mutation of input fixtures', () => {
   const original = createMockWorkbook();
