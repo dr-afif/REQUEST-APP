@@ -12,10 +12,11 @@
 | Parameter | Authoritative Value / Reference | Status |
 |---|---|:---:|
 | **Source Branch** | `feature/phase-9-cutover` | Verified |
-| **Source Checkpoint Commit** | `e6970ad6dd7d2afef0130cc9bb1de65be33f2205` (or latest certified commit) | Certified |
+| **Certified Runtime Checkpoint** | `e6970ad6dd7d2afef0130cc9bb1de65be33f2205` | Certified Baseline |
+| **Release Package Source Checkpoint** | `5ba7441a0cc1c6a2248834d164bcac56efbe34f7` | Verified |
 | **Apps Script Bundle SHA-256** | `b97f903155ef69bb72f9fcfbb38d57050c5fbe7b02c57424a9d5605669a98b47` | Verified |
 | **Apps Script Bundle Path** | `appscript.txt` (built via `npm run build:appscript`) | Synchronized |
-| **Frontend Source SHA** | `e6970ad6dd7d2afef0130cc9bb1de65be33f2205` | Verified |
+| **Frontend Source Checkpoint** | `e6970ad6dd7d2afef0130cc9bb1de65be33f2205` | Certified Runtime |
 | **Frontend Build Output** | Vite production bundle (`dist/assets/index-*.js`, `dist/assets/index-*.css`) | Clean Build |
 | **Production Baseline `main` SHA** | `17712a4f7e177771ff3cf44d02d7ba570f567d21` | Untouched |
 | **Production Baseline `gh-pages` SHA**| `4ec7843f992fa0e05540274085a83464470f262e` | Untouched |
@@ -91,6 +92,6 @@
 
 ## 6. Multi-Tier Rollback Coordinates
 
-- **Tier 1 (Instant Settings Reversion)**: In `Settings`, set `roster_workspace_v2_enabled = false`, `roster_v2_write_enabled = false`, `roster_v2_read_enabled = false`, `legacy_upload_enabled = true`.
+- **Tier 1 (Instant Settings Reversion)**: In `Settings`, set all 9 feature switches to baseline: `roster_workspace_v2_enabled = false`, `roster_v2_read_enabled = false`, `roster_v2_write_enabled = false`, `shift_semantics_v2_enabled = false`, `weekly_off_guidance_enabled = false`, `night_safety_guidance_enabled = false`, `goff_ledger_enabled = false`, `write_queue_v2_enabled = false`, `legacy_upload_enabled = true`. All V2 audit tables remain physically preserved.
 - **Tier 2 (Frontend Asset Reversion)**: Revert `gh-pages` branch to commit `4ec7843f992fa0e05540274085a83464470f262e`.
 - **Tier 3 (Backend Deployment Reversion)**: In Apps Script Deployments, redeploy pre-cutover version recorded during Stage A backup.

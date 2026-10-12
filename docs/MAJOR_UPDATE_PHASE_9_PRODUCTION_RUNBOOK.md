@@ -27,11 +27,11 @@ The table below governs the exact state of all 9 system feature switches in the 
 | Stage | `roster_workspace_v2_enabled` | `roster_v2_read_enabled` | `roster_v2_write_enabled` | `shift_semantics_v2_enabled` | `weekly_off_guidance_enabled` | `night_safety_guidance_enabled` | `goff_ledger_enabled` | `write_queue_v2_enabled` | `legacy_upload_enabled` | State Rationale |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|
 | **Legacy Production** | `false` / unset | `false` / unset | `false` / unset | `false` / unset | `false` / unset | `false` / unset | `false` / unset | `false` / unset | `true` / unset | Baseline legacy operation |
-| **Stage B: Backend Deployed** | `false` | `false` | `false` | `false` | `true` | `true` | `true` | `false` | `true` | New bundle deployed; all V2 endpoints guarded; legacy routes active |
+| **Stage B: Backend Deployed** | `false` | `false` | `false` | `false` | `false` | `false` | `false` | `false` | `true` | New bundle deployed; all V2 endpoints guarded; legacy routes active |
 | **Stage E: Hidden V2 Init** | `false` | `true` | `true` | `true` | `true` | `true` | `true` | `false` | `true` | Admin initializes cutover period; V2 workspace remains hidden from all users |
 | **Stage H: Frontend Deployed** | `false` | `true` | `true` | `true` | `true` | `true` | `true` | `false` | `true` | New client code live; workspace gate `false` renders certified legacy UI |
 | **Stage I: V2 Activated** | `true` | `true` | `true` | `true` | `true` | `true` | `true` | `true` | `false` | Full Phase 4–8 unified workspace live; legacy upload disabled |
-| **Tier 1 Rollback** | `false` | `false` | `false` | `false` | `true` | `true` | `true` | `false` | `true` | Instant runtime fallback; legacy UI restored; audit structures preserved |
+| **Tier 1 Rollback** | `false` | `false` | `false` | `false` | `false` | `false` | `false` | `false` | `true` | Instant runtime fallback; legacy UI restored; audit structures preserved |
 
 ---
 
@@ -125,9 +125,9 @@ The table below governs the exact state of all 9 system feature switches in the 
     - `roster_v2_read_enabled`: `false`
     - `roster_v2_write_enabled`: `false`
     - `shift_semantics_v2_enabled`: `false`
-    - `weekly_off_guidance_enabled`: `true`
-    - `night_safety_guidance_enabled`: `true`
-    - `goff_ledger_enabled`: `true`
+    - `weekly_off_guidance_enabled`: `false`
+    - `night_safety_guidance_enabled`: `false`
+    - `goff_ledger_enabled`: `false`
     - `write_queue_v2_enabled`: `false`
     - `legacy_upload_enabled`: `true`
   - **Expected Result**: Flags written in `Settings`.
@@ -196,17 +196,17 @@ The table below governs the exact state of all 9 system feature switches in the 
   - **STOP Condition**: Row count != 20 or shift codes missing.
   - **Rollback Action**: Clear `ShiftSemantics` data rows (leaving header) and re-seed from `config/phase9-reference-seed.json`.
   - **Reversibility**: Reversible.
-- [ ] **Step D.2: Seed Confirmed Production OffPolicy**
-  - **Action**: Insert confirmed hospital weekly-off policy row into `OffPolicies` sheet (matching `config/phase9-reference-seed.json` specification).
-    - `PolicyId`: RFC 4122 UUIDv4 (e.g. `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`)
-    - `PolicyCode`: `A`
-    - `EffectiveMonday`: Monday date covering the cutover period (e.g. `2026-10-26`)
+- [ ] **Step D.2: Seed Confirmed Production OffPolicy (DO NOT USE TEST FIXTURE)**
+  - **Action**: Insert confirmed hospital weekly-off policy row into `OffPolicies` sheet (matching `productionRequiredInput` specification, NOT the test fixture).
+    - `PolicyId`: RFC 4122 UUIDv4
+    - `PolicyCode`: Confirmed hospital code (e.g. `A`)
+    - `EffectiveMonday`: Confirmed Monday date covering the cutover period (e.g. `2026-10-26`)
     - `RuleVersion`: `1`
-    - `RuleJson`: `{"policyCode":"A","minOffPerWeek":1,"maxNightPerWeek":2,"targetOffPerWeek":1,"minConsecutiveRestHours":24}`
+    - `RuleJson`: Confirmed hospital rule definition JSON (e.g. `minOffPerWeek`, `maxNightPerWeek`)
     - `Active`: `TRUE`
-  - **Expected Result**: Exactly 1 active policy row in `OffPolicies`.
-  - **Validation**: Confirm `EffectiveMonday <= first Monday of cutover period`. Confirm `Active = TRUE`.
-  - **STOP Condition**: Missing policy or ineffective date range.
+  - **Expected Result**: Exactly 1 active approved production policy row in `OffPolicies`.
+  - **Validation**: Confirm `EffectiveMonday <= first Monday of cutover period`. Confirm `Active = TRUE`. Confirm policy is NOT marked `exampleOnly: true`.
+  - **STOP Condition**: Missing policy, ineffective date range, or attempt to seed test fixture without hospital approval.
   - **Rollback Action**: Correct row in `OffPolicies`.
   - **Reversibility**: Reversible.
 
@@ -444,18 +444,23 @@ The table below governs the exact state of all 9 system feature switches in the 
 #### Tier 1 — Instant Feature Flag Rollback (Runtime Isolation)
 - **Execution Time**: < 1 minute.
 - **Trigger**: Any operational anomaly, user confusion, or non-critical frontend issue.
-- **Action**: In `Settings` Google Sheet, update the following 4 keys:
+- **Action**: In `Settings` Google Sheet, update all 9 feature switches to the safest baseline state:
   ```
-  roster_workspace_v2_enabled = false
-  roster_v2_write_enabled     = false
-  roster_v2_read_enabled      = false
-  legacy_upload_enabled       = true
+  roster_workspace_v2_enabled    = false
+  roster_v2_read_enabled         = false
+  roster_v2_write_enabled        = false
+  shift_semantics_v2_enabled     = false
+  weekly_off_guidance_enabled    = false
+  night_safety_guidance_enabled  = false
+  goff_ledger_enabled            = false
+  write_queue_v2_enabled         = false
+  legacy_upload_enabled          = true
   ```
 - **Result**:
   - Web application instantly hides V2 workspace and displays legacy calendar/table views upon browser refresh.
   - V2 write mutations fail closed (`FEATURE_DISABLED`).
   - Legacy endpoints (`getRequests`, `getLeaveApplications`) continue functioning without interruption.
-  - All audit structures (`OperationLog`, `RosterEvents`, `RosterAssignments`, `RosterEntitlementTransactions`) remain 100% preserved.
+  - All audit structures (`OperationLog`, `RosterEvents`, `RosterAssignments`, `WeeklyOffSnapshots`, `RosterPeriods`, `RosterEntitlementTransactions`) remain 100% physically preserved and untouched.
 
 #### Tier 2 — Frontend Asset Rollback (Asset Regression)
 - **Execution Time**: ~ 3 minutes.

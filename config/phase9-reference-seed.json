@@ -304,19 +304,30 @@
       "active": "Boolean true to activate"
     },
     "productionConfirmationRequired": true,
-    "operatorConfirmationNotice": "The live production OffPolicy must NOT be automatically generated without hospital scheduling leadership confirmation. The operator must confirm the effective Monday and rules before Stage D/E.",
-    "validatedExample": {
+    "operatorConfirmationNotice": "The live production OffPolicy must NOT be automatically generated from test fixtures without hospital scheduling leadership confirmation. The operator must supply an approved production policy with effective Monday covering the cutover period.",
+    "productionRequiredInput": {
+      "approvedForProduction": true,
+      "operatorConfirmationRequired": true,
+      "policyCode": "Operator must confirm: 'A' or hospital-specific code",
+      "effectiveMonday": "Operator must specify YYYY-MM-DD Monday date covering cutover period",
+      "ruleVersion": 1,
+      "ruleJson": "Operator must provide verified rules JSON (e.g. minOffPerWeek, maxNightPerWeek)",
+      "approvalEvidence": "Sign-off reference from clinical scheduling leadership"
+    },
+    "testExample": {
+      "exampleOnly": true,
+      "doNotUseInProduction": true,
       "policyId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       "policyCode": "A",
       "effectiveMonday": "2026-10-26",
       "ruleVersion": 1,
       "ruleJson": "{\"policyCode\":\"A\",\"minOffPerWeek\":1,\"maxNightPerWeek\":2,\"targetOffPerWeek\":1,\"minConsecutiveRestHours\":24}",
       "active": true,
-      "reason": "Standard hospital MO weekly off policy",
+      "reason": "Test fixture example for weekly off policy A (not for production)",
       "revision": 0,
       "operationId": "00000000-0000-0000-0000-000000000001",
       "createdAt": "2026-10-26T00:00:00.000Z",
-      "createdBy": "admin@hospital.gov.my"
+      "createdBy": "test-admin@example.invalid"
     }
   },
   "settings": {
@@ -356,27 +367,27 @@
       },
       "weekly_off_guidance_enabled": {
         "description": "Enables weekly off guidance and snapshot evaluations during publish and amendments.",
-        "stageB_initial": "true",
+        "stageB_initial": "false",
         "stageE_hidden_init": "true",
         "stageH_frontend_deploy": "true",
         "stageI_activation": "true",
-        "tier1_rollback": "true"
+        "tier1_rollback": "false"
       },
       "night_safety_guidance_enabled": {
         "description": "Enables night shift rest and consecutive safety checks.",
-        "stageB_initial": "true",
+        "stageB_initial": "false",
         "stageE_hidden_init": "true",
         "stageH_frontend_deploy": "true",
         "stageI_activation": "true",
-        "tier1_rollback": "true"
+        "tier1_rollback": "false"
       },
       "goff_ledger_enabled": {
         "description": "Enables replacement off (GOFF) and holiday off (GHKA) ledger accounting and transaction validation.",
-        "stageB_initial": "true",
+        "stageB_initial": "false",
         "stageE_hidden_init": "true",
         "stageH_frontend_deploy": "true",
         "stageI_activation": "true",
-        "tier1_rollback": "true"
+        "tier1_rollback": "false"
       },
       "write_queue_v2_enabled": {
         "description": "Enables client write-queue draft patch protocol in web frontend.",

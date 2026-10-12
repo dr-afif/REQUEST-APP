@@ -72,17 +72,24 @@ export function validateCutoverPeriod({
   const mondays = getMondaysInMonth(year, month);
   const activePolicies = offPolicies.filter(p => p.Active !== false && String(p.Active).toLowerCase() !== 'false');
 
-  if (activePolicies.length === 0) {
+  // Strict production safeguard: example-only fixtures cannot satisfy cutover requirements
+  const examplePolicies = activePolicies.filter(p => p.exampleOnly === true || p.doNotUseInProduction === true);
+  const productionPolicies = activePolicies.filter(p => p.exampleOnly !== true && p.doNotUseInProduction !== true);
+
+  if (activePolicies.length > 0 && productionPolicies.length === 0) {
+    const codes = examplePolicies.map(p => p.PolicyCode || p.policyCode).join(', ');
+    errors.push(`OffPolicy "${codes}" is marked as exampleOnly/doNotUseInProduction and cannot pass production cutover validation. Operator must supply an approved production OffPolicy with clinical leadership sign-off.`);
+  } else if (productionPolicies.length === 0) {
     errors.push(`No active OffPolicies found. aggregateWeeklyOffSnapshots will fail with INVALID_OFF_POLICY.`);
   } else {
-    // Verify policy coverage for each Monday
+    // Verify production policy coverage for each Monday
     mondays.forEach(monday => {
-      const covers = activePolicies.some(p => {
+      const covers = productionPolicies.some(p => {
         const effMon = p.EffectiveMonday || p.effectiveMonday;
         return effMon && effMon <= monday;
       });
       if (!covers) {
-        errors.push(`No active OffPolicy with EffectiveMonday <= ${monday} for cutover period week starting ${monday}.`);
+        errors.push(`No approved production OffPolicy with EffectiveMonday <= ${monday} for cutover period week starting ${monday}.`);
       }
     });
   }

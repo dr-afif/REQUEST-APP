@@ -49,17 +49,26 @@ export function computeSha256(data) {
 }
 
 /**
- * Canonical row serializer for deterministic checksum calculation.
- * Preserves all columns (including unknown custom columns) and blank rows.
+ * Type-aware canonical cell serializer for deterministic preservation checksum calculation.
+ * Distinguishes null, undefined, exact strings with leading/trailing whitespace intact,
+ * numbers, booleans, and normalized ISO Date objects.
+ * Guarantees that whitespace modifications (e.g. "Dr Ali" vs "Dr Ali ") alter the checksum.
  */
+export function canonicalizeCell(val) {
+  if (val === null) return { t: 'null' };
+  if (val === undefined) return { t: 'undef' };
+  if (typeof val === 'boolean') return { t: 'b', v: val };
+  if (typeof val === 'number') return { t: 'n', v: Number.isFinite(val) ? val : String(val) };
+  if (Object.prototype.toString.call(val) === '[object Date]') {
+    return { t: 'd', v: val.toISOString() };
+  }
+  // Retain exact string content without trimming whitespace!
+  return { t: 's', v: String(val) };
+}
+
 export function canonicalizeRow(rowCells) {
-  if (!Array.isArray(rowCells)) return '[]';
-  const normalized = rowCells.map(val => {
-    if (val === null || val === undefined) return '';
-    if (Object.prototype.toString.call(val) === '[object Date]') return val.toISOString();
-    return String(val).trim();
-  });
-  return JSON.stringify(normalized);
+  if (!Array.isArray(rowCells)) return '{"t":"row","cells":[]}';
+  return JSON.stringify(rowCells.map(canonicalizeCell));
 }
 
 export function computeRowsChecksum(rows) {
@@ -287,6 +296,15 @@ export function generateBaselineManifest(workbookInput, options = {}) {
   // 8. ActivityHistory
   checksums['ActivityHistory'] = computeRowsChecksum(tables['ActivityHistory']?.slice(1) || []);
 
+  // 9. ShiftBlocks
+  checksums['ShiftBlocks'] = computeRowsChecksum(tables['ShiftBlocks']?.slice(1) || []);
+
+  // 10. ShiftTypes
+  checksums['ShiftTypes'] = computeRowsChecksum(tables['ShiftTypes']?.slice(1) || []);
+
+  // 11. LimitGroups
+  checksums['LimitGroups'] = computeRowsChecksum(tables['LimitGroups']?.slice(1) || []);
+
   return {
     version: '1.0.0',
     generatedAt: manifestTimestamp,
@@ -306,7 +324,10 @@ export function generateBaselineManifest(workbookInput, options = {}) {
       requestsCount: dataRowCounts['Requests'] || 0,
       leaveApplicationsCount: dataRowCounts['LeaveApplications'] || 0,
       publicHolidaysCount: dataRowCounts['PublicHolidays'] || 0,
-      activityHistoryCount: dataRowCounts['ActivityHistory'] || 0
+      activityHistoryCount: dataRowCounts['ActivityHistory'] || 0,
+      shiftBlocksCount: dataRowCounts['ShiftBlocks'] || 0,
+      shiftTypesCount: dataRowCounts['ShiftTypes'] || 0,
+      limitGroupsCount: dataRowCounts['LimitGroups'] || 0
     },
     identityMetrics: {
       teamMembers: {
