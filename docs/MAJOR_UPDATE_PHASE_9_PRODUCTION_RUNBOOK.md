@@ -497,16 +497,29 @@ When `CUTOVER_PERIOD = 2026-11` is selected by the operator, the preliminary 98 
 1. **Backup Production**: Complete full standalone Google Drive spreadsheet backup (`REQUEST-APP_PROD_BACKUP_YYYYMMDD_HHMMSS`) and record rollback deployment references.
 2. **Verify November MasterRoster Checksum**: Verify that the November partition checksum matches the captured baseline (`0a431b41419a7c055772e06d998f7823a9e78d1c3fc2e6aa8ef62ff59ec107cc`). If any discrepancy is detected, stop immediately with `SOURCE_MASTERROSTER_CHANGED`.
 3. **Provision V2 Schemas**: Additively provision V2 tables in Google Sheets while feature flags remain hidden.
-4. **Seed MO Identities**: Seed canonical `RosterPeople` from `TeamMembers` only (`EP_IDENTITY_MIGRATION_DEFERRED`).
-5. **Configure Approved Effective-Dated OffPolicy**: Insert active `OffPolicies` row (e.g. Policy A effective `2026-11-02`).
+4. **Seed MO & EP Identities**:
+   - Seed canonical MO `RosterPeople` from `TeamMembers` (12 active MO, 1 inactive MO).
+   - Seed 6 canonical EP identities into `RosterPeople` with `DirectoryType = 'EP'` via approved manual mapping review (`ep-identity-mapping-review.csv`).
+   - EP identities remain strictly `EP_DIRECTORY_DISPLAY_ONLY`: excluded from MO draft patches, MO Planned assignments, weekly-OFF evaluation, Policy A/B calculations, GOFF/GHKA ledgers, and entitlement transactions.
+5. **Configure Approved Effective-Dated OffPolicy (Policy B)**:
+   - Insert active `OffPolicies` row for Policy B with `EffectiveMonday = 2026-10-26` (PolicyId: `b0000001-2026-4000-8000-000000000001`).
+   - `EffectiveMonday = 2026-10-26` is required because November 1 is Sunday, falling in the Monday-Sunday week `2026-10-26` -> `2026-11-01`. Policy B applies to all 6 weeks of November and continues onwards until explicitly superseded.
 6. **Enroll `2026-11` in DRAFT**: Create `RosterPeriods` record in state `DRAFT` (`Revision: 0`). `MasterRoster` remains completely untouched.
 7. **Seed 98 Preliminary Assignments into DRAFT**: Execute `scripts/phase9-draft-seed.mjs` to apply the 98 preliminary cells via a deterministic batch `DRAFT_PATCH` operation (`draft:2026-11` reaches `Revision: 1`).
 8. **Verify 98/98 Equivalence**: Run `verifyDraftSeedEquivalence` to prove that logical draft cells match the source legacy rows with zero discrepancies.
-9. **Review Outstanding Requests Separately**: Inspect the request reconciliation package (`.phase9/private/november-request-roster-reconciliation.csv`):
-   - Review the 23 requests still to apply (19 leave assignments + 4 course constraints).
+9. **Review Outstanding Requests Separately**: Inspect the operator review package (`.phase9/private/november-v2-operator-review.csv`):
+   - Review the 23 requests still to apply (19 shift assignments + 4 course constraints).
    - Review the 2 safety overrides (post-night `PN` overrides requested `AM`).
    - Review the 6 preliminary roster assignments with no active request.
 10. **Continue Roster Completion in V2 Workspace**: Operators edit cells, allocate remaining requests, resolve shifts, and inspect real-time weekly off/night safety guidance in the V2 workspace.
 11. **Review Full Draft**: Verify complete roster draft with clinical leadership using dry-run cutover validators.
 12. **Authorize Publication**: Clinical Director grants formal sign-off for `PERIOD_PUBLISH`.
 13. **Publish Replaces Target-Month MasterRoster Projection**: `PERIOD_PUBLISH` creates immutable `Planned` assignments, snapshots `WeeklyOffSnapshots`, and atomistically updates the November month-partition projection in `MasterRoster`.
+
+### Cutover Dependency Classification
+
+| Stage | Prerequisites / Requirements |
+| :--- | :--- |
+| **Required Before Any Production Mutation** | - Standalone Google Drive spreadsheet backup verified (`REQUEST-APP_PROD_BACKUP_YYYYMMDD_HHMMSS`).<br>- Active Apps Script Deployment ID and numeric version recorded for rollback.<br>- Production Git refs confirmed on `feature/phase-9-cutover`.<br>- Baseline source checksums verified across all legacy tables. |
+| **Required Before November DRAFT Seed** | - V2 schemas additively provisioned (12 sheets).<br>- Reference seeds populated: `ShiftSemantics` (18 codes), approved Policy B (`EffectiveMonday: 2026-10-26`), Settings.<br>- MO identities seeded (12 active, 1 inactive).<br>- Approved EP identities seeded (`DirectoryType: 'EP'`).<br>- Live November source partition checksum re-verified (`0a431b41419a7c055772e06d998f7823a9e78d1c3fc2e6aa8ef62ff59ec107cc`).<br>- `2026-11` enrolled in `RosterPeriods` as `DRAFT` (`Revision: 0`). |
+| **Required Before November PUBLISH** | - 23 outstanding Requests reviewed and applied/resolved in V2 draft.<br>- 2 PN safety overrides confirmed (mandatory post-night rest retained).<br>- 6 unrequested preliminary roster duties reviewed by Clinical Director.<br>- Complete draft reviewed with zero unacknowledged safety blockers.<br>- Completed roster sign-off by Clinical Director.<br>*(Note: GOFF/GHKA opening balances do NOT technically block draft seeding or roster publish; they are required only prior to post-publish operational amendments that consume or verify balances).* |
