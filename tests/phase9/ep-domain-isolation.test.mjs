@@ -366,3 +366,178 @@ test('9. MO-only roster operations and calculations remain 100% unaffected by EP
   assert.equal(projected[0].Name, 'Dr. Ali');
   assert.equal(projected[1].Name, 'Dr. Siti');
 });
+
+// ---------------------------------------------------------------------------
+// 10. EP Identity Stability Across Display-Name Changes (Task A2)
+// ---------------------------------------------------------------------------
+test('10. EP identity stability: approved rename reuses existing PersonId, updates alias, and creates no duplicate', () => {
+  // Step 1: Initial approved EP manual mapping creates PersonId X
+  const initialResult = planIdentityMigration({
+    teamMembers: [],
+    emergencyPhysicians: [
+      { MemberName: 'Dr. Chong', FullName: 'Chong Wei', Phone: '012-3456789', Active: true, StaffId: '', Email: '' }
+    ],
+    existingPeople: [],
+    manualMappings: [
+      { memberName: 'Dr. Chong', directoryType: 'EP', approved: true, personId: PERSON_EP_CHONG, notes: 'Initial seed' }
+    ],
+    digestFn
+  });
+
+  assert.equal(initialResult.summary.create, 1);
+  assert.equal(initialResult.plans[0].personId, PERSON_EP_CHONG);
+  assert.equal(initialResult.plans[0].category, 'CREATE');
+
+  // Step 2: EP is persisted in RosterPeople
+  const persistedPeople = [
+    compatibility.createPerson({
+      personId: PERSON_EP_CHONG,
+      displayName: 'Dr. Chong',
+      directoryType: 'EP',
+      aliases: ['Chong'],
+      active: true
+    })
+  ];
+
+  // Step 3: Display name changes in directory to 'Dr. Chong New'
+  const renamedDirectory = [
+    { MemberName: 'Dr. Chong New', FullName: 'Chong Wei', Phone: '012-3456789', Active: true, StaffId: '', Email: '' }
+  ];
+
+  // Step 4A: Without an approved manual mapping linking the new name, it fails closed
+  const unapprovedRename = planIdentityMigration({
+    teamMembers: [],
+    emergencyPhysicians: renamedDirectory,
+    existingPeople: persistedPeople,
+    manualMappings: [],
+    digestFn
+  });
+  assert.equal(unapprovedRename.summary.missingStableId, 1);
+  assert.equal(unapprovedRename.summary.canProceed, false, 'Unapproved rename must fail closed');
+  assert.equal(unapprovedRename.plans.filter(p => p.personId === PERSON_EP_CHONG).length, 0);
+
+  // Step 4B: With an approved manual mapping linking the new name to existing PersonId X
+  const approvedRename = planIdentityMigration({
+    teamMembers: [],
+    emergencyPhysicians: renamedDirectory,
+    existingPeople: persistedPeople,
+    manualMappings: [
+      {
+        memberName: 'Dr. Chong New',
+        directoryType: 'EP',
+        approved: true,
+        personId: PERSON_EP_CHONG,
+        notes: 'Approved display name change'
+      }
+    ],
+    digestFn
+  });
+
+  // Step 5: Reconciliation resolves to the SAME PersonId X with ALIAS_UPDATE
+  assert.equal(approvedRename.summary.canProceed, true);
+  assert.equal(approvedRename.summary.aliasUpdate, 1);
+  assert.equal(approvedRename.summary.create, 0, 'No second PersonId may be created');
+
+  const renamePlan = approvedRename.plans[0];
+  assert.equal(renamePlan.personId, PERSON_EP_CHONG);
+  assert.equal(renamePlan.category, 'ALIAS_UPDATE');
+  assert.equal(renamePlan.proposedDisplayName, 'Dr. Chong New');
+  assert.ok(renamePlan.legacyNames.includes('Dr. Chong'), 'Former display name preserved in legacyNames');
+
+  // Step 6: Compatibility personIndex resolves both old and new names to PersonId X
+  const updatedPerson = compatibility.renamePerson(persistedPeople[0], 'Dr. Chong New');
+  const resolve = compatibility.personIndex([updatedPerson]);
+
+  const byNewName = resolve('Dr. Chong New', 'EP');
+  assert.equal(byNewName.personId, PERSON_EP_CHONG);
+  assert.equal(byNewName.displayName, 'Dr. Chong New');
+
+  const byOldName = resolve('Dr. Chong', 'EP');
+  assert.equal(byOldName.personId, PERSON_EP_CHONG);
+
+  const byAlias = resolve('Chong', 'EP');
+  assert.equal(byAlias.personId, PERSON_EP_CHONG);
+});
+
+// ---------------------------------------------------------------------------
+// 11. Policy B Night Qualification & Week-Boundary Semantics (Task B2)
+// ---------------------------------------------------------------------------
+test('11. Policy B night qualification: PN intentionally qualifies week for 1 OFF across Monday boundaries', () => {
+  const policyB = [{
+    PolicyId: 'b0000001-2026-4000-8000-000000000001',
+    PolicyCode: 'B',
+    EffectiveMonday: '2026-10-26',
+    RuleVersion: 1,
+    RuleJson: guidance.policyRuleJson('B'),
+    Active: true
+  }];
+
+  const weekStart = '2026-11-02';
+  const dates = guidance.weekDates(weekStart);
+
+  // Case 1: Monday PN only (source night on Sunday in previous week) + 1 OFF on Wednesday
+  const case1 = guidance.evaluateWeek({
+    weekStart,
+    personId: PERSON_MO_ALI,
+    plannedByDate: {
+      '2026-11-02': ['PN'],
+      '2026-11-03': ['AM'],
+      '2026-11-04': ['OFF'],
+      '2026-11-05': ['AM'],
+      '2026-11-06': ['AM'],
+      '2026-11-07': ['AM'],
+      '2026-11-08': ['AM']
+    },
+    availablePlannedDates: dates,
+    policies: policyB
+  });
+  assert.equal(case1.qualifyingPlannedNight, true, 'Monday PN causes week to qualify as night week under Policy B');
+  assert.equal(case1.requiredOff, 1, 'Policy B requires exactly 1 OFF when week contains PN');
+  assert.equal(case1.plannedAssignedOff, 1);
+  assert.equal(case1.shortfall, 0, 'No shortfall with 1 OFF');
+  assert.equal(case1.status, 'COMPLETE');
+
+  // Case 2: Monday ON1 + Tuesday PN + 1 OFF on Wednesday
+  const case2 = guidance.evaluateWeek({
+    weekStart,
+    personId: PERSON_MO_ALI,
+    plannedByDate: {
+      '2026-11-02': ['ON1'],
+      '2026-11-03': ['PN'],
+      '2026-11-04': ['OFF'],
+      '2026-11-05': ['AM'],
+      '2026-11-06': ['AM'],
+      '2026-11-07': ['AM'],
+      '2026-11-08': ['AM']
+    },
+    availablePlannedDates: dates,
+    policies: policyB
+  });
+  assert.equal(case2.qualifyingPlannedNight, true, 'Monday ON1 qualifies week under Policy B');
+  assert.equal(case2.requiredOff, 1);
+  assert.equal(case2.plannedAssignedOff, 1);
+  assert.equal(case2.shortfall, 0);
+  assert.equal(case2.status, 'COMPLETE');
+
+  // Case 3: Zero night shifts, zero PN + 1 OFF on Wednesday
+  const case3 = guidance.evaluateWeek({
+    weekStart,
+    personId: PERSON_MO_ALI,
+    plannedByDate: {
+      '2026-11-02': ['AM'],
+      '2026-11-03': ['AM'],
+      '2026-11-04': ['OFF'],
+      '2026-11-05': ['AM'],
+      '2026-11-06': ['AM'],
+      '2026-11-07': ['AM'],
+      '2026-11-08': ['AM']
+    },
+    availablePlannedDates: dates,
+    policies: policyB
+  });
+  assert.equal(case3.qualifyingPlannedNight, false, 'Zero night and zero PN means no night qualification');
+  assert.equal(case3.requiredOff, 2, 'Policy B requires 2 OFF when zero qualifying night duties');
+  assert.equal(case3.plannedAssignedOff, 1);
+  assert.equal(case3.shortfall, 1, 'Shortfall of 1 OFF reported');
+  assert.equal(case3.status, 'SHORTFALL');
+});
