@@ -186,7 +186,7 @@ test('schema definitions match Major Update V2 specification and freeze immutabi
   const schemas = RosterLifecycle.ROSTER_LIFECYCLE_SCHEMAS;
 
   // Cardinality checks
-  assert.equal(schemas.RosterPeriods.length, 13, 'RosterPeriods must have exactly 13 headers');
+  assert.equal(schemas.RosterPeriods.length, 15, 'RosterPeriods must have exactly 15 headers');
   assert.equal(schemas.RosterAssignments.length, 15, 'RosterAssignments must have exactly 15 headers');
   assert.equal(schemas.RosterEvents.length, 22, 'RosterEvents must have exactly 22 headers');
   assert.equal(schemas.WeeklyOffSnapshots.length, 21, 'WeeklyOffSnapshots must have exactly 21 headers');
@@ -194,7 +194,8 @@ test('schema definitions match Major Update V2 specification and freeze immutabi
   assert.deepEqual(schemas.RosterPeriods, [
     'PeriodId', 'State', 'Revision', 'DraftRevision', 'PlannedSnapshotId',
     'PublishedAt', 'PublishedBy', 'ClosedAt', 'ClosedBy',
-    'ProjectionChecksum', 'SchemaVersion', 'LastOperationId', 'UpdatedAt'
+    'ProjectionChecksum', 'SchemaVersion', 'LastOperationId', 'UpdatedAt',
+    'EnrolledAt', 'EnrolledBy'
   ]);
 
   assert.deepEqual(schemas.RosterAssignments, [

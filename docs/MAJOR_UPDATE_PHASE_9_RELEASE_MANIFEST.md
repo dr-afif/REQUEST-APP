@@ -39,7 +39,7 @@
 3. `OperationLog`: `OperationId, ClientId, TabId, OperationType, EntityKey, ExpectedRevision, ResultRevision, PayloadHash, Status, ResultJson, ErrorCode, CreatedAt, CompletedAt`
 4. `RosterDraftPatches`: `OperationId, EntityKey, BaseRevision, ResultRevision, PayloadJson, ResultChecksum`
 5. `OffPolicies`: `PolicyId, PolicyCode, EffectiveMonday, RuleVersion, RuleJson, Active, Reason, Revision, OperationId, CreatedAt, CreatedBy`
-6. `RosterPeriods`: `PeriodId, State, Revision, DraftRevision, PlannedSnapshotId, PublishedAt, PublishedBy, ClosedAt, ClosedBy, ProjectionChecksum, SchemaVersion, LastOperationId, UpdatedAt`
+6. `RosterPeriods`: `PeriodId, State, Revision, DraftRevision, PlannedSnapshotId, PublishedAt, PublishedBy, ClosedAt, ClosedBy, ProjectionChecksum, SchemaVersion, LastOperationId, UpdatedAt, EnrolledAt, EnrolledBy`
 7. `RosterAssignments`: `AssignmentId, PeriodId, Layer, SnapshotId, PersonId, PersonNameSnapshot, Date, DutyDomain, ShiftCode, ModifiersJson, DraftRevision, Source, OperationId, CreatedAt, CreatedBy`
 8. `WeeklyOffSnapshots`: `WeekSnapshotId, WeekStart, WeekEnd, PolicyLockedByPeriodId, PublishedPeriodIdsJson, PublishedDateMask, EvaluationState, PlannedSnapshotIdsJson, PlannedWeekChecksum, PersonId, PersonNameSnapshot, PolicyId, PolicyCode, RuleVersion, HasQualifyingPlannedNight, RequiredOffCount, AssignedOffCountAtPublish, Revision, OperationId, CreatedAt, CompletedAt`
 9. `RosterEvents`: `EventId, LineId, EventType, OperationId, PeriodId, BaseRevision, ResultRevision, PersonId, LinkedPersonIdsJson, Date, DutyDomain, PlannedAssignmentJson, BeforeCurrentJson, AfterCurrentJson, PublicReasonCode, AdminNote, ShortageAccepted, ShortageReason, GoffTransactionIdsJson, ReversesEventId, CreatedAt, CreatedBy`

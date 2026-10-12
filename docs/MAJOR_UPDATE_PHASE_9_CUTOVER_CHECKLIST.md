@@ -55,7 +55,7 @@ Execute in strict sequential order. No out-of-order execution permitted.
   - `OperationLog` (13 columns)
   - `RosterDraftPatches` (6 columns)
   - `OffPolicies` (11 columns)
-  - `RosterPeriods` (13 columns)
+  - `RosterPeriods` (15 columns)
   - `RosterAssignments` (15 columns)
   - `WeeklyOffSnapshots` (20 columns)
   - `RosterEvents` (21 columns)

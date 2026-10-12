@@ -196,11 +196,11 @@ test('Phase 1 RosterPeriods upgrades additively preserving EnrolledAt, EnrolledB
   h.context.rosterLifecycleEnsureSchema_('RosterPeriods');
 
   const headers = h.grids.RosterPeriods[0];
-  // 13 canonical Phase 4 lifecycle headers + 4 preserved headers (EnrolledAt, EnrolledBy, CustomLegacyField, AuditTag)
+  // 15 canonical Phase 4 lifecycle headers + 2 preserved headers (CustomLegacyField, AuditTag)
   assert.equal(headers.length, 17);
   const canonicalLifecycleHeaders = lifecycle.ROSTER_LIFECYCLE_SCHEMAS.RosterPeriods;
-  assert.deepEqual(headers.slice(0, 13), canonicalLifecycleHeaders);
-  assert.deepEqual(headers.slice(13), ['EnrolledAt', 'EnrolledBy', 'CustomLegacyField', 'AuditTag']);
+  assert.deepEqual(headers.slice(0, 15), canonicalLifecycleHeaders);
+  assert.deepEqual(headers.slice(15), ['CustomLegacyField', 'AuditTag']);
 
   // Check row 1 preserved
   const row1 = h.grids.RosterPeriods[1];

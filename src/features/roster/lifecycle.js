@@ -72,7 +72,8 @@ const RosterLifecycle = (() => {
     RosterPeriods: [
       'PeriodId', 'State', 'Revision', 'DraftRevision', 'PlannedSnapshotId',
       'PublishedAt', 'PublishedBy', 'ClosedAt', 'ClosedBy',
-      'ProjectionChecksum', 'SchemaVersion', 'LastOperationId', 'UpdatedAt'
+      'ProjectionChecksum', 'SchemaVersion', 'LastOperationId', 'UpdatedAt',
+      'EnrolledAt', 'EnrolledBy'
     ],
     RosterAssignments: [
       'AssignmentId', 'PeriodId', 'Layer', 'SnapshotId',
