@@ -54,10 +54,21 @@ function deriveSourceKey(entry, directoryType) {
   };
 }
 
+function findManualMapping(entry, manualMappings) {
+  if (!Array.isArray(manualMappings) || manualMappings.length === 0) return null;
+  const canonical = RosterCompatibility.canonicalName(entry.rawName, entry.directoryType);
+  return manualMappings.find(m => {
+    if (m.directoryType && m.directoryType !== entry.directoryType) return false;
+    const mCanonical = RosterCompatibility.canonicalName(m.rawName || m.memberName || m.name, entry.directoryType);
+    return mCanonical === canonical;
+  }) || null;
+}
+
 export function planIdentityMigration({
   teamMembers = [],
   emergencyPhysicians = [],
   existingPeople = [],
+  manualMappings = [],
   digestFn
 }) {
   if (typeof digestFn !== 'function') {
@@ -76,6 +87,8 @@ export function planIdentityMigration({
     const rawName = cleanStr(entry.MemberName || entry.name);
     if (!rawName) return;
     const { sourceKey, identifierType, identifierValue } = deriveSourceKey(entry, 'MO');
+    const staffId = cleanStaffId(entry.StaffId || entry.staffId);
+    const email = cleanEmail(entry.Email || entry.email);
     const active = entry.Active !== false && String(entry.Active).toLowerCase() !== 'false';
     rawEntries.push({
       directoryType: 'MO',
@@ -83,6 +96,8 @@ export function planIdentityMigration({
       sourceKey,
       identifierType,
       identifierValue,
+      staffId,
+      email,
       active,
       index: idx
     });
@@ -93,6 +108,8 @@ export function planIdentityMigration({
     const rawName = cleanStr(entry.MemberName || entry.name);
     if (!rawName) return;
     const { sourceKey, identifierType, identifierValue } = deriveSourceKey(entry, 'EP');
+    const staffId = cleanStaffId(entry.StaffId || entry.staffId);
+    const email = cleanEmail(entry.Email || entry.email);
     const active = entry.Active !== false && String(entry.Active).toLowerCase() !== 'false';
     rawEntries.push({
       directoryType: 'EP',
@@ -100,9 +117,38 @@ export function planIdentityMigration({
       sourceKey,
       identifierType,
       identifierValue,
+      staffId,
+      email,
       active,
       index: idx
     });
+  });
+
+  // Apply approved manual mappings to raw entries before collision detection
+  rawEntries.forEach(entry => {
+    const manual = findManualMapping(entry, manualMappings);
+    if (manual) {
+      entry.manualMapping = manual;
+      if (manual.approved === true) {
+        if (manual.staffId) {
+          entry.staffId = cleanStaffId(manual.staffId);
+          entry.sourceKey = `${entry.directoryType}:staffId:${cleanStaffId(manual.staffId)}`;
+          entry.identifierType = 'STAFF_ID';
+          entry.identifierValue = cleanStaffId(manual.staffId);
+        } else if (manual.email) {
+          entry.email = cleanEmail(manual.email);
+          entry.sourceKey = `${entry.directoryType}:email:${cleanEmail(manual.email)}`;
+          entry.identifierType = 'EMAIL';
+          entry.identifierValue = cleanEmail(manual.email);
+        } else if (manual.personId || manual.approvedPersonId) {
+          const pid = manual.personId || manual.approvedPersonId;
+          entry.sourceKey = `${entry.directoryType}:manual:${pid}`;
+          entry.identifierType = 'MANUAL';
+          entry.identifierValue = pid;
+          entry.explicitPersonId = pid;
+        }
+      }
+    }
   });
 
   // Collision detection: check for duplicate source keys across entries
@@ -121,7 +167,7 @@ export function planIdentityMigration({
   // Check cross-domain collision (e.g. same staffId or email in both MO and EP)
   const globalIdentifierCounts = new Map();
   rawEntries.forEach(e => {
-    if (e.identifierValue) {
+    if (e.identifierValue && (!e.manualMapping || !e.manualMapping.approved)) {
       const gKey = `${e.identifierType}:${e.identifierValue}`;
       if (!globalIdentifierCounts.has(gKey)) globalIdentifierCounts.set(gKey, new Set());
       globalIdentifierCounts.get(gKey).add(e.directoryType);
@@ -131,17 +177,19 @@ export function planIdentityMigration({
   const plans = [];
 
   rawEntries.forEach(entry => {
-    const { directoryType, rawName, sourceKey, identifierType, identifierValue, active } = entry;
+    const { directoryType, rawName, sourceKey, identifierType, identifierValue, staffId, email, active, manualMapping, explicitPersonId } = entry;
     const gKey = identifierValue ? `${identifierType}:${identifierValue}` : null;
-    const isCrossDomainCollision = gKey && globalIdentifierCounts.get(gKey).size > 1;
+    const isCrossDomainCollision = gKey && globalIdentifierCounts.get(gKey) && globalIdentifierCounts.get(gKey).size > 1;
     const isDuplicateStableId = sourceKey && (sourceKeyCounts.get(sourceKey) > 1);
 
-    // Fail-Closed Category: AMBIGUOUS
-    if (isCrossDomainCollision) {
+    // Fail-Closed Category: AMBIGUOUS (unless approved manual mapping explicitly resolves it)
+    if (isCrossDomainCollision && (!manualMapping || manualMapping.approved !== true)) {
       plans.push({
         category: 'AMBIGUOUS',
         directoryType,
         sourceKey,
+        staffId: staffId || '',
+        email: email || '',
         memberName: rawName,
         personId: null,
         proposedDisplayName: rawName,
@@ -152,11 +200,13 @@ export function planIdentityMigration({
       return;
     }
 
-    if (isDuplicateStableId) {
+    if (isDuplicateStableId && (!manualMapping || manualMapping.approved !== true)) {
       plans.push({
         category: 'AMBIGUOUS',
         directoryType,
         sourceKey,
+        staffId: staffId || '',
+        email: email || '',
         memberName: rawName,
         personId: null,
         proposedDisplayName: rawName,
@@ -169,23 +219,29 @@ export function planIdentityMigration({
 
     // Fail-Closed Category: MISSING_STABLE_ID
     if (!sourceKey) {
+      const reason = manualMapping && manualMapping.approved === false
+        ? 'Manual mapping unapproved. Record remains blocked.'
+        : 'Missing immutable StaffId and valid Email. Manual admin mapping required.';
       plans.push({
         category: 'MISSING_STABLE_ID',
         directoryType,
         sourceKey: null,
+        staffId: staffId || '',
+        email: email || '',
         memberName: rawName,
         personId: null,
         proposedDisplayName: rawName,
         legacyNames: [],
         active,
-        reason: 'Missing immutable StaffId and valid Email. Manual admin mapping required.'
+        reason
       });
       return;
     }
 
-    // Derive deterministic RFC 4122 v4 UUID
-    const personId = RosterLifecycle.deterministicUuid(`person:${sourceKey}`, digestFn);
+    // Derive or assign deterministic RFC 4122 v4 UUID
+    const personId = explicitPersonId || RosterLifecycle.deterministicUuid(`person:${sourceKey}`, digestFn);
     const existing = existingById.get(personId);
+    const manualNote = (manualMapping && manualMapping.approved) ? ` (Approved manual mapping: ${manualMapping.notes || manualMapping.reviewer || 'Operator resolved'})` : '';
 
     // Existing person checks
     if (existing) {
@@ -203,12 +259,14 @@ export function planIdentityMigration({
           category: 'INACTIVE',
           directoryType,
           sourceKey,
+          staffId: staffId || '',
+          email: email || '',
           memberName: rawName,
           personId,
           proposedDisplayName: rawName,
           legacyNames,
           active: false,
-          reason: 'Marked inactive in directory; retained with Active: false'
+          reason: `Marked inactive in directory; retained with Active: false${manualNote}`
         });
         return;
       }
@@ -219,12 +277,14 @@ export function planIdentityMigration({
           category: 'ALIAS_UPDATE',
           directoryType,
           sourceKey,
+          staffId: staffId || '',
+          email: email || '',
           memberName: rawName,
           personId,
           proposedDisplayName: rawName,
           legacyNames,
           active: true,
-          reason: `Display name changed from "${existingName}" to "${rawName}"; former name added to LegacyNamesJson`
+          reason: `Display name changed from "${existingName}" to "${rawName}"; former name added to LegacyNamesJson${manualNote}`
         });
         return;
       }
@@ -233,12 +293,14 @@ export function planIdentityMigration({
         category: 'REUSE',
         directoryType,
         sourceKey,
+        staffId: staffId || '',
+        email: email || '',
         memberName: rawName,
         personId,
         proposedDisplayName: rawName,
         legacyNames,
         active: Boolean(existing.Active !== false),
-        reason: 'Identical stable ID and display name already registered'
+        reason: `Identical stable ID and display name already registered${manualNote}`
       });
       return;
     }
@@ -249,12 +311,14 @@ export function planIdentityMigration({
         category: 'INACTIVE',
         directoryType,
         sourceKey,
+        staffId: staffId || '',
+        email: email || '',
         memberName: rawName,
         personId,
         proposedDisplayName: rawName,
         legacyNames: [],
         active: false,
-        reason: 'New staff member registered as inactive'
+        reason: `New staff member registered as inactive${manualNote}`
       });
       return;
     }
@@ -263,12 +327,14 @@ export function planIdentityMigration({
       category: 'CREATE',
       directoryType,
       sourceKey,
+      staffId: staffId || '',
+      email: email || '',
       memberName: rawName,
       personId,
       proposedDisplayName: rawName,
       legacyNames: [],
       active: true,
-      reason: 'New canonical identity derived from stable identifier'
+      reason: `New canonical identity derived from stable identifier${manualNote}`
     });
   });
 
