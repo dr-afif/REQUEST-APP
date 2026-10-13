@@ -2329,7 +2329,7 @@ export default function RosterPage({
     <div className={`mx-auto px-2 sm:px-6 py-6 sm:py-8 md:px-8 animate-fadeIn ${
       isV2Active || activeTab === 'table' ? 'w-full max-w-none' : 'max-w-5xl'
     }`}>
-      {selectedName?.trim().toLowerCase() === 'admin' && rosterPanelEnabled(settings) && <DraftQueuePanel key={rosterMonth} period={rosterMonth} settings={settings} />}
+      {selectedName?.trim().toLowerCase() === 'admin' && rosterPanelEnabled(settings) && Boolean(lifecycleInfo.isEnrolled && lifecycleInfo.period === rosterMonth) && <DraftQueuePanel key={rosterMonth} period={rosterMonth} settings={settings} />}
       {/* 🧭 Header Details */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>

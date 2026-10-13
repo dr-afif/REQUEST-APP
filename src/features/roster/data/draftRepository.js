@@ -3,7 +3,7 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
   async function request(action,fields={},write=false){
     if(!baseUrl)throw new Error('DRAFT_ENDPOINT_UNCONFIGURED');
     const url=new URL(baseUrl),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
-    const options={method:write?'POST':'GET',signal:controller.signal,cache:'no-store',credentials:'include',headers:{Accept:'application/json'}};
+    const options={method:write?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
     if(write){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...fields});}
     else for(const [k,v] of Object.entries({action,...fields}))url.searchParams.set(k,v);
     try{const response=await fetcher(url.toString(),options);if(!response.ok)throw new Error('DRAFT_TRANSPORT_FAILED');

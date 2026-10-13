@@ -5,7 +5,7 @@ import {sha256} from '../queue/draftQueue.js';
 export function createGuidanceRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000}={}) {
   async function request(action,fields={},write=false){
     if(!baseUrl)throw new Error('GUIDANCE_ENDPOINT_UNCONFIGURED');const url=new URL(baseUrl),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
-    const options={method:write?'POST':'GET',signal:controller.signal,cache:'no-store',credentials:'include',headers:{Accept:'application/json'}};
+    const options={method:write?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
     if(write){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...fields});}
     else for(const [key,value]of Object.entries({action,...fields}))url.searchParams.set(key,value);
     try{const response=await fetcher(url.toString(),options);if(!response.ok)throw new Error('GUIDANCE_TRANSPORT_FAILED');const result=await response.json();if(typeof result?.ok!=='boolean')throw new Error('INVALID_GUIDANCE_RESPONSE');return result;}finally{clearTimeout(timer);}
