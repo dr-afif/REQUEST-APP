@@ -286,14 +286,10 @@ function rosterLifecycleWriteLog_(logRecord) {
   SpreadsheetApp.flush();
 }
 
-function rosterLifecycleGetPrincipalSafe_() {
+function rosterLifecycleGetPrincipalSafe_(data) {
   try {
-    const allowed = String(PropertiesService.getScriptProperties().getProperty('ROSTER_V2_ADMIN_EMAIL') || '').trim().toLowerCase();
-    const caller = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
-    if (allowed && caller && allowed === caller) {
-      return { isAdmin: true, email: caller };
-    }
-    return { isAdmin: false, email: caller };
+    const admin = rosterV2RequireAdmin_(data);
+    return { isAdmin: true, email: admin.email };
   } catch (_) {
     return { isAdmin: false, email: '' };
   }
@@ -5721,13 +5717,13 @@ function rosterLifecycleRoute_(action, data) {
 
     if (isWrite) {
       try {
-        principal = rosterV2RequireAdmin_();
+        principal = rosterV2RequireAdmin_(data);
       } catch (error) {
         throw DraftProtocol.fail('AUTHORIZATION_REQUIRED');
       }
       DraftProtocol.ensure(switches.roster_v2_write_enabled, 'FEATURE_DISABLED');
     } else {
-      principal = rosterLifecycleGetPrincipalSafe_();
+      principal = rosterLifecycleGetPrincipalSafe_(data);
       DraftProtocol.ensure(switches.roster_v2_read_enabled, 'FEATURE_DISABLED');
     }
 

@@ -1,11 +1,19 @@
 // Separate transport: legacy request() behavior remains untouched.
-export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000}={}) {
+export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000,getAdminSessionToken=null,getIdToken=null}={}) {
   async function request(action,fields={},write=false){
     if(!baseUrl)throw new Error('DRAFT_ENDPOINT_UNCONFIGURED');
     const url=new URL(baseUrl),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
-    const options={method:write?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
-    if(write){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...fields});}
-    else for(const [k,v] of Object.entries({action,...fields}))url.searchParams.set(k,v);
+    let token = null;
+    try {
+      if (typeof getAdminSessionToken === 'function') token = await getAdminSessionToken();
+      else if (typeof getIdToken === 'function') token = await getIdToken();
+      else token = fields.adminSessionToken || fields.idToken || null;
+    } catch (_) {}
+    const reqFields = token ? { ...fields, adminSessionToken: token } : fields;
+    const isPost = write || (Boolean(token) && ['rosterv2draft','rosterv2draftschema'].includes(action));
+    const options={method:isPost?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
+    if(isPost){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...reqFields});}
+    else for(const [k,v] of Object.entries({action,...reqFields}))url.searchParams.set(k,v);
     try{const response=await fetcher(url.toString(),options);if(!response.ok)throw new Error('DRAFT_TRANSPORT_FAILED');
       const result=await response.json();if(typeof result?.ok!=='boolean')throw new Error('INVALID_DRAFT_RESPONSE');return result;
     }finally{clearTimeout(timer);}
@@ -252,3 +260,69 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
     }
   };
 }
+
+/**
+ * Pure deterministic converter from V2 draft cells state to CurrentRosterView assignment DTOs.
+ * Preserves stable assignmentId, PersonId, date, dutyDomain, shiftCode, personNameSnapshot, and deterministic ordering.
+ */
+export function draftCellsToCurrentAssignments({ cells = {}, people = [] } = {}) {
+  if (!cells || typeof cells !== 'object') return [];
+
+  const peopleMap = new Map();
+  (people || []).forEach(p => {
+    const id = p.personId || p.PersonId;
+    if (id) {
+      peopleMap.set(id, {
+        displayName: p.CurrentDisplayName || p.currentDisplayName || p.name || id,
+        domain: p.DirectoryType || p.directoryType || p.dutyDomain || p.role || 'MO'
+      });
+    }
+  });
+
+  const assignments = [];
+  const sortedCellKeys = Object.keys(cells).sort();
+
+  for (const cellKey of sortedCellKeys) {
+    const slashIdx = cellKey.indexOf('/');
+    if (slashIdx === -1) continue;
+    const personId = cellKey.slice(0, slashIdx);
+    const date = cellKey.slice(slashIdx + 1);
+    const cellAssignments = Array.isArray(cells[cellKey]) ? cells[cellKey] : [];
+
+    const personInfo = peopleMap.get(personId);
+    const personName = personInfo?.displayName || personId;
+    const dutyDomain = personInfo?.domain || 'MO';
+
+    for (const a of cellAssignments) {
+      if (!a) continue;
+      const shift = String(a.rawShift || a.shiftCode || '').trim();
+      if (!shift) continue;
+
+      assignments.push({
+        assignmentId: a.assignmentId || `${personId}:${date}:${dutyDomain}:${shift}`,
+        personId,
+        personNameSnapshot: personName,
+        date,
+        dutyDomain: a.dutyDomain || dutyDomain,
+        shiftCode: shift,
+        rawShift: shift,
+        Layer: 'CURRENT'
+      });
+    }
+  }
+
+  assignments.sort((a, b) => {
+    const dateCmp = a.date.localeCompare(b.date);
+    if (dateCmp !== 0) return dateCmp;
+    const domainWeight = d => (d === 'MO' ? 0 : d === 'EP' ? 1 : 2);
+    const dwA = domainWeight(a.dutyDomain);
+    const dwB = domainWeight(b.dutyDomain);
+    if (dwA !== dwB) return dwA - dwB;
+    const nameCmp = (a.personNameSnapshot || '').localeCompare(b.personNameSnapshot || '');
+    if (nameCmp !== 0) return nameCmp;
+    return (a.assignmentId || '').localeCompare(b.assignmentId || '');
+  });
+
+  return assignments;
+}
+

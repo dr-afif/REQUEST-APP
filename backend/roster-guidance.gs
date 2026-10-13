@@ -82,7 +82,7 @@ function rosterGuidanceRecover_(id) {
 function rosterGuidanceRoute_(action,data) {
   let lock,acquired=false,principal;
   try {
-    try{principal=rosterV2RequireAdmin_();}catch(error){throw DraftProtocol.fail('AUTHORIZATION_REQUIRED');}
+    try{principal=rosterV2RequireAdmin_(data);}catch(error){throw DraftProtocol.fail('AUTHORIZATION_REQUIRED');}
     const write=['rosterv2offpolicy','rosterv2offpolicyrecover'].includes(action);
     const settings=rosterDraftSettings_();DraftProtocol.ensure(RosterCompatibility.featureSwitches(settings).weekly_off_guidance_enabled,'FEATURE_DISABLED');
     if(write)DraftProtocol.ensure(RosterGuidance.policyWritesEnabled(settings),'FEATURE_DISABLED');

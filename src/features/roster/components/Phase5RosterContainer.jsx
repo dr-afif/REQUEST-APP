@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { draftRuntime } from '../queue/runtime.js';
+import { draftCellsToCurrentAssignments } from '../data/draftRepository.js';
+import { getAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff } from '../auth/adminAuth.js';
 import RosterViewModeSelector from './RosterViewModeSelector.jsx';
 import CurrentRosterView from './CurrentRosterView.jsx';
 import PlannedRosterView from './PlannedRosterView.jsx';
@@ -42,6 +44,8 @@ export default function Phase5RosterContainer({
   const [amendmentHistory, setAmendmentHistory] = useState(null);
   const [absences, setAbsences] = useState([]);
   const [replacements, setReplacements] = useState([]);
+  const [internalPeople, setInternalPeople] = useState([]);
+  const [draftReadError, setDraftReadError] = useState(null);
 
   // Error and conflict banners
   const [actionError, setActionError] = useState(null);
@@ -101,6 +105,36 @@ export default function Phase5RosterContainer({
   );
   const readEnabled = Boolean(settings?.roster_v2_read_enabled !== false);
 
+  const [, setAdminAuthTriggerTick] = useState(0);
+  const isVerifiedAdmin = Boolean(isAdmin && getAdminSessionToken());
+  const adminEmail = getAdminEmail();
+
+  const handleGoogleVerify = useCallback(async () => {
+    setActionError(null);
+    try {
+      await startGoogleCodeAuth({
+        onSuccess: async () => {
+          setAdminAuthTriggerTick(t => t + 1);
+          requestGenRef.current += 1;
+          const currentGen = requestGenRef.current;
+          setLoading(true);
+          try {
+            if (queue) {
+              await loadAuthoritativeData(queue, period, currentGen);
+            }
+          } finally {
+            setLoading(false);
+          }
+        },
+        onError: (err) => {
+          setActionError(`Administrator verification failed: ${err.message || err}`);
+        }
+      });
+    } catch (err) {
+      setActionError(err.message || 'Verification initiation failed');
+    }
+  }, [queue, period, loadAuthoritativeData]);
+
   // Check for any unresolved operations needing recovery
   const syncRecoveryState = useCallback((q, p) => {
     if (!q || !p) return;
@@ -133,11 +167,12 @@ export default function Phase5RosterContainer({
 
       const periodRecord = lcRes.period;
       const state = String(periodRecord.State || 'DRAFT').toUpperCase();
-      const revision = Number(periodRecord.Revision || 0);
-      setLifecycle({ state, revision });
-      onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: true, state, revision });
+      const revision = Number.isFinite(Number(periodRecord.Revision)) ? Number(periodRecord.Revision) : 0;
+      const draftRevision = Number.isFinite(Number(periodRecord.DraftRevision)) ? Number(periodRecord.DraftRevision) : (revision || 0);
+      setLifecycle({ state, revision, draftRevision });
+      onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: true, state, revision, draftRevision });
 
-      // If DRAFT, check if allowDraft is active
+      // If DRAFT, load authoritative draft state from draft protocol
       if (state === 'DRAFT') {
         if (!allowDraft) {
           setCurrentRoster(null);
@@ -147,20 +182,78 @@ export default function Phase5RosterContainer({
           setReplacements([]);
           return;
         }
-        const draftRes = await targetQueue.getCurrentRoster(targetPeriod).catch(() => ({ ok: true, assignments: [] }));
+
+        const key = `draft:${targetPeriod}`;
+        let draftLoadError = null;
+        let view = null;
+
+        try {
+          if (typeof targetQueue.refresh === 'function') {
+            await targetQueue.refresh(key);
+          } else if (typeof targetQueue.repository?.read === 'function') {
+            const res = await targetQueue.repository.read(key);
+            if (!res?.ok) throw new Error(res?.error?.code || 'DRAFT_READ_FAILED');
+          }
+          view = targetQueue.view?.(key);
+        } catch (err) {
+          draftLoadError = err.code || err.message || 'DRAFT_READ_FAILED';
+        }
+
         if (gen !== requestGenRef.current) return;
-        setCurrentRoster(draftRes?.ok ? draftRes : { ok: true, assignments: [] });
+
+        if (draftLoadError) {
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setAmendmentHistory(null);
+          setAbsences([]);
+          setReplacements([]);
+          setDraftReadError(draftLoadError);
+          setDraftSaveStatus('error');
+          if (draftLoadError === 'AUTHORIZATION_REQUIRED') {
+            setActionError('AUTHORIZATION_REQUIRED');
+          } else {
+            setActionError(`Failed to load draft: ${draftLoadError}`);
+          }
+          syncRecoveryState(targetQueue, targetPeriod);
+          return;
+        }
+
+        setDraftReadError(null);
+        let activePeople = (people && people.length > 0) ? people : internalPeople;
+        if ((!activePeople || activePeople.length === 0) && targetQueue?.repository?.schema) {
+          try {
+            const schema = await targetQueue.repository.schema();
+            if (schema?.ok && Array.isArray(schema.people)) {
+              activePeople = schema.people;
+              setInternalPeople(schema.people);
+            }
+          } catch (_) {}
+        }
+
+        const assignments = draftCellsToCurrentAssignments({
+          cells: view?.cells || {},
+          people: activePeople
+        });
+
+        setCurrentRoster({
+          ok: true,
+          period: targetPeriod,
+          state: 'DRAFT',
+          revision: view?.baseline?.revision ?? draftRevision,
+          assignments
+        });
         setPlannedRoster(null);
         setAmendmentHistory(null);
         setAbsences([]);
         setReplacements([]);
+        setDraftSaveStatus('saved');
         syncRecoveryState(targetQueue, targetPeriod);
         return;
       }
 
       // 2. Concurrently fetch Current, Planned, Changes, Absences, Replacements, and Entitlements
       const personForEntitlements = selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId;
-      const shouldFetchEntitlements = isAdmin && Boolean(personForEntitlements);
+      const shouldFetchEntitlements = isVerifiedAdmin && Boolean(personForEntitlements);
       const [currRes, planRes, histRes, absRes, replRes, balRes, txRes] = await Promise.all([
         targetQueue.getCurrentRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
         targetQueue.getPlannedRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
@@ -240,6 +333,20 @@ export default function Phase5RosterContainer({
 
     (async () => {
       try {
+        // Automatically redeem any one-time OAuth handoff code in URL if present
+        try {
+          const redeemed = await handleUrlAuthHandoff({
+            baseUrl: settings?.apps_script_url || import.meta.env?.VITE_APPS_SCRIPT_URL
+          });
+          if (redeemed?.ok && live) {
+            setAdminAuthTriggerTick((t) => t + 1);
+          }
+        } catch (authErr) {
+          if (live) {
+            setActionError(`Administrator verification failed: ${authErr.message || authErr}`);
+          }
+        }
+
         const q = externalQueue || await runtimeFactory(settings);
         if (!live || currentGen !== requestGenRef.current) return;
         setQueue(q);
@@ -447,7 +554,7 @@ export default function Phase5RosterContainer({
   // Handle selecting another person in EntitlementPanel
   const handleSelectPersonForEntitlement = useCallback(async (pId) => {
     setSelectedPersonForEntitlement(pId);
-    if (!isAdmin || !queue || !pId) return;
+    if (!isVerifiedAdmin || !queue || !pId) return;
     try {
       const [bRes, tRes] = await Promise.all([
         queue.getEntitlementBalances?.({ personId: pId }).catch(() => null),
@@ -456,7 +563,7 @@ export default function Phase5RosterContainer({
       if (bRes?.ok && bRes.balances) setEntitlementBalances(bRes.balances);
       if (tRes?.ok && tRes.transactions) setEntitlementTransactions(tRes.transactions);
     } catch (_) {}
-  }, [isAdmin, queue, period]);
+  }, [isVerifiedAdmin, queue, period]);
 
   // Handle opening consume modal from Current duty cell
   const handleOpenConsumeModal = useCallback(async (cellData, type) => {
@@ -1050,25 +1157,90 @@ export default function Phase5RosterContainer({
             <span>{isFocusMode ? '🗗 Exit Focus' : '🗖 Focus Mode'}</span>
           </button>
 
+          {isAdmin && (
+            isVerifiedAdmin ? (
+              <span
+                id="admin-auth-verified-badge"
+                data-testid="admin-auth-verified-badge"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                title={adminEmail || 'Verified administrator'}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                Verified administrator{adminEmail ? ` (${adminEmail})` : ''}
+              </span>
+            ) : (
+              <div className="inline-flex items-center gap-2">
+                <span
+                  id="admin-auth-required-badge"
+                  data-testid="admin-auth-required-badge"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                >
+                  <span>⚠️</span> Administrator verification required
+                </span>
+                <button
+                  type="button"
+                  id="btn-verify-admin-google"
+                  data-testid="btn-verify-admin-google"
+                  onClick={handleGoogleVerify}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition shadow-2xs cursor-pointer"
+                >
+                  Verify with Google
+                </button>
+              </div>
+            )
+          )}
+
           <div>
             Period: <strong className="text-slate-700">{period}</strong>
             {state && (
               <span className="ml-2 font-mono text-[11px] text-slate-400">
-                (rev {lifecycle?.revision || 1})
+                {state === 'DRAFT'
+                  ? `(rev ${lifecycle?.revision ?? 0} · draft ${lifecycle?.draftRevision ?? 1})`
+                  : `(rev ${lifecycle?.revision ?? 0})`}
               </span>
             )}
           </div>
         </div>
       </div>
 
+      {/* If DRAFT read failed due to authorization or error, render explicit fail-closed message */}
+      {viewMode === 'CURRENT' && draftReadError && (
+        <div className="p-8 rounded-2xl border border-dashed border-amber-300 bg-amber-50/50 text-center space-y-3" role="alert">
+          <div className="text-3xl">🔒</div>
+          <h3 className="text-base font-bold text-slate-800">
+            {draftReadError === 'AUTHORIZATION_REQUIRED'
+              ? 'Administrator Authorization Required'
+              : 'Draft Workspace Unavailable'}
+          </h3>
+          <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+            {draftReadError === 'AUTHORIZATION_REQUIRED'
+              ? `The working draft for ${period} is private and requires verified administrator identity. Sign in with the authorized administrator Google account to access draft assignments.`
+              : `Unable to load authoritative draft assignments for ${period}: ${draftReadError}.`}
+          </p>
+          {draftReadError === 'AUTHORIZATION_REQUIRED' && (
+            <div className="pt-2">
+              <button
+                type="button"
+                id="btn-auth-required-verify"
+                data-testid="btn-auth-required-verify"
+                onClick={handleGoogleVerify}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition shadow-sm cursor-pointer"
+              >
+                Verify with Google
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Main View Mode Rendering */}
-      {viewMode === 'CURRENT' && (
+      {viewMode === 'CURRENT' && !draftReadError && (
         <CurrentRosterView
           currentAssignments={currentRoster?.assignments || []}
           plannedAssignments={plannedRoster?.assignments || []}
-          people={people}
+          people={(people && people.length > 0) ? people : internalPeople}
           period={period}
-          isAdmin={isAdmin}
+          isAdmin={isVerifiedAdmin}
           lifecycleState={state}
           mutationsEnabled={mutationsEnabled}
           onSelectCellForAmend={(cell) => setSelectedCellForAmend(cell)}
@@ -1082,11 +1254,11 @@ export default function Phase5RosterContainer({
             setIsAbsenceModalOpen(true);
           }}
           onSelectDutyForEntitlement={handleOpenConsumeModal}
-          onSelectPersonForEntitlement={isAdmin ? (pId) => {
+          onSelectPersonForEntitlement={isVerifiedAdmin ? (pId) => {
             handleSelectPersonForEntitlement(pId);
             setViewMode('ENTITLEMENTS');
           } : undefined}
-          onOpenEntitlementsPanel={isAdmin ? () => setViewMode('ENTITLEMENTS') : undefined}
+          onOpenEntitlementsPanel={isVerifiedAdmin ? () => setViewMode('ENTITLEMENTS') : undefined}
           onDraftCellChange={handleDraftCellChange}
           onBulkDraftChange={handleBulkDraftChange}
           onUndoDraft={handleUndoDraft}
@@ -1119,7 +1291,7 @@ export default function Phase5RosterContainer({
           replacements={replacements}
           currentAssignments={currentRoster?.assignments || []}
           people={people}
-          isAdmin={isAdmin}
+          isAdmin={isVerifiedAdmin}
           onReverse={(eventId, adminNote) => handleReverseEvent(eventId, adminNote)}
           onReverseAbsence={(absenceId, adminNote) => handleReverseAbsence(absenceId, adminNote)}
           onReverseReplacement={(replacementId, options) => handleReverseReplacement(replacementId, options)}
@@ -1135,7 +1307,7 @@ export default function Phase5RosterContainer({
           onSelectPersonId={handleSelectPersonForEntitlement}
           balances={entitlementBalances}
           transactions={entitlementTransactions}
-          isAdmin={isAdmin}
+          isAdmin={isVerifiedAdmin}
           period={period}
           onOpenCreditModal={(cfg) => {
             setCreditModalConfig(cfg);

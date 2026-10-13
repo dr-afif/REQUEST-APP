@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { draftRuntime } from '../queue/runtime.js';
 import { terminal } from '../queue/state.js';
 import protocol from '../queue/protocol.js';
+import { getAdminSessionToken } from '../auth/adminAuth.js';
 
 const ERROR_MESSAGES = {
   REVISION_CONFLICT: 'The roster or lifecycle state was updated from another session. Please refresh before proceeding.',
@@ -579,12 +580,14 @@ export default function LifecycleControls({
   const isLocked = confirmedState === 'PUBLISHED' || confirmedState === 'CLOSED';
   const hasActiveLifecycleOp = Boolean(pendingOp);
 
+  const isVerifiedAdmin = Boolean(isAdmin && getAdminSessionToken());
+
   return (
     <div className="flex flex-wrap items-center gap-3" aria-label="Roster lifecycle status and controls">
       <LifecycleBadge state={confirmedState} pendingOp={pendingOp} loading={loading} />
 
       {/* Recover / Retry action if operation is blocked */}
-      {pendingOp?.status === 'RECOVERY_REQUIRED' && isAdmin && (
+      {pendingOp?.status === 'RECOVERY_REQUIRED' && isVerifiedAdmin && (
         <button
           type="button"
           onClick={handleRetryPending}
@@ -595,7 +598,7 @@ export default function LifecycleControls({
       )}
 
       {/* Admin Action Buttons */}
-      {isAdmin && !hasActiveLifecycleOp && !loading && (
+      {isVerifiedAdmin && !hasActiveLifecycleOp && !loading && (
         <div className="flex items-center gap-2">
           {confirmedState === 'DRAFT' && (
             <button

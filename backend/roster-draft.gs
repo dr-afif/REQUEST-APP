@@ -150,7 +150,7 @@ function rosterDraftRecover_(id) {
 function rosterDraftRoute_(action, data) {
   let lock, acquired = false;
   try {
-    try { rosterV2RequireAdmin_(); } catch (error) { throw DraftProtocol.fail('AUTHORIZATION_REQUIRED'); }
+    try { rosterV2RequireAdmin_(data); } catch (error) { throw DraftProtocol.fail('AUTHORIZATION_REQUIRED'); }
     if (['rosterv2draftpatch','rosterv2draftrecover','rosterv2draftabandon'].includes(action)) DraftProtocol.ensure(DraftProtocol.enabled(rosterDraftSettings_()),'FEATURE_DISABLED');
     lock = LockService.getScriptLock();
     try { lock.waitLock(10000); acquired = true; } catch (error) { throw DraftProtocol.fail('LOCK_BUSY'); }

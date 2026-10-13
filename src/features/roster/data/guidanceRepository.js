@@ -2,12 +2,20 @@ import guidance from '../guidance.js';
 import compatibility from '../compatibility.js';
 import {sha256} from '../queue/draftQueue.js';
 
-export function createGuidanceRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000}={}) {
+export function createGuidanceRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000,getAdminSessionToken=null,getIdToken=null}={}) {
   async function request(action,fields={},write=false){
     if(!baseUrl)throw new Error('GUIDANCE_ENDPOINT_UNCONFIGURED');const url=new URL(baseUrl),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
-    const options={method:write?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
-    if(write){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...fields});}
-    else for(const [key,value]of Object.entries({action,...fields}))url.searchParams.set(key,value);
+    let token = null;
+    try {
+      if (typeof getAdminSessionToken === 'function') token = await getAdminSessionToken();
+      else if (typeof getIdToken === 'function') token = await getIdToken();
+      else token = fields.adminSessionToken || fields.idToken || null;
+    } catch (_) {}
+    const reqFields = token ? { ...fields, adminSessionToken: token } : fields;
+    const isPost = write || (Boolean(token) && ['rosterv2offpolicies','rosterv2guidanceschema'].includes(action));
+    const options={method:isPost?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
+    if(isPost){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...reqFields});}
+    else for(const [key,value]of Object.entries({action,...reqFields}))url.searchParams.set(key,value);
     try{const response=await fetcher(url.toString(),options);if(!response.ok)throw new Error('GUIDANCE_TRANSPORT_FAILED');const result=await response.json();if(typeof result?.ok!=='boolean')throw new Error('INVALID_GUIDANCE_RESPONSE');return result;}finally{clearTimeout(timer);}
   }
   const wire=operation=>({operationId:operation.operationId,clientId:operation.clientId,tabId:operation.tabId,operationType:operation.operationType,
