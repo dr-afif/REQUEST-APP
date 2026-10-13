@@ -25,9 +25,13 @@ const RosterGuidance = (() => {
   };
   const weeksForPeriod = period => [...new Set(periodDates(period).map(mondayOf))];
   const normalizePolicy = policy => {
-    if(!policy||!uuid(policy.PolicyId)||!['A','B'].includes(policy.PolicyCode)||!iso(policy.EffectiveMonday)||weekday(policy.EffectiveMonday)!==1||
+    let effMonday = policy?.EffectiveMonday;
+    if ((Object.prototype.toString.call(effMonday) === '[object Date]') || (effMonday instanceof Date)) {
+      effMonday = RosterCompatibility.localDate(effMonday);
+    }
+    if(!policy||!uuid(policy.PolicyId)||!['A','B'].includes(policy.PolicyCode)||!iso(effMonday)||weekday(effMonday)!==1||
       Number(policy.RuleVersion)!==1||policy.RuleJson!==policyRuleJson(policy.PolicyCode)||policy.Active===false||String(policy.Active).toUpperCase()==='FALSE')throw new Error('INVALID_OFF_POLICY');
-    return {policyId:policy.PolicyId,policyCode:policy.PolicyCode,effectiveMonday:policy.EffectiveMonday,ruleVersion:1,ruleJson:policy.RuleJson,revision:Number(policy.Revision)||0};
+    return {policyId:policy.PolicyId,policyCode:policy.PolicyCode,effectiveMonday:effMonday,ruleVersion:1,ruleJson:policy.RuleJson,revision:Number(policy.Revision)||0};
   };
   function selectPolicy(policies,weekStart,lockedPolicy=null) {
     weekDates(weekStart);

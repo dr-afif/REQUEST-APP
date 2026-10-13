@@ -1830,13 +1830,30 @@ const RosterCompatibility = (() => {
     const t = Date.parse(value);
     return Number.isFinite(t) ? new Date(t + 28800000).toISOString().slice(0,10) : null;
   }
+  function canonicalPeriodId(value) {
+    if (typeof value === 'string') {
+      if (/^\d{4}-(0[1-9]|1[0-2])$/.test(value) && value.slice(0, 4) !== '0000') {
+        return value;
+      }
+      return null;
+    }
+    const isDate = (Object.prototype.toString.call(value) === '[object Date]') || (value instanceof Date);
+    if (isDate) {
+      const d = localDate(value);
+      return d ? d.slice(0, 7) : null;
+    }
+    return null;
+  }
   function validatePeriod(periodId) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodId) || periodId.slice(0,4) === '0000') throw new Error('Period must use YYYY-MM');
     return periodId;
   }
   function periodInfo(periodId, periods = []) {
     validatePeriod(periodId);
-    const matches = periods.filter(p => p.PeriodId === periodId);
+    const matches = periods.filter(p => {
+      const pId = p.PeriodId === periodId ? p.PeriodId : canonicalPeriodId(p.PeriodId);
+      return pId === periodId;
+    });
     if (matches.length > 1) throw new Error('Duplicate RosterPeriods enrollment');
     const p = matches[0];
     if (p && (Number(p.SchemaVersion) !== 2 || !p.EnrolledAt || !p.EnrolledBy)) throw new Error('Invalid RosterPeriods enrollment');
@@ -1904,16 +1921,92 @@ const RosterCompatibility = (() => {
       missingHeaders: headers.filter(h => !(existingHeaders[name] || []).includes(h)), action: owns(existingHeaders, name) ? 'INSPECT_ONLY' : 'PROPOSE_CREATE', apply: false }));
   }
   return freeze({ featureDefaults, schemas, lifecycleSchemas, staffingDefaults, catalog, resolveShift, classifyCalendarDay, advanceWorkedDays,
-    featureSwitches, isReservedSetting, canonicalName, createPerson, renamePerson, personIndex, localDate, validatePeriod, periodInfo,
+    featureSwitches, isReservedSetting, canonicalName, createPerson, renamePerson, personIndex, localDate, canonicalPeriodId, validatePeriod, periodInfo,
     adaptLegacyRecords, projectPeriod, legacyTransportRows, legacyProjection, canonicalJson, snapshotDatasets, reconcileRows, schemaPlan });
 })();
 
 // Apps Script I/O boundary. Reads below never call legacy getters/bootstrap helpers.
+var ROSTER_V2_YEAR_MONTH_HEADERS_ = {
+  PeriodId: true,
+  PolicyLockedByPeriodId: true,
+  SourcePeriodId: true
+};
+
+var ROSTER_V2_LOCAL_DATE_HEADERS_ = {
+  Date: true,
+  EffectiveMonday: true,
+  WeekStart: true,
+  WeekEnd: true,
+  StartDate: true,
+  EndDate: true,
+  EffectiveDate: true,
+  PublicHolidayDate: true
+};
+
+var ROSTER_V2_TIMESTAMP_HEADERS_ = {
+  CreatedAt: true,
+  UpdatedAt: true,
+  CompletedAt: true,
+  PublishedAt: true,
+  ClosedAt: true,
+  EnrolledAt: true,
+  ExpiresAt: true
+};
+
+function rosterV2TimeZone_() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss && ss.getSpreadsheetTimeZone) {
+      var tz = ss.getSpreadsheetTimeZone();
+      if (tz) return tz;
+    }
+  } catch (e) {}
+  try {
+    if (typeof Session !== 'undefined' && Session.getScriptTimeZone) {
+      var stz = Session.getScriptTimeZone();
+      if (stz) return stz;
+    }
+  } catch (e) {}
+  return 'Asia/Kuala_Lumpur';
+}
+
+function rosterV2CanonicalCellValue_(val, header, timeZone) {
+  if (val === null || val === undefined || val === '') return '';
+  var isDate = (Object.prototype.toString.call(val) === '[object Date]') || (val instanceof Date);
+  if (isDate) {
+    if (ROSTER_V2_YEAR_MONTH_HEADERS_[header]) {
+      var formatted = Utilities.formatDate(val, timeZone, 'yyyy-MM');
+      return formatted ? formatted.slice(0, 7) : '';
+    }
+    if (ROSTER_V2_LOCAL_DATE_HEADERS_[header]) {
+      var formattedDate = Utilities.formatDate(val, timeZone, 'yyyy-MM-dd');
+      return formattedDate ? formattedDate.slice(0, 10) : '';
+    }
+    if (ROSTER_V2_TIMESTAMP_HEADERS_[header]) {
+      return val.toISOString();
+    }
+    return val.toISOString();
+  }
+  return val;
+}
+
 function rosterV2ReadTable_(name) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!sheet) return { headers: [], rows: [], exists: false };
   const values = sheet.getDataRange().getValues();
-  return { headers: values[0] || [], rows: values.slice(1), exists: true };
+  const headers = values[0] || [];
+  const rawRows = values.slice(1);
+  if (name === 'MasterRoster' || !headers.length) {
+    return { headers: headers, rows: rawRows, exists: true };
+  }
+  const tz = rosterV2TimeZone_();
+  const normalizedRows = rawRows.map(function(row) {
+    return row.map(function(val, colIdx) {
+      const header = headers[colIdx];
+      return rosterV2CanonicalCellValue_(val, header, tz);
+    });
+  });
+  return { headers: headers, rows: normalizedRows, exists: true };
 }
 
 function rosterV2Records_(table, requiredHeaders, preserveBlankRows) {
@@ -2661,9 +2754,13 @@ const RosterGuidance = (() => {
   };
   const weeksForPeriod = period => [...new Set(periodDates(period).map(mondayOf))];
   const normalizePolicy = policy => {
-    if(!policy||!uuid(policy.PolicyId)||!['A','B'].includes(policy.PolicyCode)||!iso(policy.EffectiveMonday)||weekday(policy.EffectiveMonday)!==1||
+    let effMonday = policy?.EffectiveMonday;
+    if ((Object.prototype.toString.call(effMonday) === '[object Date]') || (effMonday instanceof Date)) {
+      effMonday = RosterCompatibility.localDate(effMonday);
+    }
+    if(!policy||!uuid(policy.PolicyId)||!['A','B'].includes(policy.PolicyCode)||!iso(effMonday)||weekday(effMonday)!==1||
       Number(policy.RuleVersion)!==1||policy.RuleJson!==policyRuleJson(policy.PolicyCode)||policy.Active===false||String(policy.Active).toUpperCase()==='FALSE')throw new Error('INVALID_OFF_POLICY');
-    return {policyId:policy.PolicyId,policyCode:policy.PolicyCode,effectiveMonday:policy.EffectiveMonday,ruleVersion:1,ruleJson:policy.RuleJson,revision:Number(policy.Revision)||0};
+    return {policyId:policy.PolicyId,policyCode:policy.PolicyCode,effectiveMonday:effMonday,ruleVersion:1,ruleJson:policy.RuleJson,revision:Number(policy.Revision)||0};
   };
   function selectPolicy(policies,weekStart,lockedPolicy=null) {
     weekDates(weekStart);

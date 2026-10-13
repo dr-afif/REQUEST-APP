@@ -196,13 +196,30 @@ const RosterCompatibility = (() => {
     const t = Date.parse(value);
     return Number.isFinite(t) ? new Date(t + 28800000).toISOString().slice(0,10) : null;
   }
+  function canonicalPeriodId(value) {
+    if (typeof value === 'string') {
+      if (/^\d{4}-(0[1-9]|1[0-2])$/.test(value) && value.slice(0, 4) !== '0000') {
+        return value;
+      }
+      return null;
+    }
+    const isDate = (Object.prototype.toString.call(value) === '[object Date]') || (value instanceof Date);
+    if (isDate) {
+      const d = localDate(value);
+      return d ? d.slice(0, 7) : null;
+    }
+    return null;
+  }
   function validatePeriod(periodId) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodId) || periodId.slice(0,4) === '0000') throw new Error('Period must use YYYY-MM');
     return periodId;
   }
   function periodInfo(periodId, periods = []) {
     validatePeriod(periodId);
-    const matches = periods.filter(p => p.PeriodId === periodId);
+    const matches = periods.filter(p => {
+      const pId = p.PeriodId === periodId ? p.PeriodId : canonicalPeriodId(p.PeriodId);
+      return pId === periodId;
+    });
     if (matches.length > 1) throw new Error('Duplicate RosterPeriods enrollment');
     const p = matches[0];
     if (p && (Number(p.SchemaVersion) !== 2 || !p.EnrolledAt || !p.EnrolledBy)) throw new Error('Invalid RosterPeriods enrollment');
@@ -270,7 +287,7 @@ const RosterCompatibility = (() => {
       missingHeaders: headers.filter(h => !(existingHeaders[name] || []).includes(h)), action: owns(existingHeaders, name) ? 'INSPECT_ONLY' : 'PROPOSE_CREATE', apply: false }));
   }
   return freeze({ featureDefaults, schemas, lifecycleSchemas, staffingDefaults, catalog, resolveShift, classifyCalendarDay, advanceWorkedDays,
-    featureSwitches, isReservedSetting, canonicalName, createPerson, renamePerson, personIndex, localDate, validatePeriod, periodInfo,
+    featureSwitches, isReservedSetting, canonicalName, createPerson, renamePerson, personIndex, localDate, canonicalPeriodId, validatePeriod, periodInfo,
     adaptLegacyRecords, projectPeriod, legacyTransportRows, legacyProjection, canonicalJson, snapshotDatasets, reconcileRows, schemaPlan });
 })();
 

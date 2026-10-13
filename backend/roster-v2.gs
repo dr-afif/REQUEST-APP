@@ -1,9 +1,85 @@
 // Apps Script I/O boundary. Reads below never call legacy getters/bootstrap helpers.
+var ROSTER_V2_YEAR_MONTH_HEADERS_ = {
+  PeriodId: true,
+  PolicyLockedByPeriodId: true,
+  SourcePeriodId: true
+};
+
+var ROSTER_V2_LOCAL_DATE_HEADERS_ = {
+  Date: true,
+  EffectiveMonday: true,
+  WeekStart: true,
+  WeekEnd: true,
+  StartDate: true,
+  EndDate: true,
+  EffectiveDate: true,
+  PublicHolidayDate: true
+};
+
+var ROSTER_V2_TIMESTAMP_HEADERS_ = {
+  CreatedAt: true,
+  UpdatedAt: true,
+  CompletedAt: true,
+  PublishedAt: true,
+  ClosedAt: true,
+  EnrolledAt: true,
+  ExpiresAt: true
+};
+
+function rosterV2TimeZone_() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss && ss.getSpreadsheetTimeZone) {
+      var tz = ss.getSpreadsheetTimeZone();
+      if (tz) return tz;
+    }
+  } catch (e) {}
+  try {
+    if (typeof Session !== 'undefined' && Session.getScriptTimeZone) {
+      var stz = Session.getScriptTimeZone();
+      if (stz) return stz;
+    }
+  } catch (e) {}
+  return 'Asia/Kuala_Lumpur';
+}
+
+function rosterV2CanonicalCellValue_(val, header, timeZone) {
+  if (val === null || val === undefined || val === '') return '';
+  var isDate = (Object.prototype.toString.call(val) === '[object Date]') || (val instanceof Date);
+  if (isDate) {
+    if (ROSTER_V2_YEAR_MONTH_HEADERS_[header]) {
+      var formatted = Utilities.formatDate(val, timeZone, 'yyyy-MM');
+      return formatted ? formatted.slice(0, 7) : '';
+    }
+    if (ROSTER_V2_LOCAL_DATE_HEADERS_[header]) {
+      var formattedDate = Utilities.formatDate(val, timeZone, 'yyyy-MM-dd');
+      return formattedDate ? formattedDate.slice(0, 10) : '';
+    }
+    if (ROSTER_V2_TIMESTAMP_HEADERS_[header]) {
+      return val.toISOString();
+    }
+    return val.toISOString();
+  }
+  return val;
+}
+
 function rosterV2ReadTable_(name) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!sheet) return { headers: [], rows: [], exists: false };
   const values = sheet.getDataRange().getValues();
-  return { headers: values[0] || [], rows: values.slice(1), exists: true };
+  const headers = values[0] || [];
+  const rawRows = values.slice(1);
+  if (name === 'MasterRoster' || !headers.length) {
+    return { headers: headers, rows: rawRows, exists: true };
+  }
+  const tz = rosterV2TimeZone_();
+  const normalizedRows = rawRows.map(function(row) {
+    return row.map(function(val, colIdx) {
+      const header = headers[colIdx];
+      return rosterV2CanonicalCellValue_(val, header, tz);
+    });
+  });
+  return { headers: headers, rows: normalizedRows, exists: true };
 }
 
 function rosterV2Records_(table, requiredHeaders, preserveBlankRows) {
