@@ -23,6 +23,24 @@ let inMemorySessionToken = null;
 let inMemoryAdminEmail = null;
 let inMemoryExpiresAt = null;
 
+const authListeners = new Set();
+
+export function subscribeAdminAuth(listener) {
+  if (typeof listener !== 'function') return () => {};
+  authListeners.add(listener);
+  return () => {
+    authListeners.delete(listener);
+  };
+}
+
+function notifyAdminAuth() {
+  for (const listener of authListeners) {
+    try {
+      listener();
+    } catch (_) {}
+  }
+}
+
 export function getGoogleClientId() {
   return (import.meta.env?.VITE_GOOGLE_CLIENT_ID || '').trim();
 }
@@ -43,12 +61,17 @@ export function setAdminSessionToken(token, email = null, expiresAt = null) {
   inMemorySessionToken = token || null;
   inMemoryAdminEmail = email || null;
   inMemoryExpiresAt = typeof expiresAt === 'number' ? expiresAt : (token ? Math.floor(Date.now() / 1000) + 900 : null);
+  notifyAdminAuth();
 }
 
 export function clearAdminSessionToken() {
+  const hadSession = Boolean(inMemorySessionToken);
   inMemorySessionToken = null;
   inMemoryAdminEmail = null;
   inMemoryExpiresAt = null;
+  if (hadSession) {
+    notifyAdminAuth();
+  }
 }
 
 export function getAdminEmail() {
@@ -207,6 +230,136 @@ export async function checkAuthStatus({
   }
 }
 
+export const GIS_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
+
+export const GIS_LOAD_ERROR_USER_MESSAGE =
+  'Google authentication could not be loaded. Check the network connection and try again.';
+
+export function formatAdminAuthError(err) {
+  if (!err) return 'Verification initiation failed';
+  const code = err.code || err.message;
+  if (code === 'GIS_SCRIPT_LOAD_FAILED' || code === 'GIS_SCRIPT_NOT_LOADED' || String(err).includes('GIS_SCRIPT')) {
+    return GIS_LOAD_ERROR_USER_MESSAGE;
+  }
+  return err.userMessage || err.message || String(err);
+}
+
+let gisLoadPromise = null;
+
+/**
+ * Race-safe loader for the official Google Identity Services SDK.
+ * Bounded, deduplicated, retryable, and resolves immediately if already present.
+ */
+export async function ensureGoogleIdentityServicesLoaded({
+  timeoutMs = 10000,
+  scriptUrl = GIS_SCRIPT_URL
+} = {}) {
+  if (typeof window === 'undefined') {
+    const err = new Error('GIS_SCRIPT_LOAD_FAILED');
+    err.code = 'GIS_SCRIPT_LOAD_FAILED';
+    err.userMessage = GIS_LOAD_ERROR_USER_MESSAGE;
+    throw err;
+  }
+
+  // 1. Resolve immediately if already available
+  if (typeof window.google?.accounts?.oauth2?.initCodeClient === 'function') {
+    return window.google.accounts.oauth2;
+  }
+
+  // 5. Multiple simultaneous calls share one module-level promise
+  if (gisLoadPromise) {
+    return gisLoadPromise;
+  }
+
+  gisLoadPromise = new Promise((resolve, reject) => {
+    let timerId = null;
+    let pollId = null;
+    let scriptEl = null;
+    let scriptLoadHandler = null;
+    let scriptErrorHandler = null;
+
+    const cleanup = () => {
+      if (timerId !== null) {
+        clearTimeout(timerId);
+        timerId = null;
+      }
+      if (pollId !== null) {
+        clearInterval(pollId);
+        pollId = null;
+      }
+      if (scriptEl && scriptLoadHandler) {
+        scriptEl.removeEventListener('load', scriptLoadHandler);
+      }
+      if (scriptEl && scriptErrorHandler) {
+        scriptEl.removeEventListener('error', scriptErrorHandler);
+      }
+    };
+
+    const fail = (errorMsg) => {
+      cleanup();
+      // 8. Previous failure does not permanently poison future attempts
+      gisLoadPromise = null;
+      const err = new Error(errorMsg || 'GIS_SCRIPT_LOAD_FAILED');
+      err.code = 'GIS_SCRIPT_LOAD_FAILED';
+      err.userMessage = GIS_LOAD_ERROR_USER_MESSAGE;
+      reject(err);
+    };
+
+    const succeed = () => {
+      if (typeof window.google?.accounts?.oauth2?.initCodeClient === 'function') {
+        cleanup();
+        gisLoadPromise = null;
+        resolve(window.google.accounts.oauth2);
+      } else {
+        fail('GIS_SCRIPT_LOAD_FAILED');
+      }
+    };
+
+    // 3 & 9. Bounded timeout
+    timerId = setTimeout(() => {
+      fail('GIS_SCRIPT_LOAD_FAILED');
+    }, timeoutMs);
+
+    // 2. Identify existing GIS script or create exactly one if absent
+    scriptEl = typeof document !== 'undefined'
+      ? document.querySelector(`script[src="${scriptUrl}"]`)
+      : null;
+
+    scriptLoadHandler = () => {
+      if (typeof window.google?.accounts?.oauth2?.initCodeClient === 'function') {
+        succeed();
+      }
+    };
+
+    scriptErrorHandler = () => {
+      fail('GIS_SCRIPT_LOAD_FAILED');
+    };
+
+    if (scriptEl) {
+      scriptEl.addEventListener('load', scriptLoadHandler);
+      scriptEl.addEventListener('error', scriptErrorHandler);
+    } else if (typeof document !== 'undefined') {
+      // 4. Do not insert duplicate script elements
+      scriptEl = document.createElement('script');
+      scriptEl.src = scriptUrl;
+      scriptEl.async = true;
+      scriptEl.defer = true;
+      scriptEl.addEventListener('load', scriptLoadHandler);
+      scriptEl.addEventListener('error', scriptErrorHandler);
+      (document.head || document.body || document.documentElement).appendChild(scriptEl);
+    }
+
+    // Fast polling to catch initialization as soon as the script evaluates
+    pollId = setInterval(() => {
+      if (typeof window.google?.accounts?.oauth2?.initCodeClient === 'function') {
+        succeed();
+      }
+    }, 50);
+  });
+
+  return gisLoadPromise;
+}
+
 /**
  * Trigger the Google Identity Services redirect authorization code flow.
  * Redirects the browser directly to Google with state bound to Apps Script callback URI.
@@ -221,14 +374,16 @@ export async function startGoogleRedirectAuth({
 } = {}) {
   if (!clientId) {
     const err = new Error('CLIENT_ID_UNCONFIGURED');
+    err.code = 'CLIENT_ID_UNCONFIGURED';
     onError?.(err);
     throw err;
   }
 
-  if (typeof window === 'undefined' || !window.google?.accounts?.oauth2?.initCodeClient) {
-    const err = new Error('GIS_SCRIPT_NOT_LOADED');
-    onError?.(err);
-    throw err;
+  try {
+    await ensureGoogleIdentityServicesLoaded();
+  } catch (loadErr) {
+    onError?.(loadErr);
+    throw loadErr;
   }
 
   try {
@@ -252,3 +407,4 @@ export async function startGoogleRedirectAuth({
 
 // Alias for seamless backward compatibility across UI components
 export const startGoogleCodeAuth = startGoogleRedirectAuth;
+

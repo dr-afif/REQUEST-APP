@@ -2,6 +2,7 @@ import {useEffect,useState} from 'react';
 import {draftRuntime} from '../queue/runtime.js';
 import {createSignals,terminal} from '../queue/state.js';
 import protocol from '../queue/protocol.js';
+import {subscribeAdminAuth, isSessionTokenActive} from '../auth/adminAuth.js';
 import RosterGuidancePanel from './RosterGuidancePanel.jsx';
 
 const labels={QUEUED:'Queued',SENDING:'Saving',AWAITING_STATUS:'Retry scheduled — checking confirmation',RETRY_SCHEDULED:'Retry scheduled',
@@ -10,10 +11,24 @@ const errorMessages={AUTHORIZATION_REQUIRED:'Administrator identity could not be
 // Opt-in draft editor and persistent save state only. Legacy grid and upload are independent.
 export default function DraftQueuePanel({period,settings,runtimeFactory=draftRuntime}) {
   const showDraft=protocol.enabled(settings);
+  const [sessionActive,setSessionActive]=useState(()=>isSessionTokenActive());
   const [queue,setQueue]=useState(null),[,update]=useState(0),[error,setError]=useState(''),[people,setPeople]=useState([]);
   const [personId,setPersonId]=useState(''),[date,setDate]=useState(period+'-01'),[text,setText]=useState(''),[offline,setOffline]=useState(!navigator.onLine);
   const key='draft:'+period;
-  useEffect(()=>{let live=true,q,unsubscribe,refresh;
+
+  useEffect(()=>{
+    return subscribeAdminAuth(()=>{
+      setSessionActive(isSessionTokenActive());
+    });
+  },[]);
+
+  useEffect(()=>{
+    if (!sessionActive) {
+      setQueue(null);
+      setError('');
+      return;
+    }
+    let live=true,q,unsubscribe,refresh;
     (async()=>{
       q=await runtimeFactory(settings);const repository=q.repository;
       if(!live)return;
@@ -27,13 +42,18 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
     })().catch(e=>{if(live)setError(e.message);});
     const connection=()=>setOffline(!navigator.onLine);window.addEventListener('online',connection);window.addEventListener('offline',connection);
     return()=>{live=false;unsubscribe?.();q?.stop();clearInterval(refresh);window.removeEventListener('online',connection);window.removeEventListener('offline',connection);};
-  },[key,settings,runtimeFactory]); // Reopen the durable queue for the selected period; no legacy refresh mutation.
+  },[key,settings,runtimeFactory,sessionActive]); // Reopen the durable queue for the selected period; no legacy refresh mutation.
+
   const view=queue?.view(key),pending=[...(queue?.entities.values()||[])].flatMap(e=>e.operations.filter(o=>!terminal(o)));
   const isLocked = view?.lifecycle?.state === 'PUBLISHED' || view?.lifecycle?.state === 'CLOSED';
   const act=fn=>Promise.resolve().then(fn).catch(e=>setError(e.code||e.message));
   const cellKey=personId+'/'+date;
   const cellText=(view?.cells[cellKey]||[]).map(a=>a.rawShift).join('\n');
   useEffect(()=>{setText(cellText);},[personId,date,queue,cellText]);
+
+  if (!sessionActive) {
+    return null;
+  }
   const save=(value=text)=>act(async()=>{
     if (isLocked) return;
     setError('');const old=queue.view(key).cells[cellKey]||[];
@@ -63,7 +83,7 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
     <ul>{pending.map(op=><li key={op.operationId} className="my-2 flex flex-wrap gap-2 items-center"><span>{op.entityKey.slice(6)}: {labels[op.status]} {op.lastError?`(${op.lastError})`:''}</span>
       <button className="min-h-11 border rounded px-3" onClick={()=>act(()=>queue.retry(op.entityKey,op.operationId))}>Retry / recover</button>
       <button className="min-h-11 border rounded px-3" onClick={()=>act(()=>queue.revert(op.entityKey,op.operationId))}>Revert local proposal</button></li>)}</ul>
-  </section>}{queue&&<RosterGuidancePanel period={period} settings={settings} queue={queue} people={people}/>}</>;
+  </section>}{queue&&<RosterGuidancePanel period={period} settings={settings} queue={queue} people={people} isVerifiedAdmin={sessionActive}/>}</>;
 }
 export const draftPanelEnabled=settings=>protocol.enabled(settings);
 export const rosterPanelEnabled=settings=>draftPanelEnabled(settings)||['weekly_off_guidance_enabled','night_safety_guidance_enabled'].some(key=>settings?.[key]===true||settings?.[key]==='true');

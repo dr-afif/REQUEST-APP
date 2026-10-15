@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { draftRuntime } from '../queue/runtime.js';
 import { draftCellsToCurrentAssignments } from '../data/draftRepository.js';
-import { getAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff } from '../auth/adminAuth.js';
+import { getAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff, subscribeAdminAuth, formatAdminAuthError } from '../auth/adminAuth.js';
 import RosterViewModeSelector from './RosterViewModeSelector.jsx';
 import CurrentRosterView from './CurrentRosterView.jsx';
 import PlannedRosterView from './PlannedRosterView.jsx';
@@ -109,32 +109,6 @@ export default function Phase5RosterContainer({
   const isVerifiedAdmin = Boolean(isAdmin && getAdminSessionToken());
   const adminEmail = getAdminEmail();
 
-  const handleGoogleVerify = useCallback(async () => {
-    setActionError(null);
-    try {
-      await startGoogleCodeAuth({
-        onSuccess: async () => {
-          setAdminAuthTriggerTick(t => t + 1);
-          requestGenRef.current += 1;
-          const currentGen = requestGenRef.current;
-          setLoading(true);
-          try {
-            if (queue) {
-              await loadAuthoritativeData(queue, period, currentGen);
-            }
-          } finally {
-            setLoading(false);
-          }
-        },
-        onError: (err) => {
-          setActionError(`Administrator verification failed: ${err.message || err}`);
-        }
-      });
-    } catch (err) {
-      setActionError(err.message || 'Verification initiation failed');
-    }
-  }, [queue, period, loadAuthoritativeData]);
-
   // Check for any unresolved operations needing recovery
   const syncRecoveryState = useCallback((q, p) => {
     if (!q || !p) return;
@@ -208,10 +182,11 @@ export default function Phase5RosterContainer({
           setAbsences([]);
           setReplacements([]);
           setDraftReadError(draftLoadError);
-          setDraftSaveStatus('error');
           if (draftLoadError === 'AUTHORIZATION_REQUIRED') {
-            setActionError('AUTHORIZATION_REQUIRED');
+            setDraftSaveStatus(null);
+            setActionError(null);
           } else {
+            setDraftSaveStatus('error');
             setActionError(`Failed to load draft: ${draftLoadError}`);
           }
           syncRecoveryState(targetQueue, targetPeriod);
@@ -300,6 +275,32 @@ export default function Phase5RosterContainer({
     }
   }, [onLifecycleStateChange, syncRecoveryState]);
 
+  const handleGoogleVerify = useCallback(async () => {
+    setActionError(null);
+    try {
+      await startGoogleCodeAuth({
+        onSuccess: async () => {
+          setAdminAuthTriggerTick(t => t + 1);
+          requestGenRef.current += 1;
+          const currentGen = requestGenRef.current;
+          setLoading(true);
+          try {
+            if (queue) {
+              await loadAuthoritativeData(queue, period, currentGen);
+            }
+          } finally {
+            setLoading(false);
+          }
+        },
+        onError: (err) => {
+          setActionError(formatAdminAuthError(err));
+        }
+      });
+    } catch (err) {
+      setActionError(formatAdminAuthError(err));
+    }
+  }, [queue, period, loadAuthoritativeData]);
+
   // Initial and period change effect
   useEffect(() => {
     let live = true;
@@ -369,6 +370,16 @@ export default function Phase5RosterContainer({
       live = false;
     };
   }, [period, settings, externalQueue, runtimeFactory, loadAuthoritativeData]);
+
+  // Subscribe to in-memory administrator authentication changes
+  useEffect(() => {
+    return subscribeAdminAuth(() => {
+      setAdminAuthTriggerTick((t) => t + 1);
+      if (queue) {
+        loadAuthoritativeData(queue, period, requestGenRef.current);
+      }
+    });
+  }, [queue, period, loadAuthoritativeData]);
 
   // Handle Phase 5 amendment submission (ADMIN_CORRECTION or SWAP)
   const handleAmendmentSubmit = useCallback(async (payload) => {
@@ -1096,7 +1107,7 @@ export default function Phase5RosterContainer({
       )}
 
       {/* Action Error Banner */}
-      {actionError && (
+      {actionError && actionError !== 'AUTHORIZATION_REQUIRED' && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium" role="alert">
           <p className="font-bold">Notice</p>
           <p>{actionError}</p>
@@ -1127,8 +1138,10 @@ export default function Phase5RosterContainer({
                   ? 'bg-rose-100 text-rose-800 border border-rose-300'
                   : revisionConflictMsg
                   ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                  : (actionError || draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
+                  : (draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
                   ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                  : draftReadError === 'AUTHORIZATION_REQUIRED' || !isVerifiedAdmin
+                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
                   : isSavingDraft
                   ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
                   : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
@@ -1138,8 +1151,10 @@ export default function Phase5RosterContainer({
                 ? '🚨 Recovery required'
                 : revisionConflictMsg
                 ? '⚠️ Conflict — review required'
-                : (actionError || draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
+                : (draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
                 ? '⚠️ Save failed'
+                : draftReadError === 'AUTHORIZATION_REQUIRED' || !isVerifiedAdmin
+                ? '🔒 Verification required'
                 : isSavingDraft
                 ? '⏳ Saving…'
                 : '✓ All changes saved'}

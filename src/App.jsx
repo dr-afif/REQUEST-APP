@@ -52,7 +52,7 @@ import {
   validateShiftTypes,
 } from './utils/adapters';
 import { hasCacheValue, readCache, writeCacheEntries } from './utils/cache';
-import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
+import { normalizeForComparison, settingsEquivalent, toIsoDate, toWeekdayName } from './utils/normalise';
 import { applyCustomPublicHolidays, normalizePublicHolidays } from './utils/holidays';
 import { normalizeLeaveApplications } from './utils/leaveTracking';
 
@@ -294,8 +294,12 @@ export default function App() {
         if (Array.isArray(response.leaveApplications)) {
           rawLeaveApplications = response.leaveApplications;
         }
-        if (response.settings) {
-          setSettings(response.settings);
+        if (response.settings && typeof response.settings === 'object') {
+          setSettings((currentSettings) => (
+            settingsEquivalent(currentSettings, response.settings)
+              ? currentSettings
+              : response.settings
+          ));
         }
       }
 
