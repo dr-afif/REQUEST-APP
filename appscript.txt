@@ -6810,6 +6810,43 @@ function rosterGuidanceState_() {
   const logs=rosterDraftLogs_().filter(function(log){return log.OperationType==='OFF_POLICY_UPSERT'&&log.Status==='CONFIRMED';})
     .sort(function(a,b){return Number(a.ResultRevision)-Number(b.ResultRevision);});
   const rows=rosterGuidanceTable_(),policies=[],dates=new Set(),ids=new Set();let revision=0;
+
+  const bootstrapRows=rows.filter(function(row){return row.OperationId==='cutover-seed';});
+  DraftProtocol.ensure(bootstrapRows.length<=1,'RECOVERY_REQUIRED');
+  if(bootstrapRows.length===1){
+    const boot=bootstrapRows[0];
+    let effMonday=boot.EffectiveMonday;
+    if((Object.prototype.toString.call(effMonday)==='[object Date]')||(effMonday instanceof Date)){
+      effMonday=RosterCompatibility.localDate(effMonday);
+    }
+    DraftProtocol.ensure(
+      Number(boot.Revision)===1&&
+      RosterGuidance.uuid(boot.PolicyId)&&
+      ['A','B'].includes(boot.PolicyCode)&&
+      RosterGuidance.iso(effMonday)&&
+      RosterGuidance.weekday(effMonday)===1&&
+      Number(boot.RuleVersion)===1&&
+      boot.RuleJson===RosterGuidance.policyRuleJson(boot.PolicyCode)&&
+      (boot.Active===true||String(boot.Active).toLowerCase()==='true')&&
+      typeof boot.Reason==='string'&&boot.Reason.trim()!==''&&boot.Reason.length<=500&&
+      rosterGuidanceAuditValid_(boot),
+      'RECOVERY_REQUIRED'
+    );
+    revision=1;
+    dates.add(effMonday);
+    ids.add(boot.PolicyId);
+    policies.push({
+      PolicyId:boot.PolicyId,
+      PolicyCode:boot.PolicyCode,
+      EffectiveMonday:effMonday,
+      RuleVersion:1,
+      RuleJson:boot.RuleJson,
+      Active:true,
+      Reason:boot.Reason,
+      Revision:1
+    });
+  }
+
   logs.forEach(function(log){
     DraftProtocol.ensure(Number(log.ExpectedRevision)===revision&&Number(log.ResultRevision)===revision+1,'RECOVERY_REQUIRED');
     const matching=rows.filter(function(row){return row.OperationId===log.OperationId;});DraftProtocol.ensure(matching.length===1,'RECOVERY_REQUIRED');
