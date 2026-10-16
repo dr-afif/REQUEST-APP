@@ -391,7 +391,8 @@ export default function LifecycleControls({
   isAdmin = false,
   queue: externalQueue = null,
   runtimeFactory = draftRuntime,
-  onLifecycleStateChange = null
+  onLifecycleStateChange = null,
+  allowPublish = true
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [, setTick] = useState(0);
@@ -603,9 +604,16 @@ export default function LifecycleControls({
           {confirmedState === 'DRAFT' && (
             <button
               type="button"
-              disabled={!mutationsEnabled}
-              title={!mutationsEnabled ? 'Lifecycle mutations disabled in settings' : undefined}
+              disabled={!mutationsEnabled || !allowPublish}
+              title={
+                !allowPublish
+                  ? 'Publication is disabled during manual review'
+                  : !mutationsEnabled
+                    ? 'Lifecycle mutations disabled in settings'
+                    : undefined
+              }
               onClick={() => {
+                if (!allowPublish) return;
                 setActionError(null);
                 setIsPublishOpen(true);
               }}

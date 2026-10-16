@@ -1,8 +1,52 @@
 // Separate transport: legacy request() behavior remains untouched.
-export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000,getAdminSessionToken=null,getIdToken=null}={}) {
-  async function request(action,fields={},write=false){
+
+// Module-scoped shared in-flight read broker across independent repository instances.
+// READS ONLY: mutations strictly bypass this broker and are never coalesced.
+const sharedInFlightReads = new Map();
+
+export function _clearSharedInFlightReads() {
+  sharedInFlightReads.clear();
+}
+
+function buildFlightKey(baseUrl, action, fields = {}, token = null) {
+  let normUrl = '';
+  try {
+    normUrl = new URL(baseUrl).toString();
+  } catch (_) {
+    normUrl = String(baseUrl || '');
+  }
+
+  // Canonicalize fields by sorting keys, omitting secrets
+  const cleanFields = {};
+  for (const k of Object.keys(fields).sort()) {
+    if (k !== 'adminSessionToken' && k !== 'idToken') {
+      cleanFields[k] = fields[k];
+    }
+  }
+
+  // Distinguish authenticated vs unauthenticated context using an opaque non-secret discriminator
+  const authScope = token ? 'auth' : 'anon';
+
+  return `${normUrl}|${authScope}|${action}|${JSON.stringify(cleanFields)}`;
+}
+
+export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000,getAdminSessionToken=null,getIdToken=null,maxReadRetries=2,readRetryDelayMs=250}={}) {
+  async function executeSingleFetch(action, reqFields, isPost) {
     if(!baseUrl)throw new Error('DRAFT_ENDPOINT_UNCONFIGURED');
     const url=new URL(baseUrl),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+    const options={method:isPost?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
+    if(isPost){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...reqFields});}
+    else for(const [k,v] of Object.entries({action,...reqFields}))url.searchParams.set(k,v);
+    try{
+      const response=await fetcher(url.toString(),options);
+      if(!response.ok)throw new Error('DRAFT_TRANSPORT_FAILED');
+      const result=await response.json();
+      if(typeof result?.ok!=='boolean')throw new Error('INVALID_DRAFT_RESPONSE');
+      return result;
+    }finally{clearTimeout(timer);}
+  }
+
+  async function request(action,fields={},write=false){
     let token = null;
     try {
       if (typeof getAdminSessionToken === 'function') token = await getAdminSessionToken();
@@ -11,12 +55,51 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
     } catch (_) {}
     const reqFields = token ? { ...fields, adminSessionToken: token } : fields;
     const isPost = write || (Boolean(token) && ['rosterv2draft','rosterv2draftschema'].includes(action));
-    const options={method:isPost?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
-    if(isPost){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...reqFields});}
-    else for(const [k,v] of Object.entries({action,...reqFields}))url.searchParams.set(k,v);
-    try{const response=await fetcher(url.toString(),options);if(!response.ok)throw new Error('DRAFT_TRANSPORT_FAILED');
-      const result=await response.json();if(typeof result?.ok!=='boolean')throw new Error('INVALID_DRAFT_RESPONSE');return result;
-    }finally{clearTimeout(timer);}
+
+    // Mutations are NEVER coalesced and NEVER retried at repository level
+    if (write) {
+      return executeSingleFetch(action, reqFields, true);
+    }
+
+    // Coalesce concurrent identical in-flight read requests across all repository instances
+    const flightKey = buildFlightKey(baseUrl, action, fields, token);
+    if (sharedInFlightReads.has(flightKey)) {
+      return sharedInFlightReads.get(flightKey);
+    }
+
+    const readPromise = (async () => {
+      let attempt = 0;
+      while (true) {
+        attempt++;
+        try {
+          const result = await executeSingleFetch(action, reqFields, isPost);
+          if (result.ok) {
+            return result;
+          }
+          const errCode = result.error?.code;
+          const isRetryable = result.error?.retryable === true || ['LOCK_BUSY', 'TRANSIENT_BACKEND'].includes(errCode);
+          if (isRetryable && attempt <= maxReadRetries) {
+            const delay = readRetryDelayMs * attempt;
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          return result;
+        } catch (err) {
+          const isTransport = err.message === 'DRAFT_TRANSPORT_FAILED' || err.name === 'AbortError';
+          if (isTransport && attempt <= maxReadRetries) {
+            const delay = readRetryDelayMs * attempt;
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          throw err;
+        }
+      }
+    })().finally(() => {
+      sharedInFlightReads.delete(flightKey);
+    });
+
+    sharedInFlightReads.set(flightKey, readPromise);
+    return readPromise;
   }
   const wire=op=>({operationId:op.operationId,clientId:op.clientId,tabId:op.tabId,operationType:op.operationType,entityKey:op.entityKey,
     expectedRevision:op.expectedRevision,payload:op.payload,payloadHash:op.payloadHash});

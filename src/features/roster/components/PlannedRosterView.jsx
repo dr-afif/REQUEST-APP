@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { getHolidayName } from '../../../utils/holidays.js';
+import { projectMoStaff } from '../staffProjection.js';
 
 /**
  * Planned Roster View:
@@ -9,28 +10,41 @@ import { getHolidayName } from '../../../utils/holidays.js';
  */
 export default function PlannedRosterView({
   assignments = [],
-  period
+  period,
+  people = [],
+  teamMembers = [],
+  legacyNames = []
 }) {
-  // Group assignments by Person
+  // Group assignments by MO Person only, ordered by authoritative legacy sequence
   const groupedByPerson = useMemo(() => {
+    const moStaff = projectMoStaff({ people, teamMembers, legacyNames });
     const map = new Map();
+
+    moStaff.forEach((p, idx) => {
+      map.set(p.personId, {
+        personId: p.personId,
+        personNameSnapshot: p.displayName || p.personNameSnapshot || p.personId,
+        dutyDomain: p.dutyDomain || 'MO',
+        dates: {},
+        orderIndex: idx
+      });
+    });
+
     assignments.forEach((a) => {
-      const pId = a.personId;
-      if (!map.has(pId)) {
-        map.set(pId, {
-          personId: pId,
-          personNameSnapshot: a.personNameSnapshot || pId,
-          dutyDomain: a.dutyDomain,
-          dates: {}
-        });
+      if (!a || a.dutyDomain === 'EP') return; // Exclude EP assignments from main MO timetable
+      const targetRow = map.get(a.personId);
+      // STRICT: Only populate existing projected rows; NEVER construct fallback rows from unknown assignments
+      if (targetRow) {
+        targetRow.dates[a.date] = a.shiftCode;
       }
-      map.get(pId).dates[a.date] = a.shiftCode;
     });
-    return Array.from(map.values()).sort((a, b) => {
-      return (a.dutyDomain || '').localeCompare(b.dutyDomain || '') ||
-        (a.personNameSnapshot || '').localeCompare(b.personNameSnapshot || '');
-    });
-  }, [assignments]);
+
+    if (moStaff.diagnostics && !moStaff.diagnostics.ok) {
+      console.warn('[PlannedRoster] Strict legacy MO staff projection diagnostics warning:', moStaff.diagnostics);
+    }
+
+    return Array.from(map.values()).sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  }, [assignments, people, teamMembers, legacyNames]);
 
   // Extract unique sorted dates for header
   const sortedDates = useMemo(() => {

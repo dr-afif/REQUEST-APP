@@ -33,7 +33,9 @@ export default function Phase5RosterContainer({
   onLifecycleStateChange = null,
   undoDurationMs = 10000,
   people = [],
-  allowDraft = false
+  allowDraft = false,
+  teamMembers = [],
+  legacyNames = []
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [viewMode, setViewMode] = useState('CURRENT');
@@ -109,6 +111,9 @@ export default function Phase5RosterContainer({
   const isVerifiedAdmin = Boolean(isAdmin && getAdminSessionToken());
   const adminEmail = getAdminEmail();
 
+  const currentRosterRef = useRef(currentRoster);
+  currentRosterRef.current = currentRoster;
+
   // Check for any unresolved operations needing recovery
   const syncRecoveryState = useCallback((q, p) => {
     if (!q || !p) return;
@@ -176,6 +181,33 @@ export default function Phase5RosterContainer({
         if (gen !== requestGenRef.current) return;
 
         if (draftLoadError) {
+          const isRetryable = draftLoadError === 'LOCK_BUSY' || draftLoadError === 'TRANSIENT_BACKEND';
+          const cachedView = targetQueue.view?.(key);
+          const hasVerifiedBaseline = (cachedView?.baseline?.checksum != null) ||
+            (currentRosterRef.current && currentRosterRef.current.period === targetPeriod && currentRosterRef.current.ok);
+
+          if (isRetryable && hasVerifiedBaseline) {
+            // Part D: Preserve last verified snapshot during retryable refresh failure
+            setDraftReadError(null);
+            setDraftSaveStatus('saved');
+            if (!currentRosterRef.current || currentRosterRef.current.period !== targetPeriod) {
+              const activePeople = (people && people.length > 0) ? people : internalPeople;
+              const assignments = draftCellsToCurrentAssignments({
+                cells: cachedView?.cells || {},
+                people: activePeople
+              });
+              setCurrentRoster({
+                ok: true,
+                period: targetPeriod,
+                state: 'DRAFT',
+                revision: cachedView?.baseline?.revision ?? draftRevision,
+                assignments
+              });
+            }
+            syncRecoveryState(targetQueue, targetPeriod);
+            return;
+          }
+
           setCurrentRoster(null);
           setPlannedRoster(null);
           setAmendmentHistory(null);
@@ -1254,6 +1286,8 @@ export default function Phase5RosterContainer({
           currentAssignments={currentRoster?.assignments || []}
           plannedAssignments={plannedRoster?.assignments || []}
           people={(people && people.length > 0) ? people : internalPeople}
+          teamMembers={teamMembers}
+          legacyNames={legacyNames}
           period={period}
           isAdmin={isVerifiedAdmin}
           lifecycleState={state}
@@ -1296,6 +1330,9 @@ export default function Phase5RosterContainer({
         <PlannedRosterView
           assignments={plannedRoster?.assignments || []}
           period={period}
+          people={(people && people.length > 0) ? people : internalPeople}
+          teamMembers={teamMembers}
+          legacyNames={legacyNames}
         />
       )}
 

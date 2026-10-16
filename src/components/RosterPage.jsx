@@ -2329,7 +2329,7 @@ export default function RosterPage({
     <div className={`mx-auto px-2 sm:px-6 py-6 sm:py-8 md:px-8 animate-fadeIn ${
       isV2Active || activeTab === 'table' ? 'w-full max-w-none' : 'max-w-5xl'
     }`}>
-      {selectedName?.trim().toLowerCase() === 'admin' && rosterPanelEnabled(settings) && Boolean(lifecycleInfo.isEnrolled && lifecycleInfo.period === rosterMonth) && <DraftQueuePanel key={rosterMonth} period={rosterMonth} settings={settings} />}
+      {selectedName?.trim().toLowerCase() === 'admin' && rosterPanelEnabled(settings) && Boolean(lifecycleInfo.isEnrolled && lifecycleInfo.period === rosterMonth) && <DraftQueuePanel key={rosterMonth} period={rosterMonth} settings={settings} allowPolicyWrites={false} />}
       {/* 🧭 Header Details */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -2340,7 +2340,11 @@ export default function RosterPage({
             </h1>
           </div>
           <p className="text-sm text-slate-500 mt-2">
-            Displaying the official finalized schedule for <span className="font-bold text-slate-700">{monthLabel}</span>.
+            {lifecycleInfo?.isEnrolled && lifecycleInfo?.period === rosterMonth && lifecycleInfo?.state === 'DRAFT' ? (
+              <>Editing the draft roster for <span className="font-bold text-slate-700">{monthLabel}</span>.</>
+            ) : (
+              <>Displaying the official finalized schedule for <span className="font-bold text-slate-700">{monthLabel}</span>.</>
+            )}
           </p>
           <div className="mt-4 flex gap-2">
             <button
@@ -2375,6 +2379,7 @@ export default function RosterPage({
               settings={settings}
               isAdmin={isAdmin}
               onLifecycleStateChange={setLifecycleInfo}
+              allowPublish={false}
             />
           </div>
         )}
@@ -2390,6 +2395,8 @@ export default function RosterPage({
             isAdmin={isAdmin}
             onLifecycleStateChange={setLifecycleInfo}
             allowDraft={true}
+            teamMembers={teamMembers}
+            legacyNames={names}
           />
         </div>
       ) : (

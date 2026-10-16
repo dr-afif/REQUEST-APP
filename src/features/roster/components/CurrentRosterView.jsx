@@ -2,6 +2,8 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { getHolidayName } from '../../../utils/holidays.js';
 import QuickShiftPalette from './QuickShiftPalette.jsx';
 import KeyboardShortcutsModal from './KeyboardShortcutsModal.jsx';
+import { projectMoStaff } from '../staffProjection.js';
+import { computePalettePosition } from './palettePosition.js';
 
 /**
  * Current Roster View:
@@ -42,7 +44,9 @@ export default function CurrentRosterView({
   canRedoDraft = false,
   isSavingDraft = false,
   draftSaveStatus = 'saved',
-  isAnyModalOpen = false
+  isAnyModalOpen = false,
+  teamMembers = [],
+  legacyNames = []
 }) {
   const normState = String(lifecycleState || 'PUBLISHED').toUpperCase();
   const isDraft = normState === 'DRAFT';
@@ -85,45 +89,42 @@ export default function CurrentRosterView({
     return map;
   }, [plannedAssignments]);
 
-  // Group current assignments by Person & Domain (including any people from people prop)
+  // Group current assignments by MO Person only, ordered by authoritative legacy sequence
   const groupedByPerson = useMemo(() => {
+    const moStaff = projectMoStaff({ people, teamMembers, legacyNames });
     const map = new Map();
-    (people || []).forEach(p => {
-      const id = p.personId || p.PersonId;
-      const domain = p.dutyDomain || p.role || 'MO';
-      const name = p.name || p.CurrentDisplayName || p.PersonNameSnapshot || id;
-      if (id) {
-        const groupKey = `${id}::${domain}`;
-        map.set(groupKey, {
-          personId: id,
-          personNameSnapshot: name,
-          dutyDomain: domain,
-          cells: {}
-        });
-      }
+
+    moStaff.forEach((p, idx) => {
+      const id = p.personId;
+      const domain = p.dutyDomain || 'MO';
+      const name = p.displayName || p.personNameSnapshot || id;
+      const groupKey = `${id}::${domain}`;
+      map.set(groupKey, {
+        personId: id,
+        personNameSnapshot: name,
+        dutyDomain: domain,
+        cells: {},
+        orderIndex: idx
+      });
     });
 
     currentAssignments.forEach((a) => {
-      const groupKey = `${a.personId}::${a.dutyDomain}`;
-      if (!map.has(groupKey)) {
-        map.set(groupKey, {
-          personId: a.personId,
-          personNameSnapshot: a.personNameSnapshot || getDoctorName(a.personId, a.personId),
-          dutyDomain: a.dutyDomain,
-          cells: {}
-        });
+      if (!a || a.dutyDomain === 'EP') return; // Exclude EP assignments from main MO timetable
+      const domain = a.dutyDomain || 'MO';
+      const groupKey = `${a.personId}::${domain}`;
+      // STRICT: Only populate existing projected rows; NEVER construct fallback rows from unknown assignments
+      const targetRow = map.get(groupKey);
+      if (targetRow) {
+        targetRow.cells[a.date] = a;
       }
-      map.get(groupKey).cells[a.date] = a;
     });
 
-    return Array.from(map.values()).sort((a, b) => {
-      const domainWeight = (d) => (d === 'MO' ? 0 : d === 'EP' ? 1 : 2);
-      const dwA = domainWeight(a.dutyDomain);
-      const dwB = domainWeight(b.dutyDomain);
-      if (dwA !== dwB) return dwA - dwB;
-      return (a.personNameSnapshot || '').localeCompare(b.personNameSnapshot || '');
-    });
-  }, [currentAssignments, people, peopleMap]);
+    if (moStaff.diagnostics && !moStaff.diagnostics.ok) {
+      console.warn('[RosterTimetable] Strict legacy MO staff projection diagnostics warning:', moStaff.diagnostics);
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.orderIndex - b.orderIndex);
+  }, [currentAssignments, people, teamMembers, legacyNames]);
 
   // Extract unique sorted dates for header (generates full month if empty)
   const sortedDates = useMemo(() => {
@@ -257,11 +258,19 @@ export default function CurrentRosterView({
     const btnId = `btn-amend-${cellData.personId}-${cellData.date}-${cellData.dutyDomain}`;
     const btnEl = document.getElementById(btnId);
     let pos = { top: '35%', left: '40%' };
+
     if (btnEl) {
       const rect = btnEl.getBoundingClientRect();
-      const top = Math.min(window.innerHeight - 240, Math.max(10, rect.bottom + 6));
-      const left = Math.min(window.innerWidth - 300, Math.max(10, rect.left));
-      pos = { top: `${top}px`, left: `${left}px` };
+
+      pos = computePalettePosition({
+        anchorRect: rect,
+        popupWidth: 288,
+        popupHeight: 260,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        margin: 8,
+        gap: 8
+      });
     }
     setPaletteTargetCell(cellData);
     setPaletteFilter(initialFilt);

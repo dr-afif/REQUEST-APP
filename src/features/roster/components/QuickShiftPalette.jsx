@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export const QUICK_SHIFTS = [
   { code: 'AM', label: 'AM', category: 'day', keyHint: 'A' },
@@ -94,7 +95,7 @@ export default function QuickShiftPalette({
 
   if (!isOpen || !targetCell) return null;
 
-  return (
+  return createPortal(
     <div
       ref={containerRef}
       id="quick-shift-palette"
@@ -181,6 +182,7 @@ export default function QuickShiftPalette({
         <span>Arrows: Pick</span>
         <span>Esc: Cancel</span>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

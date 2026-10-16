@@ -1,10 +1,27 @@
 import guidance from '../guidance.js';
 import compatibility from '../compatibility.js';
 import {sha256} from '../queue/draftQueue.js';
+import {getAdminSessionToken as defaultGetAdminSessionToken} from '../auth/adminAuth.js';
 
-export function createGuidanceRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000,getAdminSessionToken=null,getIdToken=null}={}) {
+export function createGuidanceRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT_URL,fetcher=globalThis.fetch,timeoutMs=20000,getAdminSessionToken=defaultGetAdminSessionToken,getIdToken=null,maxReadRetries=2,readRetryDelayMs=250}={}) {
+  const inFlightReads = new Map();
+
+  async function executeSingleFetch(action, reqFields, isPost) {
+    if(!baseUrl)throw new Error('GUIDANCE_ENDPOINT_UNCONFIGURED');
+    const url=new URL(baseUrl),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
+    const options={method:isPost?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
+    if(isPost){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...reqFields});}
+    else for(const [key,value]of Object.entries({action,...reqFields}))url.searchParams.set(key,value);
+    try{
+      const response=await fetcher(url.toString(),options);
+      if(!response.ok)throw new Error('GUIDANCE_TRANSPORT_FAILED');
+      const result=await response.json();
+      if(typeof result?.ok!=='boolean')throw new Error('INVALID_GUIDANCE_RESPONSE');
+      return result;
+    }finally{clearTimeout(timer);}
+  }
+
   async function request(action,fields={},write=false){
-    if(!baseUrl)throw new Error('GUIDANCE_ENDPOINT_UNCONFIGURED');const url=new URL(baseUrl),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
     let token = null;
     try {
       if (typeof getAdminSessionToken === 'function') token = await getAdminSessionToken();
@@ -13,10 +30,49 @@ export function createGuidanceRepository({baseUrl=import.meta.env?.VITE_APPS_SCR
     } catch (_) {}
     const reqFields = token ? { ...fields, adminSessionToken: token } : fields;
     const isPost = write || (Boolean(token) && ['rosterv2offpolicies','rosterv2guidanceschema'].includes(action));
-    const options={method:isPost?'POST':'GET',signal:controller.signal,cache:'no-store',headers:{Accept:'application/json'}};
-    if(isPost){options.headers['Content-Type']='text/plain;charset=UTF-8';options.body=JSON.stringify({action,...reqFields});}
-    else for(const [key,value]of Object.entries({action,...reqFields}))url.searchParams.set(key,value);
-    try{const response=await fetcher(url.toString(),options);if(!response.ok)throw new Error('GUIDANCE_TRANSPORT_FAILED');const result=await response.json();if(typeof result?.ok!=='boolean')throw new Error('INVALID_GUIDANCE_RESPONSE');return result;}finally{clearTimeout(timer);}
+
+    if (write) {
+      return executeSingleFetch(action, reqFields, true);
+    }
+
+    const flightKey = `${action}:${JSON.stringify(fields)}`;
+    if (inFlightReads.has(flightKey)) {
+      return inFlightReads.get(flightKey);
+    }
+
+    const readPromise = (async () => {
+      let attempt = 0;
+      while (true) {
+        attempt++;
+        try {
+          const result = await executeSingleFetch(action, reqFields, isPost);
+          if (result.ok) {
+            return result;
+          }
+          const errCode = result.error?.code;
+          const isRetryable = result.error?.retryable === true || ['LOCK_BUSY', 'TRANSIENT_BACKEND'].includes(errCode);
+          if (isRetryable && attempt <= maxReadRetries) {
+            const delay = readRetryDelayMs * attempt;
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          return result;
+        } catch (err) {
+          const isTransport = err.message === 'GUIDANCE_TRANSPORT_FAILED' || err.name === 'AbortError';
+          if (isTransport && attempt <= maxReadRetries) {
+            const delay = readRetryDelayMs * attempt;
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          throw err;
+        }
+      }
+    })().finally(() => {
+      inFlightReads.delete(flightKey);
+    });
+
+    inFlightReads.set(flightKey, readPromise);
+    return readPromise;
   }
   const wire=operation=>({operationId:operation.operationId,clientId:operation.clientId,tabId:operation.tabId,operationType:operation.operationType,
     entityKey:operation.entityKey,expectedRevision:operation.expectedRevision,payload:operation.payload,payloadHash:operation.payloadHash});

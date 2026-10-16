@@ -76,7 +76,20 @@ export class DraftQueue {
   discardUnsafe(id){const intent=this.unsafe.get(id);if(intent?.persisting)return;this.unsafe.delete(id);if(!this.unsafe.size)this.localError=null;this.emit();}
   async retryPersistence(){for(const intent of [...this.unsafe.values()])await this.persistIntent(intent);await this.reload();this.localError=null;this.emit();}
   async verifySnapshot(key,snapshot){if(!snapshot.ok)throw protocol.fail(snapshot.error.code);validateCells(key,snapshot.cells);if(snapshot.entityKey!==key||!Number.isSafeInteger(snapshot.revision)||snapshot.revision<0||!snapshot.cells||snapshot.checksum!==await sha256(protocol.canonical(snapshot.cells)))throw new Error('INVALID_SNAPSHOT');return snapshot;}
-  async refresh(key){const snapshot=await this.verifySnapshot(key,await this.repository.read(key));return this.change(key,e=>mergeSnapshot(e,snapshot));}
+  refresh(key){
+    if(!this._inFlightRefreshes)this._inFlightRefreshes=new Map();
+    if(this._inFlightRefreshes.has(key))return this._inFlightRefreshes.get(key);
+    const promise=(async()=>{
+      try{
+        const snapshot=await this.verifySnapshot(key,await this.repository.read(key));
+        return await this.change(key,e=>mergeSnapshot(e,snapshot));
+      }finally{
+        this._inFlightRefreshes.delete(key);
+      }
+    })();
+    this._inFlightRefreshes.set(key,promise);
+    return promise;
+  }
   async tick(){if(this.stopped||!this.enabled()||!this.locks||!this.online())return;await this.reload();
     await Promise.all([...this.entities.keys()].map(key=>this.locks.request(this.store.name+':'+key,{ifAvailable:true},lock=>lock?this.process(key):undefined)));
   }
