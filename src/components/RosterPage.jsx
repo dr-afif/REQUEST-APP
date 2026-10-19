@@ -1,13 +1,14 @@
 import DraftQueuePanel, { rosterPanelEnabled } from '../features/roster/components/DraftQueuePanel.jsx';
 import LifecycleControls from '../features/roster/components/LifecycleControls.jsx';
 import Phase5RosterContainer from '../features/roster/components/Phase5RosterContainer.jsx';
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 import { mapName } from '../utils/adapters';
 import { openRosterPdfExport } from '../utils/rosterPdfExport';
 import { getHolidayName } from '../utils/holidays';
 import { APP_ICONS } from '../constants/icons';
+import { projectNormalizedAssignmentsToCalendarRows } from '../features/roster/data/calendarProjection.js';
 
 const formatEmergencyPhysicianName = (entry) => {
   const rawName = typeof entry === 'string' ? entry : entry?.name || '';
@@ -658,6 +659,7 @@ export default function RosterPage({
   settings = {},
   onUpdateSetting,
   rosterMonth: propRosterMonth,
+  onV2LiveSnapshotChange = null,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCommentDetail, setActiveCommentDetail] = useState(null);
@@ -752,6 +754,98 @@ export default function RosterPage({
       revision: null,
     });
   }, [rosterMonth]);
+
+  // V2 Authoritative Live Snapshot (Strictly period-keyed, updated via Phase5RosterContainer)
+  const [v2LiveSnapshot, setV2LiveSnapshot] = useState({
+    period: rosterMonth,
+    state: null,
+    revision: null,
+    assignments: [],
+    isLoaded: false,
+    isSaving: false,
+    draftSaveStatus: null
+  });
+
+  useEffect(() => {
+    setV2LiveSnapshot({
+      period: rosterMonth,
+      state: null,
+      revision: null,
+      assignments: [],
+      isLoaded: false,
+      isSaving: false,
+      draftSaveStatus: null
+    });
+  }, [rosterMonth]);
+
+  // Stable callback passed to Phase5RosterContainer
+  const handleLiveSnapshotChange = useCallback((snapshot) => {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    // Strict period identity guard: disregard cross-month or stale period responses
+    if (snapshot.period !== rosterMonth) return;
+
+    setV2LiveSnapshot((prev) => {
+      // Avoid duplicate renders when identical snapshot is received
+      if (
+        prev.period === snapshot.period &&
+        prev.state === snapshot.state &&
+        prev.revision === snapshot.revision &&
+        prev.isLoaded === snapshot.isLoaded &&
+        prev.isSaving === snapshot.isSaving &&
+        prev.draftSaveStatus === snapshot.draftSaveStatus
+      ) {
+        if (prev.assignments === snapshot.assignments) return prev;
+        if (
+          Array.isArray(prev.assignments) &&
+          Array.isArray(snapshot.assignments) &&
+          prev.assignments.length === snapshot.assignments.length
+        ) {
+          const isIdentical = prev.assignments.every((a, i) => {
+            const b = snapshot.assignments[i];
+            return (
+              a === b ||
+              (a?.assignmentId === b?.assignmentId &&
+                a?.personId === b?.personId &&
+                a?.date === b?.date &&
+                a?.shiftCode === b?.shiftCode &&
+                a?.dutyDomain === b?.dutyDomain &&
+                a?.rawShift === b?.rawShift)
+            );
+          });
+          if (isIdentical) return prev;
+        }
+      }
+
+      return {
+        period: snapshot.period,
+        state: snapshot.state ?? null,
+        revision: snapshot.revision ?? null,
+        assignments: Array.isArray(snapshot.assignments) ? snapshot.assignments : [],
+        isLoaded: Boolean(snapshot.isLoaded),
+        isSaving: Boolean(snapshot.isSaving),
+        draftSaveStatus: snapshot.draftSaveStatus ?? null
+      };
+    });
+  }, [rosterMonth]);
+
+  // In-memory derivation of calendar-compatible rows from live V2 snapshot (DO NOT render yet)
+  const derivedV2CalendarRows = useMemo(() => {
+    if (!v2LiveSnapshot.isLoaded || v2LiveSnapshot.period !== rosterMonth || !v2LiveSnapshot.assignments.length) {
+      return [];
+    }
+    try {
+      return projectNormalizedAssignmentsToCalendarRows(v2LiveSnapshot.assignments);
+    } catch (_) {
+      return [];
+    }
+  }, [v2LiveSnapshot, rosterMonth]);
+
+  useEffect(() => {
+    onV2LiveSnapshotChange?.({
+      v2LiveSnapshot,
+      derivedV2CalendarRows
+    });
+  }, [v2LiveSnapshot, derivedV2CalendarRows, onV2LiveSnapshotChange]);
 
   const isPeriodLocked = Boolean(
     lifecycleInfo.isEnrolled &&
@@ -2394,6 +2488,7 @@ export default function RosterPage({
             settings={settings}
             isAdmin={isAdmin}
             onLifecycleStateChange={setLifecycleInfo}
+            onLiveSnapshotChange={handleLiveSnapshotChange}
             allowDraft={true}
             teamMembers={teamMembers}
             legacyNames={names}
