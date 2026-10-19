@@ -31,6 +31,7 @@ export default function Phase5RosterContainer({
   queue: externalQueue = null,
   runtimeFactory = draftRuntime,
   onLifecycleStateChange = null,
+  onLiveSnapshotChange = null,
   undoDurationMs = 10000,
   people = [],
   allowDraft = false,
@@ -113,6 +114,10 @@ export default function Phase5RosterContainer({
 
   const currentRosterRef = useRef(currentRoster);
   currentRosterRef.current = currentRoster;
+
+  const onLiveSnapshotChangeRef = useRef(onLiveSnapshotChange);
+  onLiveSnapshotChangeRef.current = onLiveSnapshotChange;
+  const lastEmittedSnapshotRef = useRef(null);
 
   // Check for any unresolved operations needing recovery
   const syncRecoveryState = useCallback((q, p) => {
@@ -412,6 +417,76 @@ export default function Phase5RosterContainer({
       }
     });
   }, [queue, period, loadAuthoritativeData]);
+
+  // Read-only live snapshot bridge effect
+  useEffect(() => {
+    if (!onLiveSnapshotChangeRef.current) return;
+
+    const isCurrentPeriod = Boolean(currentRoster && currentRoster.period === period);
+    const isStateLoaded = !loading && !draftReadError && Boolean(isCurrentPeriod && currentRoster?.ok);
+
+    const snapshot = {
+      period,
+      state: isStateLoaded
+        ? String(lifecycle?.state || currentRoster?.state || 'DRAFT').toUpperCase()
+        : (lifecycle?.state ? String(lifecycle.state).toUpperCase() : null),
+      revision: isStateLoaded
+        ? (currentRoster?.revision ?? lifecycle?.revision ?? 0)
+        : (lifecycle?.revision ?? null),
+      assignments: isStateLoaded ? (currentRoster?.assignments || []) : [],
+      isLoaded: isStateLoaded,
+      isSaving: Boolean(isSavingDraft),
+      draftSaveStatus: draftSaveStatus || (isStateLoaded ? 'saved' : null)
+    };
+
+    const prev = lastEmittedSnapshotRef.current;
+    let isSame = false;
+    if (prev) {
+      if (
+        prev.period === snapshot.period &&
+        prev.state === snapshot.state &&
+        prev.revision === snapshot.revision &&
+        prev.isLoaded === snapshot.isLoaded &&
+        prev.isSaving === snapshot.isSaving &&
+        prev.draftSaveStatus === snapshot.draftSaveStatus
+      ) {
+        if (prev.assignments === snapshot.assignments) {
+          isSame = true;
+        } else if (
+          Array.isArray(prev.assignments) &&
+          Array.isArray(snapshot.assignments) &&
+          prev.assignments.length === snapshot.assignments.length
+        ) {
+          isSame = prev.assignments.every((a, i) => {
+            const b = snapshot.assignments[i];
+            return (
+              a === b ||
+              (a?.assignmentId === b?.assignmentId &&
+                a?.personId === b?.personId &&
+                a?.date === b?.date &&
+                a?.shiftCode === b?.shiftCode &&
+                a?.dutyDomain === b?.dutyDomain &&
+                a?.rawShift === b?.rawShift)
+            );
+          });
+        }
+      }
+    }
+
+    if (!isSame) {
+      lastEmittedSnapshotRef.current = snapshot;
+      onLiveSnapshotChangeRef.current(snapshot);
+    }
+  }, [
+    period,
+    loading,
+    draftReadError,
+    lifecycle,
+    currentRoster,
+    isSavingDraft,
+    draftSaveStatus,
+    onLiveSnapshotChange
+  ]);
 
   // Handle Phase 5 amendment submission (ADMIN_CORRECTION or SWAP)
   const handleAmendmentSubmit = useCallback(async (payload) => {
