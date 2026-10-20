@@ -8,7 +8,10 @@ import { mapName } from '../utils/adapters';
 import { openRosterPdfExport } from '../utils/rosterPdfExport';
 import { getHolidayName } from '../utils/holidays';
 import { APP_ICONS } from '../constants/icons';
-import { projectNormalizedAssignmentsToCalendarRows } from '../features/roster/data/calendarProjection.js';
+import {
+  projectNormalizedAssignmentsToCalendarRows,
+  filterMoCalendarRows
+} from '../features/roster/data/calendarProjection.js';
 
 const formatEmergencyPhysicianName = (entry) => {
   const rawName = typeof entry === 'string' ? entry : entry?.name || '';
@@ -847,6 +850,50 @@ export default function RosterPage({
     });
   }, [v2LiveSnapshot, derivedV2CalendarRows, onV2LiveSnapshotChange]);
 
+  const isPostCutoverPeriod = Boolean(
+    rosterMonth && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(rosterMonth) && rosterMonth >= '2026-11'
+  );
+
+  const isV2PeriodActive = Boolean(
+    (settings?.roster_workspace_v2_enabled === true || String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true') &&
+    lifecycleInfo.isEnrolled &&
+    (!lifecycleInfo.period || lifecycleInfo.period === rosterMonth) &&
+    ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
+    settings?.roster_v2_read_enabled !== false
+  );
+
+  // Unified effective calendar rows:
+  // For post-cutover periods (>= 2026-11): MO rows come strictly from live snapshot when loaded and period matches; EP rows from masterRoster EP duties for this month.
+  // For pre-cutover periods (< 2026-11): unaltered masterRoster (unless V2 period is active).
+  const effectiveCalendarRows = useMemo(() => {
+    if (isPostCutoverPeriod) {
+      const moRows = (v2LiveSnapshot.isLoaded && v2LiveSnapshot.period === rosterMonth)
+        ? filterMoCalendarRows(derivedV2CalendarRows)
+        : [];
+      const epRows = masterRoster.filter(r => {
+        const iso = toIsoDate(r.Date || r.date);
+        if (!iso || !iso.startsWith(rosterMonth)) return false;
+        const s = String(r.Shift || r.shift || '').trim().toUpperCase();
+        return s === 'EP_OFFICE_HOUR' || s === 'EP_ONCALL';
+      });
+      return [...moRows, ...epRows];
+    }
+
+    if (!isV2PeriodActive) {
+      return masterRoster;
+    }
+    const moRows = (v2LiveSnapshot.isLoaded && v2LiveSnapshot.period === rosterMonth)
+      ? filterMoCalendarRows(derivedV2CalendarRows)
+      : [];
+    const epRows = masterRoster.filter(r => {
+      const iso = toIsoDate(r.Date || r.date);
+      if (!iso || !iso.startsWith(rosterMonth)) return false;
+      const s = String(r.Shift || r.shift || '').trim().toUpperCase();
+      return s === 'EP_OFFICE_HOUR' || s === 'EP_ONCALL';
+    });
+    return [...moRows, ...epRows];
+  }, [isPostCutoverPeriod, isV2PeriodActive, masterRoster, v2LiveSnapshot.isLoaded, v2LiveSnapshot.period, rosterMonth, derivedV2CalendarRows]);
+
   const isPeriodLocked = Boolean(
     lifecycleInfo.isEnrolled &&
     lifecycleInfo.period === rosterMonth &&
@@ -854,7 +901,7 @@ export default function RosterPage({
   );
 
   useEffect(() => {
-    if (isPeriodLocked) {
+    if (isPeriodLocked || isV2PeriodActive || isPostCutoverPeriod) {
       setIsEditMode(false);
       setIsStandbyEditMode(false);
       setIsExtendedEditMode(false);
@@ -862,7 +909,7 @@ export default function RosterPage({
       setActiveEpStamp(null);
       setEditedGrid({});
     }
-  }, [isPeriodLocked]);
+  }, [isPeriodLocked, isV2PeriodActive, isPostCutoverPeriod]);
 
   // Roster Memo Planner Modal States
   const [isMemoModalOpen, setIsMemoModalOpen] = useState(false);
@@ -1044,10 +1091,10 @@ export default function RosterPage({
       : 'bg-slate-50 text-slate-700 border-slate-300';
   };
 
-  // 1.1 Group masterRoster by Name and Date for Table View (allowing all shift types)
+  // 1.1 Group effectiveCalendarRows by Name and Date for Calendar/Table View
   const doctorRosterMap = useMemo(() => {
     const map = new Map();
-    masterRoster.forEach((row) => {
+    effectiveCalendarRows.forEach((row) => {
       const rawDate = row.Date || row.date;
       const dateStr = toIsoDate(rawDate);
       const nameRaw = mapName(row.Name || row.name || '');
@@ -1071,7 +1118,7 @@ export default function RosterPage({
       }
     });
     return map;
-  }, [masterRoster]);
+  }, [effectiveCalendarRows]);
 
 
   const handlePrevMonth = () => {
@@ -1134,11 +1181,11 @@ export default function RosterPage({
     return list;
   }, [rosterMonth]);
 
-  // 4. Group baseline masterRoster by Date and Shift (AM, PM, NIGHT)
+  // 4. Group baseline effectiveCalendarRows by Date and Shift (AM, PM, NIGHT)
   const rosterGrid = useMemo(() => {
     const grid = {};
     
-    masterRoster.forEach((row) => {
+    effectiveCalendarRows.forEach((row) => {
       const rawDate = row.Date || row.date;
       const dateStr = toIsoDate(rawDate);
       const nameRaw = mapName(row.Name || row.name || '');
@@ -1160,10 +1207,10 @@ export default function RosterPage({
       }
     });
 
-    // For upcoming months, if a doctor has an active request for AM, PM, or NIGHT, and is not in masterRoster, auto-populate
-    if (isUpcomingMonth && requestsRosterMap) {
+    // For upcoming months, if a doctor has an active request for AM, PM, or NIGHT, and is not in effectiveCalendarRows, auto-populate (pre-cutover legacy periods only)
+    if (!isPostCutoverPeriod && !isV2PeriodActive && isUpcomingMonth && requestsRosterMap) {
       const assignedOnDate = {}; // dateStr -> set of nameKeys
-      masterRoster.forEach((row) => {
+      effectiveCalendarRows.forEach((row) => {
         const rawDate = row.Date || row.date;
         const dateStr = toIsoDate(rawDate);
         const nameRaw = mapName(row.Name || row.name || '');
@@ -1197,7 +1244,7 @@ export default function RosterPage({
     }
 
     return grid;
-  }, [masterRoster, isUpcomingMonth, requestsRosterMap, names]);
+  }, [effectiveCalendarRows, isPostCutoverPeriod, isV2PeriodActive, isUpcomingMonth, requestsRosterMap, names]);
 
   const getEpAssignmentText = (dateStr, epKey) => {
     if (isEditMode) {
@@ -1298,8 +1345,8 @@ export default function RosterPage({
       });
     });
 
-    // If upcoming month, pre-populate empty roster slots with active requests
-    if (isUpcomingMonth) {
+    // If upcoming month, pre-populate empty roster slots with active requests (pre-cutover legacy only)
+    if (!isPostCutoverPeriod && isUpcomingMonth) {
       names.forEach((docName) => {
         const docKey = normalizeForComparison(docName);
         const docRequests = requestsRosterMap.get(docKey);
@@ -1343,7 +1390,7 @@ export default function RosterPage({
   };
 
   const toggleEditMode = () => {
-    if (isPeriodLocked) return;
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1361,7 +1408,7 @@ export default function RosterPage({
   };
 
   const toggleStandbyEditMode = () => {
-    if (isPeriodLocked) return;
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1380,7 +1427,7 @@ export default function RosterPage({
   };
 
   const toggleExtendedEditMode = () => {
-    if (isPeriodLocked) return;
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1399,7 +1446,7 @@ export default function RosterPage({
   };
 
   const toggleExcelTableEditMode = () => {
-    if (isPeriodLocked) return;
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     if (isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) {
       if (confirm('Discard unsaved changes?')) {
         setIsEditMode(false);
@@ -1436,7 +1483,7 @@ export default function RosterPage({
   }, [activeEpStamp]);
 
   const handleBatchFillWeekdays = (doctorName) => {
-    if (isPeriodLocked || !doctorName || doctorName === '__CLEAR__') return;
+    if (isPeriodLocked || isPostCutoverPeriod || !doctorName || doctorName === '__CLEAR__') return;
     const confirmMsg = `Assign ${doctorName} to all weekdays (Mon-Fri) Office Hour for ${monthLabel}?`;
     if (!confirm(confirmMsg)) return;
 
@@ -1456,7 +1503,7 @@ export default function RosterPage({
   };
 
   const handleBatchFillWeekends = (doctorName) => {
-    if (isPeriodLocked || !doctorName || doctorName === '__CLEAR__') return;
+    if (isPeriodLocked || isPostCutoverPeriod || !doctorName || doctorName === '__CLEAR__') return;
     const confirmMsg = `Assign ${doctorName} to all weekends (Sat-Sun) On Call for ${monthLabel}?`;
     if (!confirm(confirmMsg)) return;
 
@@ -1540,7 +1587,7 @@ export default function RosterPage({
   }, [activeCommentDetail?.doctorName, activeCommentDetail?.dateStr, activeCommentDetail?.val]);
 
   const handleDirectShiftReassignment = async (isClearing = false) => {
-    if (isPeriodLocked || !activeCommentDetail || !onUploadMasterRoster) return;
+    if (isPeriodLocked || isPostCutoverPeriod || !activeCommentDetail || !onUploadMasterRoster) return;
     const { doctorName, dateStr } = activeCommentDetail;
     const normalizedTargetName = normalizeForComparison(doctorName);
     const targetDate = dateStr;
@@ -1607,6 +1654,7 @@ export default function RosterPage({
   };
 
   const handleToggleStandby = (dateStr, doctorName) => {
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     setEditedGrid((prev) => {
       const dayData = prev[dateStr] || {};
       const normalizedName = normalizeForComparison(doctorName);
@@ -1662,6 +1710,7 @@ export default function RosterPage({
   };
 
   const handleToggleExtended = (dateStr, doctorName) => {
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     setEditedGrid((prev) => {
       const dayData = prev[dateStr] || {};
       const normalizedName = normalizeForComparison(doctorName);
@@ -1717,6 +1766,7 @@ export default function RosterPage({
   };
 
   const handleCellChange = (dateStr, shiftCol, value) => {
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     setEditedGrid(prev => {
       const dayData = prev[dateStr] || { AM: '', PM: '', NIGHT: '' };
       
@@ -1756,6 +1806,7 @@ export default function RosterPage({
 
   // 1.3 Handle Table View dropdown select shifts change
   const handleTableEditCellChange = (dateStr, doctorName, newShift) => {
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     setEditedGrid((prev) => {
       const dayData = prev[dateStr] || { AM: '', PM: '', NIGHT: '' };
       const normalizedName = normalizeForComparison(doctorName);
@@ -1933,7 +1984,7 @@ export default function RosterPage({
           val = getEditingShift(day.dateStr, nameMapped);
         } else {
           val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
-          if (!val && isUpcomingMonth) {
+          if (!val && !isPostCutoverPeriod && isUpcomingMonth) {
             const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
             if (reqData) {
               val = reqData.shift;
@@ -2005,7 +2056,7 @@ export default function RosterPage({
       tallyMap: dateMap,
       shifts: sortedShifts,
     };
-  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, dropdownShifts, teamMembers]);
+  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, isPostCutoverPeriod, dropdownShifts, teamMembers]);
 
   // Per-member shift tally for the current month
   // Tracks: AM, PM, NIGHT, and other configured shifts dynamically (with ON/ON1/ON2/N consolidated to NIGHT), plus TOTAL LEAVES
@@ -2038,7 +2089,7 @@ export default function RosterPage({
           val = getEditingShift(day.dateStr, nameMapped);
         } else {
           val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
-          if (!val && isUpcomingMonth) {
+          if (!val && !isPostCutoverPeriod && isUpcomingMonth) {
             const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
             if (reqData) val = reqData.shift;
           }
@@ -2072,7 +2123,7 @@ export default function RosterPage({
     });
 
     return Array.from(memberMap.values());
-  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, memberTallyColumns]);
+  }, [daysInMonthList, names, isEditMode, isExcelTableEditMode, editedGrid, doctorRosterMap, requestsRosterMap, isUpcomingMonth, isPostCutoverPeriod, memberTallyColumns]);
 
   const handleKeyDown = (e, dateStr, shiftCol, dayIndex, shiftIndex) => {
     const key = e.key;
@@ -2099,6 +2150,7 @@ export default function RosterPage({
 
   const handlePaste = (e, startDayIndex, startShiftIndex) => {
     e.preventDefault();
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
 
@@ -2170,6 +2222,7 @@ export default function RosterPage({
 
   const handleTablePaste = (e, startDayIndex, startNameIndex) => {
     e.preventDefault();
+    if (isPeriodLocked || isPostCutoverPeriod) return;
     const pasteText = e.clipboardData.getData('text');
     if (!pasteText) return;
 
@@ -2288,7 +2341,7 @@ export default function RosterPage({
   };
 
   const handleSave = async () => {
-    if (isPeriodLocked) return;
+    if (isPeriodLocked || isPostCutoverPeriod) return;
 
     const canonicalMonth = rosterMonth;
     if (!canonicalMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
@@ -2365,7 +2418,7 @@ export default function RosterPage({
               val = getEditingShift(day.dateStr, nameMapped);
             } else {
               val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
-              if (!val && isUpcomingMonth) {
+              if (!val && !isPostCutoverPeriod && isUpcomingMonth) {
                 const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
                 if (reqData) {
                   val = reqData.shift;
@@ -2413,11 +2466,7 @@ export default function RosterPage({
     }
   };
 
-  const isV2Active = Boolean(
-    lifecycleInfo.isEnrolled &&
-    ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
-    settings?.roster_v2_read_enabled !== false
-  );
+  const isV2Active = isV2PeriodActive;
 
   return (
     <div className={`mx-auto px-2 sm:px-6 py-6 sm:py-8 md:px-8 animate-fadeIn ${
@@ -2479,27 +2528,12 @@ export default function RosterPage({
         )}
       </div>
 
-      {/* Phase 5 V2 Authoritative Roster (Current / Planned / Changes) for Enrolled Periods */}
-      {Boolean(settings?.roster_workspace_v2_enabled === true || String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true') &&
-      lifecycleInfo.isEnrolled && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false ? (
-        <div className="mb-6">
-          <Phase5RosterContainer
-            period={rosterMonth}
-            settings={settings}
-            isAdmin={isAdmin}
-            onLifecycleStateChange={setLifecycleInfo}
-            onLiveSnapshotChange={handleLiveSnapshotChange}
-            allowDraft={true}
-            teamMembers={teamMembers}
-            legacyNames={names}
-          />
-        </div>
-      ) : (
-        <>
-          {/* 🧭 Tab Control */}
+      {/* 🧭 Tab Control */}
       <div className="flex justify-between items-center border-b border-slate-200 mb-6 select-none">
         <div className="flex">
           <button
+            id="tab-btn-calendar"
+            data-testid="tab-btn-calendar"
             onClick={() => setActiveTab('calendar')}
             className={`py-2.5 px-4 text-xs sm:text-sm font-bold border-b-2 transition-all -mb-px ${
               activeTab === 'calendar'
@@ -2510,6 +2544,8 @@ export default function RosterPage({
             📅 Calendar View
           </button>
           <button
+            id="tab-btn-table"
+            data-testid="tab-btn-table"
             onClick={() => setActiveTab('table')}
             className={`py-2.5 px-4 text-xs sm:text-sm font-bold border-b-2 transition-all -mb-px ${
               activeTab === 'table'
@@ -2533,7 +2569,7 @@ export default function RosterPage({
                 >
                   PDF Export
                 </button>
-                {activeTab === 'table' && (
+                {activeTab === 'table' && !isPostCutoverPeriod && !isV2PeriodActive && (
                   <button
                     type="button"
                     onClick={() => setIsMemoModalOpen(true)}
@@ -2544,105 +2580,107 @@ export default function RosterPage({
                 )}
               </>
             )}
-            {isPeriodLocked ? (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 shadow-sm" role="status">
-                <span>🔒</span>
-                <span>
-                  {lifecycleInfo.state === 'CLOSED'
-                    ? 'Period Closed (Read-Only)'
-                    : lifecycleInfo.state === 'AMENDED'
-                    ? 'Amended Roster'
-                    : 'Planned Snapshot Locked'}
-                </span>
-              </div>
-            ) : (
-              <>
-                {!isStandbyEditMode && !isExtendedEditMode && (
-              <>
-                {!isExcelTableEditMode && (
-                  <button
-                    onClick={toggleEditMode}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                      isEditMode 
-                        ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
-                        : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
-                    }`}
-                  >
-                    {isEditMode 
-                      ? '✕ Cancel Edit' 
-                      : activeTab === 'table' 
-                        ? '✏️ Edit (Dropdown)' 
-                        : '✏️ Edit Roster'}
-                  </button>
-                )}
-                {activeTab === 'table' && !isEditMode && (
-                  <button
-                    onClick={toggleExcelTableEditMode}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                      isExcelTableEditMode 
-                        ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
-                        : 'bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100'
-                    }`}
-                  >
-                    {isExcelTableEditMode ? '✕ Cancel Copy/Paste' : '📋 Edit (Copy/Paste)'}
-                  </button>
-                )}
-              </>
-            )}
-            {!isEditMode && !isExtendedEditMode && !isExcelTableEditMode && (
-              <button
-                onClick={toggleStandbyEditMode}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                  isStandbyEditMode 
-                    ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
-                    : 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100'
-                }`}
-              >
-                {isStandbyEditMode ? '✕ Cancel Standby' : '⭐ Edit Standby'}
-              </button>
-            )}
-            {!isEditMode && !isStandbyEditMode && !isExcelTableEditMode && (
-              <button
-                onClick={toggleExtendedEditMode}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                  isExtendedEditMode 
-                    ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100' 
-                    : 'bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100'
-                }`}
-              >
-                {isExtendedEditMode ? '✕ Cancel Extended' : '✨ Edit Extended'}
-              </button>
-            )}
-            {(isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) && (
-              <>
-                {(isEditMode || isExcelTableEditMode) && (
-                  <button
-                    onClick={() => setAllowDoubleShift(!allowDoubleShift)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
-                      allowDoubleShift 
-                        ? 'bg-rose-50 text-rose-700 border border-rose-300 ring-2 ring-rose-200' 
-                        : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
-                    }`}
-                    title="Allow a person to be assigned to multiple shifts on the same day"
-                  >
-                    {allowDoubleShift ? '🔓 Double Shift Allowed' : '🔒 Prevent Double Booking'}
-                  </button>
-                )}
-                <button
-                  onClick={handleSave}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-70"
-                >
-                  💾 Save Changes
-                </button>
-              </>
-            )}
-              </>
+            {!isPostCutoverPeriod && !isV2PeriodActive && (
+              isPeriodLocked ? (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 shadow-sm" role="status">
+                  <span>🔒</span>
+                  <span>
+                    {lifecycleInfo.state === 'CLOSED'
+                      ? 'Period Closed (Read-Only)'
+                      : lifecycleInfo.state === 'AMENDED'
+                      ? 'Amended Roster'
+                      : 'Planned Snapshot Locked'}
+                  </span>
+                </div>
+              ) : (
+                <>
+                  {!isStandbyEditMode && !isExtendedEditMode && (
+                    <>
+                      {!isExcelTableEditMode && (
+                        <button
+                          onClick={toggleEditMode}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                            isEditMode
+                              ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100'
+                              : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
+                          }`}
+                        >
+                          {isEditMode
+                            ? '✕ Cancel Edit'
+                            : activeTab === 'table'
+                              ? '✏️ Edit (Dropdown)'
+                              : '✏️ Edit Roster'}
+                        </button>
+                      )}
+                      {activeTab === 'table' && !isEditMode && (
+                        <button
+                          onClick={toggleExcelTableEditMode}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                            isExcelTableEditMode
+                              ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100'
+                              : 'bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100'
+                          }`}
+                        >
+                          {isExcelTableEditMode ? '✕ Cancel Copy/Paste' : '📋 Edit (Copy/Paste)'}
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {!isEditMode && !isExtendedEditMode && !isExcelTableEditMode && (
+                    <button
+                      onClick={toggleStandbyEditMode}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                        isStandbyEditMode
+                          ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100'
+                          : 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100'
+                      }`}
+                    >
+                      {isStandbyEditMode ? '✕ Cancel Standby' : '⭐ Edit Standby'}
+                    </button>
+                  )}
+                  {!isEditMode && !isStandbyEditMode && !isExcelTableEditMode && (
+                    <button
+                      onClick={toggleExtendedEditMode}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                        isExtendedEditMode
+                          ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100'
+                          : 'bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100'
+                      }`}
+                    >
+                      {isExtendedEditMode ? '✕ Cancel Extended' : '✨ Edit Extended'}
+                    </button>
+                  )}
+                  {(isEditMode || isStandbyEditMode || isExtendedEditMode || isExcelTableEditMode) && (
+                    <>
+                      {(isEditMode || isExcelTableEditMode) && (
+                        <button
+                          onClick={() => setAllowDoubleShift(!allowDoubleShift)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm ${
+                            allowDoubleShift
+                              ? 'bg-rose-50 text-rose-700 border border-rose-300 ring-2 ring-rose-200'
+                              : 'bg-white text-slate-600 border border-slate-300 hover:bg-slate-50'
+                          }`}
+                          title="Allow a person to be assigned to multiple shifts on the same day"
+                        >
+                          {allowDoubleShift ? '🔓 Double Shift Allowed' : '🔒 Prevent Double Booking'}
+                        </button>
+                      )}
+                      <button
+                        onClick={handleSave}
+                        className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-md active:scale-95 disabled:opacity-70"
+                      >
+                        💾 Save Changes
+                      </button>
+                    </>
+                  )}
+                </>
+              )
             )}
           </div>
         )}
       </div>
 
-      {isEditMode && (
+      {!isPostCutoverPeriod && !isV2PeriodActive && isEditMode && (
          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 shadow-sm animate-fadeIn">
            {activeTab === 'calendar' ? (
              <span>
@@ -2656,7 +2694,7 @@ export default function RosterPage({
          </div>
       )}
 
-      {isExcelTableEditMode && (
+      {!isPostCutoverPeriod && !isV2PeriodActive && isExcelTableEditMode && (
          <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-4 text-xs text-teal-800 shadow-sm animate-fadeIn">
            <span>
              <strong className="font-bold">Excel Copy/Paste Mode Active (Table):</strong> You can type shift codes directly into cells (e.g., AM, PM, NIGHT, OFF, AL). You can also copy a range from an Excel or Google Sheets spreadsheet and paste it directly starting at any cell to populate the grid. Use <strong>Arrow Keys</strong>, <strong>Enter</strong>, or <strong>Tab</strong> to navigate cells.
@@ -2664,7 +2702,7 @@ export default function RosterPage({
          </div>
       )}
 
-      {isStandbyEditMode && (
+      {!isPostCutoverPeriod && !isV2PeriodActive && isStandbyEditMode && (
          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 shadow-sm animate-fadeIn">
            <span>
              <strong className="font-bold">Standby Editing Mode Active:</strong> Click on any assigned shift or leave cell in the table below to toggle standby status (indicated by the amber <strong className="font-extrabold">S</strong> badge). <strong className="text-amber-950 font-bold underline decoration-amber-400">Non-working shifts (OFF, GOFF, Leaves)</strong> are highlighted in soft amber for quick assignment. Working shifts (AM, PM, ON1, ON2, PN) are muted. Your changes will be saved to Google Sheets.
@@ -2672,7 +2710,7 @@ export default function RosterPage({
          </div>
       )}
 
-      {isExtendedEditMode && (
+      {!isPostCutoverPeriod && !isV2PeriodActive && isExtendedEditMode && (
          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 text-xs text-blue-800 shadow-sm animate-fadeIn">
            <span>
              <strong className="font-bold">Extended Shift Editing Mode Active:</strong> You can click on any assigned shift or leave cell in the table below to toggle extended shift status (indicated by the blue <strong className="font-extrabold">EX</strong> badge). Your changes will be saved to Google Sheets.
@@ -2680,11 +2718,29 @@ export default function RosterPage({
          </div>
       )}
 
+      {/* Phase 5 V2 Authoritative Roster (Current / Planned / Changes) for Enrolled Periods */}
+      {Boolean(settings?.roster_workspace_v2_enabled === true || String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true') &&
+      lifecycleInfo.isEnrolled && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false && (
+        <div className={activeTab === 'table' ? 'block mb-6' : 'hidden'}>
+          <Phase5RosterContainer
+            period={rosterMonth}
+            settings={settings}
+            isAdmin={isAdmin}
+            onLifecycleStateChange={setLifecycleInfo}
+            onLiveSnapshotChange={handleLiveSnapshotChange}
+            allowDraft={true}
+            teamMembers={teamMembers}
+            legacyNames={names}
+            isActiveView={activeTab === 'table'}
+          />
+        </div>
+      )}
+
       {daysInMonthList.length > 0 && activeTab === 'calendar' && (
         <>
           {isEditMode && (
             <EpPainterToolbar
-              physicians={emergencyPhysicians.length ? emergencyPhysicians : (directoryMap?.ep || [])}
+              physicians={emergencyPhysicians || []}
               activeStamp={activeEpStamp}
               onSelectStamp={(stamp) => setActiveEpStamp(stamp)}
               onClearStamp={() => setActiveEpStamp(null)}
@@ -2864,7 +2920,7 @@ export default function RosterPage({
                               <EmergencyPhysicianMultiSelect
                                 id={`cell-${dayIndex}-${shiftIndex}`}
                                 value={epVal}
-                                physicians={emergencyPhysicians.length ? emergencyPhysicians : (directoryMap?.ep || [])}
+                                physicians={emergencyPhysicians || []}
                                 isWeekend={isWeekend}
                                 activeEpStamp={activeEpStamp}
                                 yesterdayValue={yesterdayValue}
@@ -2911,7 +2967,7 @@ export default function RosterPage({
       </>
     )}
 
-      {daysInMonthList.length > 0 && activeTab === 'table' && (
+      {daysInMonthList.length > 0 && !isV2PeriodActive && activeTab === 'table' && (
         <>
           {/* 📊 Finalized Monthly Spreadsheet Card (Table View) */}
           <div className={`rounded-3xl border bg-white p-1 shadow-sm overflow-hidden transition-all duration-300 ${isEditMode ? 'border-indigo-300 ring-2 ring-indigo-100' : 'border-slate-150/70'}`}>
@@ -2981,7 +3037,7 @@ export default function RosterPage({
                             val = getEditingShift(day.dateStr, nameMapped);
                           } else {
                             val = doctorRosterMap.get(nameKey)?.get(day.dateStr) || '';
-                            if (!val && isUpcomingMonth) {
+                            if (!val && !isPostCutoverPeriod && isUpcomingMonth) {
                               const reqData = requestsRosterMap.get(nameKey)?.get(day.dateStr);
                               if (reqData) {
                                 val = reqData.shift;
@@ -3515,8 +3571,6 @@ export default function RosterPage({
           <span className="text-4xl block mb-2">📅</span>
           <p className="font-semibold text-sm">No roster records detected for the selected month.</p>
         </div>
-      )}
-        </>
       )}
       {isExportModalOpen && createPortal((
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">

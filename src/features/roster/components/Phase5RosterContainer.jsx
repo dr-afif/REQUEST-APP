@@ -36,7 +36,8 @@ export default function Phase5RosterContainer({
   people = [],
   allowDraft = false,
   teamMembers = [],
-  legacyNames = []
+  legacyNames = [],
+  isActiveView = true
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [viewMode, setViewMode] = useState('CURRENT');
@@ -1398,6 +1399,7 @@ export default function Phase5RosterContainer({
             selectedDutyForEntitlement ||
             isCreditModalOpen
           )}
+          isActiveView={isActiveView}
         />
       )}
 

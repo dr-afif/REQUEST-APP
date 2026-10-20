@@ -46,7 +46,8 @@ export default function CurrentRosterView({
   draftSaveStatus = 'saved',
   isAnyModalOpen = false,
   teamMembers = [],
-  legacyNames = []
+  legacyNames = [],
+  isActiveView = true
 }) {
   const normState = String(lifecycleState || 'PUBLISHED').toUpperCase();
   const isDraft = normState === 'DRAFT';
@@ -348,6 +349,8 @@ export default function CurrentRosterView({
 
   // Keyboard navigation & shortcut listener
   useEffect(() => {
+    if (!isActiveView) return;
+
     const handleKeyDown = (e) => {
       // Guard: Do not intercept if focus is inside input, textarea, select, or modal
       const tag = e.target.tagName?.toLowerCase();
@@ -602,7 +605,8 @@ export default function CurrentRosterView({
     applyShiftToSelection,
     onSelectCellForAmend,
     onUndoDraft,
-    onRedoDraft
+    onRedoDraft,
+    isActiveView
   ]);
 
   return (
