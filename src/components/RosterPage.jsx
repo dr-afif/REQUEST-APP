@@ -663,6 +663,7 @@ export default function RosterPage({
   onUpdateSetting,
   rosterMonth: propRosterMonth,
   onV2LiveSnapshotChange = null,
+  initialActiveTab = 'calendar',
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCommentDetail, setActiveCommentDetail] = useState(null);
@@ -677,7 +678,7 @@ export default function RosterPage({
   const [isExcelTableEditMode, setIsExcelTableEditMode] = useState(false);
   const [allowDoubleShift, setAllowDoubleShift] = useState(false);
   const [editedGrid, setEditedGrid] = useState({});
-  const [activeTab, setActiveTab] = useState('calendar'); // 'calendar' or 'table'
+  const [activeTab, setActiveTab] = useState(initialActiveTab); // 'calendar' or 'table'
   const [activeEpStamp, setActiveEpStamp] = useState(null); // EP doctor name, '__CLEAR__', or null
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportSettings, setExportSettings] = useState({
@@ -741,13 +742,30 @@ export default function RosterPage({
     }
   }, [propRosterMonth]);
 
+  const rosterMonthRef = useRef(rosterMonth);
+  rosterMonthRef.current = rosterMonth;
+
   // Phase 4 Roster Lifecycle State
   const [lifecycleInfo, setLifecycleInfo] = useState({
     period: rosterMonth,
     isEnrolled: false,
     state: null,
     revision: null,
+    draftRevision: null,
+    error: null,
+    checked: false,
   });
+
+  const [lifecycleReloadTrigger, setLifecycleReloadTrigger] = useState(0);
+
+  const handleRetryLifecycle = useCallback(() => {
+    setLifecycleInfo((prev) => ({
+      ...prev,
+      error: null,
+      checked: false,
+    }));
+    setLifecycleReloadTrigger((prev) => prev + 1);
+  }, []);
 
   useEffect(() => {
     setLifecycleInfo({
@@ -755,8 +773,43 @@ export default function RosterPage({
       isEnrolled: false,
       state: null,
       revision: null,
+      draftRevision: null,
+      error: null,
+      checked: false,
     });
   }, [rosterMonth]);
+
+  const handleLifecycleStateChange = useCallback((nextInfo) => {
+    if (!nextInfo || typeof nextInfo !== 'object') return;
+    const targetPeriod = nextInfo.period ?? rosterMonthRef.current;
+    if (targetPeriod !== rosterMonthRef.current) return;
+
+    setLifecycleInfo((prev) => {
+      const normalized = {
+        period: targetPeriod,
+        isEnrolled: Boolean(nextInfo.isEnrolled),
+        state: nextInfo.state ?? null,
+        revision: nextInfo.revision ?? null,
+        draftRevision: nextInfo.draftRevision ?? null,
+        error: nextInfo.error ?? null,
+        checked: typeof nextInfo.checked === 'boolean'
+          ? nextInfo.checked
+          : Boolean(nextInfo.state || nextInfo.error || nextInfo.isEnrolled === false),
+      };
+      if (
+        prev.period === normalized.period &&
+        prev.isEnrolled === normalized.isEnrolled &&
+        prev.state === normalized.state &&
+        prev.revision === normalized.revision &&
+        prev.draftRevision === normalized.draftRevision &&
+        prev.error === normalized.error &&
+        prev.checked === normalized.checked
+      ) {
+        return prev;
+      }
+      return normalized;
+    });
+  }, []);
 
   // V2 Authoritative Live Snapshot (Strictly period-keyed, updated via Phase5RosterContainer)
   const [v2LiveSnapshot, setV2LiveSnapshot] = useState({
@@ -857,7 +910,7 @@ export default function RosterPage({
   const isV2PeriodActive = Boolean(
     (settings?.roster_workspace_v2_enabled === true || String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true') &&
     lifecycleInfo.isEnrolled &&
-    (!lifecycleInfo.period || lifecycleInfo.period === rosterMonth) &&
+    lifecycleInfo.period === rosterMonth &&
     ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) &&
     settings?.roster_v2_read_enabled !== false
   );
@@ -2485,6 +2538,8 @@ export default function RosterPage({
           <p className="text-sm text-slate-500 mt-2">
             {lifecycleInfo?.isEnrolled && lifecycleInfo?.period === rosterMonth && lifecycleInfo?.state === 'DRAFT' ? (
               <>Editing the draft roster for <span className="font-bold text-slate-700">{monthLabel}</span>.</>
+            ) : isPostCutoverPeriod ? (
+              <>Working roster for <span className="font-bold text-slate-700">{monthLabel}</span>.</>
             ) : (
               <>Displaying the official finalized schedule for <span className="font-bold text-slate-700">{monthLabel}</span>.</>
             )}
@@ -2521,8 +2576,9 @@ export default function RosterPage({
               period={rosterMonth}
               settings={settings}
               isAdmin={isAdmin}
-              onLifecycleStateChange={setLifecycleInfo}
+              onLifecycleStateChange={handleLifecycleStateChange}
               allowPublish={false}
+              reloadTrigger={lifecycleReloadTrigger}
             />
           </div>
         )}
@@ -2720,13 +2776,14 @@ export default function RosterPage({
 
       {/* Phase 5 V2 Authoritative Roster (Current / Planned / Changes) for Enrolled Periods */}
       {Boolean(settings?.roster_workspace_v2_enabled === true || String(settings?.roster_workspace_v2_enabled || '').toLowerCase() === 'true') &&
-      lifecycleInfo.isEnrolled && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false && (
+      lifecycleInfo.isEnrolled && lifecycleInfo.period === rosterMonth && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false && (
         <div className={activeTab === 'table' ? 'block mb-6' : 'hidden'}>
           <Phase5RosterContainer
             period={rosterMonth}
+            verifiedLifecycle={lifecycleInfo}
             settings={settings}
             isAdmin={isAdmin}
-            onLifecycleStateChange={setLifecycleInfo}
+            onLifecycleStateChange={handleLifecycleStateChange}
             onLiveSnapshotChange={handleLiveSnapshotChange}
             allowDraft={true}
             teamMembers={teamMembers}
@@ -2967,7 +3024,53 @@ export default function RosterPage({
       </>
     )}
 
-      {daysInMonthList.length > 0 && !isV2PeriodActive && activeTab === 'table' && (
+      {daysInMonthList.length > 0 && isPostCutoverPeriod && !isV2PeriodActive && activeTab === 'table' && (
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm space-y-3" role="status">
+          {lifecycleInfo?.period === rosterMonth && lifecycleInfo?.error ? (
+            <>
+              <div className="text-3xl text-rose-500">⚠️</div>
+              <h3 className="text-base font-bold text-slate-800">
+                Authoritative Roster Connection Failed
+              </h3>
+              <p className="text-xs text-rose-600 max-w-md mx-auto leading-relaxed">
+                Unable to connect to the authoritative V2 roster workspace for {monthLabel} ({lifecycleInfo.error}).
+              </p>
+              <div className="pt-2">
+                <button
+                  id="btn-retry-lifecycle"
+                  type="button"
+                  onClick={handleRetryLifecycle}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition-all shadow-sm cursor-pointer"
+                >
+                  <span>🔄</span> Retry Connection
+                </button>
+              </div>
+            </>
+          ) : lifecycleInfo?.period === rosterMonth && !lifecycleInfo?.checked ? (
+            <>
+              <div className="text-3xl">🔒</div>
+              <h3 className="text-base font-bold text-slate-800">
+                Checking Authoritative Roster Workspace…
+              </h3>
+              <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                Connecting to the authoritative V2 roster workspace for {monthLabel}.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="text-3xl">🔒</div>
+              <h3 className="text-base font-bold text-slate-800">
+                Roster Workspace Unavailable
+              </h3>
+              <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                Post-cutover roster assignments for {monthLabel} are managed exclusively through V2. Legacy roster editing and display are permanently disabled.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
+      {daysInMonthList.length > 0 && !isPostCutoverPeriod && !isV2PeriodActive && activeTab === 'table' && (
         <>
           {/* 📊 Finalized Monthly Spreadsheet Card (Table View) */}
           <div className={`rounded-3xl border bg-white p-1 shadow-sm overflow-hidden transition-all duration-300 ${isEditMode ? 'border-indigo-300 ring-2 ring-indigo-100' : 'border-slate-150/70'}`}>

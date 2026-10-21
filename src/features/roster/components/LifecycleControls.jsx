@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { draftRuntime } from '../queue/runtime.js';
 import { terminal } from '../queue/state.js';
 import protocol from '../queue/protocol.js';
@@ -20,12 +20,21 @@ const ERROR_MESSAGES = {
   PERMANENT_FAILURE: 'The lifecycle operation failed permanently and cannot be retried unchanged.'
 };
 
-export function LifecycleBadge({ state, pendingOp, loading }) {
+export function LifecycleBadge({ state, pendingOp, loading, error = null }) {
   if (loading) {
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200" aria-live="polite">
         <span className="h-2 w-2 rounded-full bg-slate-400 animate-pulse" />
         Checking lifecycle…
+      </span>
+    );
+  }
+
+  if (error) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-300" aria-live="polite">
+        <span className="h-2 w-2 rounded-full bg-rose-500" />
+        Connection failed
       </span>
     );
   }
@@ -392,7 +401,8 @@ export default function LifecycleControls({
   queue: externalQueue = null,
   runtimeFactory = draftRuntime,
   onLifecycleStateChange = null,
-  allowPublish = true
+  allowPublish = true,
+  reloadTrigger = 0
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [, setTick] = useState(0);
@@ -407,12 +417,14 @@ export default function LifecycleControls({
   const [isCloseOpen, setIsCloseOpen] = useState(false);
   const [isReopenOpen, setIsReopenOpen] = useState(false);
 
+  const requestGenRef = useRef(0);
   const key = `draft:${period}`;
 
   // Queue resolution and lifecycle fetching
   useEffect(() => {
     let live = true;
     let unsubscribe;
+    const currentGen = ++requestGenRef.current;
     setLoading(true);
     setIsEnrolled(false);
     setFetchedLifecycle(null);
@@ -424,49 +436,82 @@ export default function LifecycleControls({
     (async () => {
       try {
         const q = externalQueue || await runtimeFactory(settings);
-        if (!live) return;
+        if (!live || currentGen !== requestGenRef.current) return;
         setQueue(q);
 
         unsubscribe = q.subscribe(() => {
-          if (live) setTick((n) => n + 1);
+          if (live && currentGen === requestGenRef.current) setTick((n) => n + 1);
         });
 
         await q.start?.();
-        if (!live) return;
+        if (!live || currentGen !== requestGenRef.current) return;
 
         // Fetch lifecycle state for this specific period
-        const res = await q.getPeriodLifecycle(period).catch(() => ({ ok: false }));
-        if (!live) return;
+        const res = await q.getPeriodLifecycle(period).catch((err) => ({ ok: false, error: err }));
+        if (!live || currentGen !== requestGenRef.current) return;
 
         if (res.ok && res.period) {
           setIsEnrolled(true);
           const state = res.period.State;
-          const revision = Number(res.period.Revision || 0);
-          setFetchedLifecycle({ state, revision });
+          const revision = Number.isFinite(Number(res.period.Revision)) ? Number(res.period.Revision) : 0;
+          const draftRevision = Number.isFinite(Number(res.period.DraftRevision))
+            ? Number(res.period.DraftRevision)
+            : (revision || 0);
+          setFetchedLifecycle({ period, state, revision, draftRevision });
           onLifecycleStateChange?.({
             period,
             isEnrolled: true,
             state,
-            revision
+            revision,
+            draftRevision,
+            error: null,
+            checked: true
           });
-        } else {
+        } else if (res.ok && !res.period) {
           setIsEnrolled(false);
           setFetchedLifecycle(null);
           onLifecycleStateChange?.({
             period,
             isEnrolled: false,
             state: null,
-            revision: null
+            revision: null,
+            draftRevision: null,
+            error: null,
+            checked: true
+          });
+        } else {
+          setIsEnrolled(false);
+          setFetchedLifecycle(null);
+          const errorCode = res?.error?.code || res?.error?.message || (typeof res?.error === 'string' ? res.error : null) || 'LIFECYCLE_TRANSPORT_FAILED';
+          setActionError(errorCode);
+          onLifecycleStateChange?.({
+            period,
+            isEnrolled: false,
+            state: null,
+            revision: null,
+            draftRevision: null,
+            error: errorCode,
+            checked: true
           });
         }
       } catch (err) {
-        if (live) {
+        if (live && currentGen === requestGenRef.current) {
           setIsEnrolled(false);
           setFetchedLifecycle(null);
-          setActionError(err.code || err.message);
+          const errorCode = err.code || err.message || 'LIFECYCLE_TRANSPORT_FAILED';
+          setActionError(errorCode);
+          onLifecycleStateChange?.({
+            period,
+            isEnrolled: false,
+            state: null,
+            revision: null,
+            draftRevision: null,
+            error: errorCode,
+            checked: true
+          });
         }
       } finally {
-        if (live) setLoading(false);
+        if (live && currentGen === requestGenRef.current) setLoading(false);
       }
     })();
 
@@ -474,24 +519,111 @@ export default function LifecycleControls({
       live = false;
       unsubscribe?.();
     };
-  }, [period, settings, externalQueue, runtimeFactory]);
+  }, [period, settings, externalQueue, runtimeFactory, reloadTrigger]);
+
+  const handleRetryFetch = useCallback(() => {
+    setLoading(true);
+    setActionError(null);
+    const currentGen = ++requestGenRef.current;
+    (async () => {
+      try {
+        const q = queue || externalQueue || await runtimeFactory(settings);
+        if (currentGen !== requestGenRef.current) return;
+        setQueue(q);
+        await q.start?.();
+        if (currentGen !== requestGenRef.current) return;
+        const res = await q.getPeriodLifecycle(period).catch((err) => ({ ok: false, error: err }));
+        if (currentGen !== requestGenRef.current) return;
+
+        if (res.ok && res.period) {
+          setIsEnrolled(true);
+          const state = res.period.State;
+          const revision = Number.isFinite(Number(res.period.Revision)) ? Number(res.period.Revision) : 0;
+          const draftRevision = Number.isFinite(Number(res.period.DraftRevision))
+            ? Number(res.period.DraftRevision)
+            : (revision || 0);
+          setFetchedLifecycle({ period, state, revision, draftRevision });
+          onLifecycleStateChange?.({
+            period,
+            isEnrolled: true,
+            state,
+            revision,
+            draftRevision,
+            error: null,
+            checked: true
+          });
+        } else if (res.ok && !res.period) {
+          setIsEnrolled(false);
+          setFetchedLifecycle(null);
+          onLifecycleStateChange?.({
+            period,
+            isEnrolled: false,
+            state: null,
+            revision: null,
+            draftRevision: null,
+            error: null,
+            checked: true
+          });
+        } else {
+          setIsEnrolled(false);
+          setFetchedLifecycle(null);
+          const errorCode = res?.error?.code || res?.error?.message || (typeof res?.error === 'string' ? res.error : null) || 'LIFECYCLE_TRANSPORT_FAILED';
+          setActionError(errorCode);
+          onLifecycleStateChange?.({
+            period,
+            isEnrolled: false,
+            state: null,
+            revision: null,
+            draftRevision: null,
+            error: errorCode,
+            checked: true
+          });
+        }
+      } catch (err) {
+        if (currentGen === requestGenRef.current) {
+          const errorCode = err.code || err.message || 'LIFECYCLE_TRANSPORT_FAILED';
+          setActionError(errorCode);
+          onLifecycleStateChange?.({
+            period,
+            isEnrolled: false,
+            state: null,
+            revision: null,
+            draftRevision: null,
+            error: errorCode,
+            checked: true
+          });
+        }
+      } finally {
+        if (currentGen === requestGenRef.current) setLoading(false);
+      }
+    })();
+  }, [queue, externalQueue, runtimeFactory, settings, period, onLifecycleStateChange]);
 
   const view = queue?.view(key);
+  const isEnrolledForPeriod = Boolean(isEnrolled && fetchedLifecycle?.period === period);
   const confirmedState = String(view?.lifecycle?.state || fetchedLifecycle?.state || 'DRAFT').toUpperCase();
   const pendingOp = view?.operations?.find((o) => !terminal(o) && o.operationClass === 'LIFECYCLE');
   const mutationsEnabled = Boolean(queue?.enabled?.());
 
   // Propagate state update if view changes
   useEffect(() => {
-    if (isEnrolled && view?.lifecycle?.state) {
+    if (isEnrolledForPeriod && view?.lifecycle?.state) {
+      const state = view.lifecycle.state;
+      const revision = Number.isFinite(Number(view.lifecycle.revision)) ? Number(view.lifecycle.revision) : 0;
+      const draftRevision = Number.isFinite(Number(view.lifecycle.draftRevision))
+        ? Number(view.lifecycle.draftRevision)
+        : (Number.isFinite(Number(fetchedLifecycle?.draftRevision)) ? Number(fetchedLifecycle.draftRevision) : (revision || 0));
       onLifecycleStateChange?.({
         period,
         isEnrolled: true,
-        state: view.lifecycle.state,
-        revision: view.lifecycle.revision
+        state,
+        revision,
+        draftRevision,
+        error: null,
+        checked: true
       });
     }
-  }, [isEnrolled, view?.lifecycle?.state, view?.lifecycle?.revision, period, onLifecycleStateChange]);
+  }, [isEnrolledForPeriod, fetchedLifecycle?.draftRevision, view?.lifecycle?.state, view?.lifecycle?.revision, view?.lifecycle?.draftRevision, period, onLifecycleStateChange]);
 
   // Actions
   const handlePublishConfirm = useCallback(async (adminNote) => {
@@ -502,12 +634,18 @@ export default function LifecycleControls({
       const res = await queue.publish(period, { adminNote });
       setIsPublishOpen(false);
       if (res?.state) {
-        setFetchedLifecycle({ state: res.state, revision: res.revision });
+        const state = res.state;
+        const revision = Number.isFinite(Number(res.revision)) ? Number(res.revision) : 0;
+        const draftRevision = Number.isFinite(Number(res.draftRevision)) ? Number(res.draftRevision) : (revision || 0);
+        setFetchedLifecycle({ period, state, revision, draftRevision });
         onLifecycleStateChange?.({
           period,
           isEnrolled: true,
-          state: res.state,
-          revision: res.revision
+          state,
+          revision,
+          draftRevision,
+          error: null,
+          checked: true
         });
       }
     } catch (err) {
@@ -525,12 +663,18 @@ export default function LifecycleControls({
       const res = await queue.close(period, { adminNote });
       setIsCloseOpen(false);
       if (res?.state) {
-        setFetchedLifecycle({ state: res.state, revision: res.revision });
+        const state = res.state;
+        const revision = Number.isFinite(Number(res.revision)) ? Number(res.revision) : 0;
+        const draftRevision = Number.isFinite(Number(res.draftRevision)) ? Number(res.draftRevision) : (revision || 0);
+        setFetchedLifecycle({ period, state, revision, draftRevision });
         onLifecycleStateChange?.({
           period,
           isEnrolled: true,
-          state: res.state,
-          revision: res.revision
+          state,
+          revision,
+          draftRevision,
+          error: null,
+          checked: true
         });
       }
     } catch (err) {
@@ -548,12 +692,18 @@ export default function LifecycleControls({
       const res = await queue.reopen(period, reason);
       setIsReopenOpen(false);
       if (res?.state) {
-        setFetchedLifecycle({ state: res.state, revision: res.revision });
+        const state = res.state;
+        const revision = Number.isFinite(Number(res.revision)) ? Number(res.revision) : 0;
+        const draftRevision = Number.isFinite(Number(res.draftRevision)) ? Number(res.draftRevision) : (revision || 0);
+        setFetchedLifecycle({ period, state, revision, draftRevision });
         onLifecycleStateChange?.({
           period,
           isEnrolled: true,
-          state: res.state,
-          revision: res.revision
+          state,
+          revision,
+          draftRevision,
+          error: null,
+          checked: true
         });
       }
     } catch (err) {
@@ -574,7 +724,7 @@ export default function LifecycleControls({
   }, [queue, key, pendingOp]);
 
   // Non-enrolled periods are legacy: preserve existing behavior without rendering V2 lifecycle controls
-  if (!loading && !isEnrolled) {
+  if (!loading && !isEnrolled && !actionError) {
     return null;
   }
 
@@ -585,7 +735,7 @@ export default function LifecycleControls({
 
   return (
     <div className="flex flex-wrap items-center gap-3" aria-label="Roster lifecycle status and controls">
-      <LifecycleBadge state={confirmedState} pendingOp={pendingOp} loading={loading} />
+      <LifecycleBadge state={confirmedState} pendingOp={pendingOp} loading={loading} error={actionError} />
 
       {/* Recover / Retry action if operation is blocked */}
       {pendingOp?.status === 'RECOVERY_REQUIRED' && isVerifiedAdmin && (
@@ -657,8 +807,16 @@ export default function LifecycleControls({
 
       {/* Surface top-level queue or operation error if present */}
       {actionError && !isPublishOpen && !isCloseOpen && !isReopenOpen && (
-        <span className="text-xs text-rose-600 font-medium" role="alert">
-          {ERROR_MESSAGES[actionError] || actionError}
+        <span className="inline-flex items-center gap-1.5 text-xs text-rose-600 font-medium" role="alert">
+          <span>{ERROR_MESSAGES[actionError] || actionError}</span>
+          <button
+            id="btn-retry-lifecycle-header"
+            type="button"
+            onClick={handleRetryFetch}
+            className="underline font-bold text-indigo-600 hover:text-indigo-800 ml-1 cursor-pointer"
+          >
+            Retry
+          </button>
         </span>
       )}
 

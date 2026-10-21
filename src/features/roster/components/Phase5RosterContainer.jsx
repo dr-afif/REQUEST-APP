@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { draftRuntime } from '../queue/runtime.js';
 import { draftCellsToCurrentAssignments } from '../data/draftRepository.js';
-import { getAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff, subscribeAdminAuth, formatAdminAuthError } from '../auth/adminAuth.js';
+import { getAdminSessionToken, clearAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff, subscribeAdminAuth, formatAdminAuthError } from '../auth/adminAuth.js';
 import RosterViewModeSelector from './RosterViewModeSelector.jsx';
 import CurrentRosterView from './CurrentRosterView.jsx';
 import PlannedRosterView from './PlannedRosterView.jsx';
@@ -37,7 +37,8 @@ export default function Phase5RosterContainer({
   allowDraft = false,
   teamMembers = [],
   legacyNames = [],
-  isActiveView = true
+  isActiveView = true,
+  verifiedLifecycle = null
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [viewMode, setViewMode] = useState('CURRENT');
@@ -116,9 +117,21 @@ export default function Phase5RosterContainer({
   const currentRosterRef = useRef(currentRoster);
   currentRosterRef.current = currentRoster;
 
+  const internalPeopleRef = useRef(internalPeople);
+  internalPeopleRef.current = internalPeople;
+
   const onLiveSnapshotChangeRef = useRef(onLiveSnapshotChange);
   onLiveSnapshotChangeRef.current = onLiveSnapshotChange;
   const lastEmittedSnapshotRef = useRef(null);
+
+  const verifiedLifecycleRef = useRef(verifiedLifecycle);
+  verifiedLifecycleRef.current = verifiedLifecycle;
+  const consumedVerifiedLifecycleRef = useRef(null);
+
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+
+  const lastAuthTokenRef = useRef(getAdminSessionToken());
 
   // Check for any unresolved operations needing recovery
   const syncRecoveryState = useCallback((q, p) => {
@@ -132,30 +145,80 @@ export default function Phase5RosterContainer({
   }, []);
 
   // Unified reload function
-  const loadAuthoritativeData = useCallback(async (targetQueue, targetPeriod, gen) => {
+  const loadAuthoritativeData = useCallback(async (targetQueue, targetPeriod, gen, options = {}) => {
     if (!targetQueue || !targetPeriod) return;
     try {
-      // 1. Fetch lifecycle state
-      const lcRes = await targetQueue.getPeriodLifecycle(targetPeriod).catch(() => ({ ok: false }));
-      if (gen !== requestGenRef.current) return;
-
-      if (!lcRes?.ok || !lcRes?.period) {
-        setLifecycle(null);
-        setCurrentRoster(null);
-        setPlannedRoster(null);
-        setAmendmentHistory(null);
-        setAbsences([]);
-        setReplacements([]);
-        onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: false, state: null, revision: null });
-        return;
+      const currentToken = getAdminSessionToken();
+      if (currentToken) {
+        setDraftReadError((prev) => (prev === 'AUTHORIZATION_REQUIRED' ? null : prev));
       }
 
-      const periodRecord = lcRes.period;
-      const state = String(periodRecord.State || 'DRAFT').toUpperCase();
-      const revision = Number.isFinite(Number(periodRecord.Revision)) ? Number(periodRecord.Revision) : 0;
-      const draftRevision = Number.isFinite(Number(periodRecord.DraftRevision)) ? Number(periodRecord.DraftRevision) : (revision || 0);
-      setLifecycle({ state, revision, draftRevision });
-      onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: true, state, revision, draftRevision });
+      // 1. Fetch or resolve lifecycle state
+      const forceLifecycleRefresh = Boolean(options?.forceLifecycleRefresh);
+      const candidateVerified = verifiedLifecycleRef.current;
+      const canReuseVerified = Boolean(
+        !forceLifecycleRefresh &&
+        consumedVerifiedLifecycleRef.current !== targetPeriod &&
+        candidateVerified &&
+        candidateVerified.period === targetPeriod &&
+        candidateVerified.isEnrolled === true &&
+        candidateVerified.state &&
+        ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(String(candidateVerified.state).toUpperCase()) &&
+        candidateVerified.revision !== null &&
+        candidateVerified.revision !== undefined &&
+        candidateVerified.revision !== '' &&
+        Number.isFinite(Number(candidateVerified.revision))
+      );
+
+      let state;
+      let revision;
+      let draftRevision;
+
+      if (canReuseVerified) {
+        consumedVerifiedLifecycleRef.current = targetPeriod;
+        state = String(candidateVerified.state).toUpperCase();
+        revision = Number(candidateVerified.revision);
+        draftRevision = Number.isFinite(Number(candidateVerified.draftRevision))
+          ? Number(candidateVerified.draftRevision)
+          : (revision || 0);
+        setLifecycle({ state, revision, draftRevision });
+      } else {
+        const lcRes = await targetQueue.getPeriodLifecycle(targetPeriod).catch(() => ({ ok: false }));
+        if (gen !== requestGenRef.current) return;
+
+        if (!lcRes?.ok || !lcRes?.period) {
+          setLifecycle(null);
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setAmendmentHistory(null);
+          setAbsences([]);
+          setReplacements([]);
+          const isPostCutover = Boolean(targetPeriod && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(targetPeriod) && targetPeriod >= '2026-11');
+          if (!isPostCutover) {
+            onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: false, state: null, revision: null, draftRevision: null, error: null, checked: true });
+          } else {
+            setDraftReadError('LIFECYCLE_READ_FAILED');
+            setActionError('Unable to verify period lifecycle');
+            onLifecycleStateChange?.({
+              period: targetPeriod,
+              isEnrolled: false,
+              state: null,
+              revision: null,
+              draftRevision: null,
+              error: 'LIFECYCLE_READ_FAILED',
+              checked: true
+            });
+          }
+          return;
+        }
+
+        const periodRecord = lcRes.period;
+        state = String(periodRecord.State || 'DRAFT').toUpperCase();
+        revision = Number.isFinite(Number(periodRecord.Revision)) ? Number(periodRecord.Revision) : 0;
+        draftRevision = Number.isFinite(Number(periodRecord.DraftRevision)) ? Number(periodRecord.DraftRevision) : (revision || 0);
+        setLifecycle({ state, revision, draftRevision });
+        onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: true, state, revision, draftRevision, error: null, checked: true });
+      }
 
       // If DRAFT, load authoritative draft state from draft protocol
       if (state === 'DRAFT') {
@@ -197,7 +260,7 @@ export default function Phase5RosterContainer({
             setDraftReadError(null);
             setDraftSaveStatus('saved');
             if (!currentRosterRef.current || currentRosterRef.current.period !== targetPeriod) {
-              const activePeople = (people && people.length > 0) ? people : internalPeople;
+              const activePeople = (people && people.length > 0) ? people : internalPeopleRef.current;
               const assignments = draftCellsToCurrentAssignments({
                 cells: cachedView?.cells || {},
                 people: activePeople
@@ -221,6 +284,7 @@ export default function Phase5RosterContainer({
           setReplacements([]);
           setDraftReadError(draftLoadError);
           if (draftLoadError === 'AUTHORIZATION_REQUIRED') {
+            clearAdminSessionToken();
             setDraftSaveStatus(null);
             setActionError(null);
           } else {
@@ -232,16 +296,20 @@ export default function Phase5RosterContainer({
         }
 
         setDraftReadError(null);
-        let activePeople = (people && people.length > 0) ? people : internalPeople;
+        let activePeople = (people && people.length > 0) ? people : internalPeopleRef.current;
         if ((!activePeople || activePeople.length === 0) && targetQueue?.repository?.schema) {
           try {
             const schema = await targetQueue.repository.schema();
+            if (gen !== requestGenRef.current) return;
             if (schema?.ok && Array.isArray(schema.people)) {
               activePeople = schema.people;
+              internalPeopleRef.current = schema.people;
               setInternalPeople(schema.people);
             }
           } catch (_) {}
         }
+
+        if (gen !== requestGenRef.current) return;
 
         const assignments = draftCellsToCurrentAssignments({
           cells: view?.cells || {},
@@ -319,15 +387,19 @@ export default function Phase5RosterContainer({
       await startGoogleCodeAuth({
         onSuccess: async () => {
           setAdminAuthTriggerTick(t => t + 1);
-          requestGenRef.current += 1;
-          const currentGen = requestGenRef.current;
-          setLoading(true);
-          try {
-            if (queue) {
-              await loadAuthoritativeData(queue, period, currentGen);
+          setDraftReadError((prev) => (prev === 'AUTHORIZATION_REQUIRED' ? null : prev));
+          const activeQueue = queueRef.current || queue;
+          if (activeQueue) {
+            requestGenRef.current += 1;
+            const currentGen = requestGenRef.current;
+            setLoading(true);
+            try {
+              await loadAuthoritativeData(activeQueue, period, currentGen, { forceLifecycleRefresh: true });
+            } finally {
+              if (currentGen === requestGenRef.current) {
+                setLoading(false);
+              }
             }
-          } finally {
-            setLoading(false);
           }
         },
         onError: (err) => {
@@ -344,6 +416,7 @@ export default function Phase5RosterContainer({
     let live = true;
     requestGenRef.current += 1;
     const currentGen = requestGenRef.current;
+    consumedVerifiedLifecycleRef.current = null;
 
     // Reset month-scoped state immediately on month switch
     setLoading(true);
@@ -369,6 +442,7 @@ export default function Phase5RosterContainer({
     setDraftRedoStack([]);
     setDraftSaveStatus(null);
     setIsSavingDraft(false);
+    setDraftReadError(null);
 
     (async () => {
       try {
@@ -388,6 +462,7 @@ export default function Phase5RosterContainer({
 
         const q = externalQueue || await runtimeFactory(settings);
         if (!live || currentGen !== requestGenRef.current) return;
+        queueRef.current = q;
         setQueue(q);
         await q.start?.();
         if (!live || currentGen !== requestGenRef.current) return;
@@ -406,18 +481,99 @@ export default function Phase5RosterContainer({
 
     return () => {
       live = false;
+      requestGenRef.current += 1;
     };
   }, [period, settings, externalQueue, runtimeFactory, loadAuthoritativeData]);
 
   // Subscribe to in-memory administrator authentication changes
   useEffect(() => {
-    return subscribeAdminAuth(() => {
+    return subscribeAdminAuth(async () => {
       setAdminAuthTriggerTick((t) => t + 1);
-      if (queue) {
-        loadAuthoritativeData(queue, period, requestGenRef.current);
+      const activeToken = getAdminSessionToken();
+
+      if (activeToken === lastAuthTokenRef.current) {
+        return;
+      }
+      lastAuthTokenRef.current = activeToken;
+
+      if (!activeToken) {
+        // Session expired or logged out: fail closed immediately for DRAFT mode
+        if (lifecycle?.state === 'DRAFT' || (!lifecycle && period >= '2026-11')) {
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setDraftReadError('AUTHORIZATION_REQUIRED');
+          setDraftSaveStatus(null);
+          setEntitlementBalances(null);
+          setEntitlementTransactions([]);
+        }
+        return;
+      }
+
+      // Valid session established / redeemed!
+      // Immediately clear stale authorization error
+      setDraftReadError((prev) => (prev === 'AUTHORIZATION_REQUIRED' ? null : prev));
+
+      const activeQueue = queueRef.current || queue;
+      if (activeQueue) {
+        setLoading(true);
+        requestGenRef.current += 1;
+        const gen = requestGenRef.current;
+        try {
+          await loadAuthoritativeData(activeQueue, period, gen, { forceLifecycleRefresh: true });
+        } finally {
+          if (gen === requestGenRef.current) {
+            setLoading(false);
+          }
+        }
       }
     });
-  }, [queue, period, loadAuthoritativeData]);
+  }, [queue, period, lifecycle?.state, loadAuthoritativeData]);
+
+  // Synchronize lifecycle state when parent provides a verifiedLifecycle
+  const prevVerifiedPeriodRef = useRef(period);
+  const prevVerifiedStateRef = useRef(verifiedLifecycle?.state);
+
+  useEffect(() => {
+    if (prevVerifiedPeriodRef.current !== period) {
+      prevVerifiedPeriodRef.current = period;
+      prevVerifiedStateRef.current = verifiedLifecycle?.state;
+    }
+
+    if (
+      verifiedLifecycle &&
+      verifiedLifecycle.period === period &&
+      verifiedLifecycle.isEnrolled === true &&
+      verifiedLifecycle.state &&
+      ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(String(verifiedLifecycle.state).toUpperCase()) &&
+      verifiedLifecycle.revision !== null &&
+      verifiedLifecycle.revision !== undefined &&
+      verifiedLifecycle.revision !== '' &&
+      Number.isFinite(Number(verifiedLifecycle.revision))
+    ) {
+      const state = String(verifiedLifecycle.state).toUpperCase();
+      const revision = Number(verifiedLifecycle.revision);
+      const draftRevision = Number.isFinite(Number(verifiedLifecycle.draftRevision))
+        ? Number(verifiedLifecycle.draftRevision)
+        : (revision || 0);
+
+      const stateChanged = Boolean(
+        prevVerifiedStateRef.current &&
+        prevVerifiedStateRef.current !== state
+      );
+      prevVerifiedStateRef.current = state;
+
+      setLifecycle((prev) => {
+        if (prev?.state === state && prev?.revision === revision && prev?.draftRevision === draftRevision) {
+          return prev;
+        }
+        return { state, revision, draftRevision };
+      });
+
+      if (stateChanged && queue) {
+        loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      }
+    }
+  }, [verifiedLifecycle, period, queue, loadAuthoritativeData]);
 
   // Read-only live snapshot bridge effect
   useEffect(() => {
@@ -513,12 +669,12 @@ export default function Phase5RosterContainer({
         });
       }
 
-      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
     } catch (err) {
       const code = err.code || err.message;
       if (code === 'REVISION_CONFLICT') {
         setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
-        await loadAuthoritativeData(queue, period, requestGenRef.current);
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       } else {
         setActionError(err.message || code);
       }
@@ -538,12 +694,12 @@ export default function Phase5RosterContainer({
       if (undoEvent && undoEvent.eventId === eventId) {
         setUndoEvent(null);
       }
-      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
     } catch (err) {
       const code = err.code || err.message;
       if (code === 'REVISION_CONFLICT') {
         setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
-        await loadAuthoritativeData(queue, period, requestGenRef.current);
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       }
       throw err;
     }
@@ -890,7 +1046,7 @@ export default function Phase5RosterContainer({
         setActionError(err.message || code || 'Failed to save roster change');
       }
 
-      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       syncRecoveryState(queue, period);
     } finally {
       setIsSavingDraft(false);
@@ -962,7 +1118,7 @@ export default function Phase5RosterContainer({
         setActionError(err.message || code || 'Failed to apply bulk roster change');
       }
 
-      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       syncRecoveryState(queue, period);
     } finally {
       setIsSavingDraft(false);
@@ -999,7 +1155,7 @@ export default function Phase5RosterContainer({
     if (hasConflict) {
       setRevisionConflictMsg('Cannot undo: roster was modified by another change. Refreshing latest version.');
       if (typeof loadAuthoritativeData === 'function') {
-        await loadAuthoritativeData(queue, period, requestGenRef.current);
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       }
       return;
     }
@@ -1043,7 +1199,7 @@ export default function Phase5RosterContainer({
         setDraftSaveStatus('error');
         setActionError(err.message || code || 'Failed to persist undo');
       }
-      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       syncRecoveryState(queue, period);
     }
   }, [draftUndoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData, syncRecoveryState]);
@@ -1079,7 +1235,7 @@ export default function Phase5RosterContainer({
       setRevisionConflictMsg('Cannot redo: roster was modified by another change. Refreshing latest version.');
       setDraftRedoStack([]);
       if (typeof loadAuthoritativeData === 'function') {
-        await loadAuthoritativeData(queue, period, requestGenRef.current);
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       }
       return;
     }
@@ -1123,7 +1279,7 @@ export default function Phase5RosterContainer({
         setDraftSaveStatus('error');
         setActionError(err.message || code || 'Failed to persist redo');
       }
-      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       syncRecoveryState(queue, period);
     }
   }, [draftRedoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData, syncRecoveryState]);

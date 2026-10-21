@@ -19,7 +19,7 @@ export class DraftQueue {
     if(this.timer&&typeof this.timer.unref==='function')this.timer.unref();
     await this.tick();
   }
-  stop(){this.generation++;this.stopped=true;clearInterval(this.timer);this.bus?.close();this.guard(this.unsafe.size>0||!!this.localError);}
+  stop(){this.generation++;this.stopped=true;clearInterval(this.timer);try{this.bus?.close();}catch(_){}this.bus=null;this.guard(this.unsafe.size>0||!!this.localError);}
   async validateStored(e){validateEntity(e);if(e.baseline.checksum&&e.baseline.checksum!==await sha256(protocol.canonical(e.baseline.cells)))throw new Error('OUTBOX_INVALID');
     for(const op of e.operations)if(op.payloadHash&&op.payloadHash!==await sha256(protocol.canonical(protocol.payload(op))))throw new Error('OUTBOX_INVALID');return e;}
   async reload(){try{const rows=await this.store.all();await Promise.all(rows.map(e=>this.validateStored(e)));for(const e of rows)if(e.storageRevision>=(this.entities.get(e.entityKey)?.storageRevision||0))this.entities.set(e.entityKey,e);this.emit();}

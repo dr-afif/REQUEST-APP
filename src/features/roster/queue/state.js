@@ -98,13 +98,32 @@ export function mergeLifecycle(entity, result, confirmedId=null) {
 }
 export function retryDelay(attempt,random=Math.random) {return Math.floor(Math.min(30000,500*2**Math.max(0,attempt-1))*(0.75+random()*0.5));}
 export function createSignals(onMessage,{name='request-app-roster-v2',target=globalThis.window,Broadcast=globalThis.BroadcastChannel}={}) {
-  let channel;
+  let channel = null;
   const receive=e=>{if(e.data?.kind==='roster-queue'&&typeof e.data.entityKey==='string')onMessage(e.data);};
   const storage=e=>{if(e.key!==name||!e.newValue)return;try{receive({data:JSON.parse(e.newValue)});}catch{ /* ignore unrelated/invalid signal */ }};
-  if(Broadcast){channel=new Broadcast(name);channel.onmessage=receive;}else target?.addEventListener('storage',storage);
-  return {send(entityKey,event){const message={kind:'roster-queue',entityKey,event,nonce:crypto.randomUUID()};
-    if(channel)channel.postMessage(message);else try{target?.localStorage.setItem(name,JSON.stringify(message));}catch{ /* polling + server revision remain authoritative */ }},
-    close(){channel?.close();target?.removeEventListener('storage',storage);}};
+  if(Broadcast){try{channel=new Broadcast(name);channel.onmessage=receive;}catch(_){channel=null;}}
+  if(!channel) target?.addEventListener('storage',storage);
+  return {
+    send(entityKey,event){
+      const message={kind:'roster-queue',entityKey,event,nonce:crypto.randomUUID()};
+      if(channel){
+        try{
+          channel.postMessage(message);
+        }catch(_){
+          try{channel.close();}catch(__){}
+          channel=null;
+          try{target?.localStorage.setItem(name,JSON.stringify(message));}catch{ /* polling + server revision remain authoritative */ }
+        }
+      }else{
+        try{target?.localStorage.setItem(name,JSON.stringify(message));}catch{ /* polling + server revision remain authoritative */ }
+      }
+    },
+    close(){
+      try{channel?.close();}catch(_){}
+      channel=null;
+      target?.removeEventListener?.('storage',storage);
+    }
+  };
 }
 export function unloadGuard(target=globalThis.window) {
   let installed=false;const warn=e=>{e.preventDefault();e.returnValue='';};

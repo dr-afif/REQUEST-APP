@@ -33,7 +33,9 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
       q=await runtimeFactory(settings);const repository=q.repository;
       if(!live)return;
       unsubscribe=q.subscribe(()=>{if(live)update(n=>n+1);});
-      q.bus=createSignals(()=>q.reload().catch(()=>{if(live)setError('Local draft storage unavailable.');}));
+      if (!q.bus) {
+        q.bus=createSignals(()=>q.reload().catch(()=>{if(live)setError('Local draft storage unavailable.');}));
+      }
       await q.start();if(!live)return;setQueue(q);
       const schema=await repository.schema();if(!live)return;if(!schema.ok)throw new Error(schema.error.code);
       if(showDraft&&!schema.draftWritesEnabled)throw new Error('FEATURE_DISABLED');
@@ -41,7 +43,7 @@ export default function DraftQueuePanel({period,settings,runtimeFactory=draftRun
       await q.refresh(key);if(!live)return;refresh=setInterval(()=>q.refresh(key).catch(e=>{if(live)setError(e.message);}),60000);
     })().catch(e=>{if(live)setError(e.message);});
     const connection=()=>setOffline(!navigator.onLine);window.addEventListener('online',connection);window.addEventListener('offline',connection);
-    return()=>{live=false;unsubscribe?.();q?.stop();clearInterval(refresh);window.removeEventListener('online',connection);window.removeEventListener('offline',connection);};
+    return()=>{live=false;unsubscribe?.();clearInterval(refresh);window.removeEventListener('online',connection);window.removeEventListener('offline',connection);};
   },[key,settings,runtimeFactory,sessionActive]); // Reopen the durable queue for the selected period; no legacy refresh mutation.
 
   const view=queue?.view(key),pending=[...(queue?.entities.values()||[])].flatMap(e=>e.operations.filter(o=>!terminal(o)));
