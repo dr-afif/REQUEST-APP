@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { draftRuntime } from '../queue/runtime.js';
-import { draftCellsToCurrentAssignments } from '../data/draftRepository.js';
-import { getAdminSessionToken, clearAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff, subscribeAdminAuth, formatAdminAuthError } from '../auth/adminAuth.js';
+import { draftCellsToCurrentAssignments, getCachedStaffDirectory, setCachedStaffDirectory } from '../data/draftRepository.js';
+import { getAdminSessionToken, clearAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff, subscribeAdminAuth, formatAdminAuthError, isSessionTokenActive } from '../auth/adminAuth.js';
 import RosterViewModeSelector from './RosterViewModeSelector.jsx';
 import CurrentRosterView from './CurrentRosterView.jsx';
 import PlannedRosterView from './PlannedRosterView.jsx';
@@ -32,24 +32,63 @@ export default function Phase5RosterContainer({
   runtimeFactory = draftRuntime,
   onLifecycleStateChange = null,
   onLiveSnapshotChange = null,
+  onRevalidationComplete = null,
   undoDurationMs = 10000,
   people = [],
   allowDraft = false,
   teamMembers = [],
   legacyNames = [],
   isActiveView = true,
-  verifiedLifecycle = null
+  verifiedLifecycle = null,
+  initialSnapshot = null,
+  isRevalidating = false
 }) {
+  const hasAuthorizedDraft = Boolean(isAdmin && isSessionTokenActive());
+  const hasInitialValid = Boolean(
+    initialSnapshot?.isLoaded &&
+    initialSnapshot?.period === period &&
+    Array.isArray(initialSnapshot?.assignments) &&
+    initialSnapshot?.assignments.length > 0 &&
+    (initialSnapshot?.state !== 'DRAFT' || hasAuthorizedDraft)
+  );
+
   const [queue, setQueue] = useState(externalQueue);
   const [viewMode, setViewMode] = useState('CURRENT');
-  const [loading, setLoading] = useState(true);
-  const [lifecycle, setLifecycle] = useState(null);
-  const [currentRoster, setCurrentRoster] = useState(null);
+  const [loading, setLoading] = useState(() => !hasInitialValid);
+  const [lifecycle, setLifecycle] = useState(() => {
+    if (hasInitialValid && initialSnapshot.state) {
+      return {
+        state: initialSnapshot.state,
+        revision: initialSnapshot.revision,
+        draftRevision: initialSnapshot.revision
+      };
+    }
+    return null;
+  });
+  const [currentRoster, setCurrentRoster] = useState(() => {
+    if (hasInitialValid) {
+      return {
+        ok: true,
+        period: initialSnapshot.period,
+        state: initialSnapshot.state || 'DRAFT',
+        revision: initialSnapshot.revision,
+        assignments: initialSnapshot.assignments
+      };
+    }
+    return null;
+  });
   const [plannedRoster, setPlannedRoster] = useState(null);
   const [amendmentHistory, setAmendmentHistory] = useState(null);
   const [absences, setAbsences] = useState([]);
   const [replacements, setReplacements] = useState([]);
-  const [internalPeople, setInternalPeople] = useState([]);
+  const [internalPeople, setInternalPeople] = useState(() => {
+    if (Array.isArray(people) && people.length > 0) return people;
+    const cached = getCachedStaffDirectory?.() || (externalQueue?.getCachedPeople?.() ?? null);
+    if (Array.isArray(cached) && cached.length > 0 && isSessionTokenActive() && isAdmin) {
+      return cached;
+    }
+    return [];
+  });
   const [draftReadError, setDraftReadError] = useState(null);
 
   // Error and conflict banners
@@ -106,7 +145,7 @@ export default function Phase5RosterContainer({
   const requestGenRef = useRef(0);
 
   const mutationsEnabled = Boolean(
-    settings?.roster_v2_write_enabled && settings?.write_queue_v2_enabled
+    settings?.roster_v2_write_enabled && settings?.write_queue_v2_enabled && !isRevalidating
   );
   const readEnabled = Boolean(settings?.roster_v2_read_enabled !== false);
 
@@ -122,7 +161,9 @@ export default function Phase5RosterContainer({
 
   const onLiveSnapshotChangeRef = useRef(onLiveSnapshotChange);
   onLiveSnapshotChangeRef.current = onLiveSnapshotChange;
-  const lastEmittedSnapshotRef = useRef(null);
+  const onRevalidationCompleteRef = useRef(onRevalidationComplete);
+  onRevalidationCompleteRef.current = onRevalidationComplete;
+  const lastEmittedSnapshotRef = useRef(initialSnapshot || null);
 
   const verifiedLifecycleRef = useRef(verifiedLifecycle);
   verifiedLifecycleRef.current = verifiedLifecycle;
@@ -158,6 +199,7 @@ export default function Phase5RosterContainer({
       const candidateVerified = verifiedLifecycleRef.current;
       const canReuseVerified = Boolean(
         !forceLifecycleRefresh &&
+        !candidateVerified?.isRevalidating &&
         consumedVerifiedLifecycleRef.current !== targetPeriod &&
         candidateVerified &&
         candidateVerified.period === targetPeriod &&
@@ -187,6 +229,16 @@ export default function Phase5RosterContainer({
         if (gen !== requestGenRef.current) return;
 
         if (!lcRes?.ok || !lcRes?.period) {
+          const key = `draft:${targetPeriod}`;
+          const cachedView = targetQueue.view?.(key);
+          const hasVerifiedBaseline = (cachedView?.baseline?.checksum != null) ||
+            (currentRosterRef.current && currentRosterRef.current.period === targetPeriod && currentRosterRef.current.ok);
+
+          if (hasVerifiedBaseline) {
+            setActionError('Unable to revalidate period lifecycle');
+            return;
+          }
+
           setLifecycle(null);
           setCurrentRoster(null);
           setPlannedRoster(null);
@@ -250,7 +302,7 @@ export default function Phase5RosterContainer({
         if (gen !== requestGenRef.current) return;
 
         if (draftLoadError) {
-          const isRetryable = draftLoadError === 'LOCK_BUSY' || draftLoadError === 'TRANSIENT_BACKEND';
+          const isRetryable = draftLoadError === 'LOCK_BUSY' || draftLoadError === 'TRANSIENT_BACKEND' || draftLoadError === 'DRAFT_READ_FAILED' || draftLoadError === 'NETWORK_ERROR';
           const cachedView = targetQueue.view?.(key);
           const hasVerifiedBaseline = (cachedView?.baseline?.checksum != null) ||
             (currentRosterRef.current && currentRosterRef.current.period === targetPeriod && currentRosterRef.current.ok);
@@ -259,6 +311,7 @@ export default function Phase5RosterContainer({
             // Part D: Preserve last verified snapshot during retryable refresh failure
             setDraftReadError(null);
             setDraftSaveStatus('saved');
+            setActionError(`Failed to revalidate draft: ${draftLoadError}`);
             if (!currentRosterRef.current || currentRosterRef.current.period !== targetPeriod) {
               const activePeople = (people && people.length > 0) ? people : internalPeopleRef.current;
               const assignments = draftCellsToCurrentAssignments({
@@ -274,6 +327,7 @@ export default function Phase5RosterContainer({
               });
             }
             syncRecoveryState(targetQueue, targetPeriod);
+            // Mutations stay blocked while revalidation failed
             return;
           }
 
@@ -292,11 +346,20 @@ export default function Phase5RosterContainer({
             setActionError(`Failed to load draft: ${draftLoadError}`);
           }
           syncRecoveryState(targetQueue, targetPeriod);
+          onRevalidationCompleteRef.current?.(targetPeriod);
           return;
         }
 
         setDraftReadError(null);
         let activePeople = (people && people.length > 0) ? people : internalPeopleRef.current;
+        if (!activePeople || activePeople.length === 0) {
+          const cached = getCachedStaffDirectory?.() || targetQueue?.getCachedPeople?.();
+          if (Array.isArray(cached) && cached.length > 0) {
+            activePeople = cached;
+            internalPeopleRef.current = cached;
+            setInternalPeople(cached);
+          }
+        }
         if ((!activePeople || activePeople.length === 0) && targetQueue?.repository?.schema) {
           try {
             const schema = await targetQueue.repository.schema();
@@ -305,6 +368,9 @@ export default function Phase5RosterContainer({
               activePeople = schema.people;
               internalPeopleRef.current = schema.people;
               setInternalPeople(schema.people);
+              if (typeof setCachedStaffDirectory === 'function') {
+                setCachedStaffDirectory(schema.people);
+              }
             }
           } catch (_) {}
         }
@@ -329,6 +395,7 @@ export default function Phase5RosterContainer({
         setReplacements([]);
         setDraftSaveStatus('saved');
         syncRecoveryState(targetQueue, targetPeriod);
+        onRevalidationCompleteRef.current?.(targetPeriod);
         return;
       }
 
@@ -374,9 +441,11 @@ export default function Phase5RosterContainer({
       }
 
       syncRecoveryState(targetQueue, targetPeriod);
+      onRevalidationCompleteRef.current?.(targetPeriod);
     } catch (err) {
       if (gen === requestGenRef.current) {
         setActionError(err.message || 'Failed to load authoritative roster data');
+        onRevalidationCompleteRef.current?.(targetPeriod);
       }
     }
   }, [onLifecycleStateChange, syncRecoveryState]);
@@ -419,7 +488,44 @@ export default function Phase5RosterContainer({
     consumedVerifiedLifecycleRef.current = null;
 
     // Reset month-scoped state immediately on month switch
-    setLoading(true);
+    const hasInitial = Boolean(
+      initialSnapshot?.isLoaded &&
+      initialSnapshot?.period === period &&
+      Array.isArray(initialSnapshot?.assignments) &&
+      initialSnapshot?.assignments.length > 0
+    );
+
+    if (!hasInitial) {
+      setLoading(true);
+      setCurrentRoster(null);
+      setPlannedRoster(null);
+      setAmendmentHistory(null);
+      setAbsences([]);
+      setReplacements([]);
+      setLifecycle(null);
+      setDraftSaveStatus(null);
+    } else {
+      setLoading(false);
+      setCurrentRoster((prev) => {
+        if (prev?.period === period && prev?.assignments?.length > 0) return prev;
+        return {
+          ok: true,
+          period: initialSnapshot.period,
+          state: initialSnapshot.state || 'DRAFT',
+          revision: initialSnapshot.revision,
+          assignments: initialSnapshot.assignments
+        };
+      });
+      if (initialSnapshot.state) {
+        setLifecycle((prev) => prev || {
+          state: initialSnapshot.state,
+          revision: initialSnapshot.revision,
+          draftRevision: initialSnapshot.revision
+        });
+      }
+      setDraftSaveStatus('saved');
+    }
+
     setActionError(null);
     setRevisionConflictMsg(null);
     setSelectedCellForAmend(null);
@@ -431,16 +537,9 @@ export default function Phase5RosterContainer({
     setCreditModalConfig(null);
     setUndoEvent(null);
     setViewMode((prev) => (prev === 'ENTITLEMENTS' ? 'ENTITLEMENTS' : 'CURRENT'));
-    setCurrentRoster(null);
-    setPlannedRoster(null);
-    setAmendmentHistory(null);
-    setAbsences([]);
-    setReplacements([]);
-    setLifecycle(null);
     setRecoveryOp(null);
     setDraftUndoStack([]);
     setDraftRedoStack([]);
-    setDraftSaveStatus(null);
     setIsSavingDraft(false);
     setDraftReadError(null);
 
@@ -496,11 +595,12 @@ export default function Phase5RosterContainer({
       }
       lastAuthTokenRef.current = activeToken;
 
-      if (!activeToken) {
-        // Session expired or logged out: fail closed immediately for DRAFT mode
+      if (!activeToken || !isAdmin) {
+        // Session expired, logged out, or non-admin context: fail closed immediately for DRAFT mode
         if (lifecycle?.state === 'DRAFT' || (!lifecycle && period >= '2026-11')) {
           setCurrentRoster(null);
           setPlannedRoster(null);
+          setInternalPeople([]);
           setDraftReadError('AUTHORIZATION_REQUIRED');
           setDraftSaveStatus(null);
           setEntitlementBalances(null);
@@ -527,7 +627,22 @@ export default function Phase5RosterContainer({
         }
       }
     });
-  }, [queue, period, lifecycle?.state, loadAuthoritativeData]);
+  }, [queue, period, lifecycle?.state, loadAuthoritativeData, isAdmin]);
+
+  // Immediately fail closed if role switches away from Admin while mounted
+  useEffect(() => {
+    if (!isAdmin) {
+      if (lifecycle?.state === 'DRAFT' || (!lifecycle && period >= '2026-11')) {
+        setCurrentRoster(null);
+        setPlannedRoster(null);
+        setInternalPeople([]);
+        setDraftReadError('AUTHORIZATION_REQUIRED');
+        setDraftSaveStatus(null);
+        setEntitlementBalances(null);
+        setEntitlementTransactions([]);
+      }
+    }
+  }, [isAdmin, lifecycle?.state, period]);
 
   // Synchronize lifecycle state when parent provides a verifiedLifecycle
   const prevVerifiedPeriodRef = useRef(period);
@@ -647,7 +762,7 @@ export default function Phase5RosterContainer({
 
   // Handle Phase 5 amendment submission (ADMIN_CORRECTION or SWAP)
   const handleAmendmentSubmit = useCallback(async (payload) => {
-    if (!queue || isSubmittingAmend) return;
+    if (!queue || isSubmittingAmend || isRevalidating) return;
     setIsSubmittingAmend(true);
     setActionError(null);
     setRevisionConflictMsg(null);
@@ -681,11 +796,11 @@ export default function Phase5RosterContainer({
     } finally {
       setIsSubmittingAmend(false);
     }
-  }, [queue, isSubmittingAmend, period, loadAuthoritativeData]);
+  }, [queue, isSubmittingAmend, isRevalidating, period, loadAuthoritativeData]);
 
   // Handle Phase 5 event reversal
   const handleReverseEvent = useCallback(async (eventId, adminNote = '') => {
-    if (!queue || !eventId) return;
+    if (!queue || !eventId || isRevalidating) return;
     setActionError(null);
     setRevisionConflictMsg(null);
 
@@ -703,11 +818,11 @@ export default function Phase5RosterContainer({
       }
       throw err;
     }
-  }, [queue, period, undoEvent, loadAuthoritativeData]);
+  }, [queue, period, undoEvent, isRevalidating, loadAuthoritativeData]);
 
   // Handle Phase 6 Absence Submission
   const handleAbsenceSubmit = useCallback(async (payload) => {
-    if (!queue || isSubmittingAbsence) return;
+    if (!queue || isSubmittingAbsence || isRevalidating) return;
     setIsSubmittingAbsence(true);
     setActionError(null);
     setRevisionConflictMsg(null);
@@ -728,11 +843,11 @@ export default function Phase5RosterContainer({
     } finally {
       setIsSubmittingAbsence(false);
     }
-  }, [queue, isSubmittingAbsence, period, loadAuthoritativeData]);
+  }, [queue, isSubmittingAbsence, isRevalidating, period, loadAuthoritativeData]);
 
   // Handle Phase 6 Replacement Submission
   const handleReplacementSubmit = useCallback(async (payload) => {
-    if (!queue || isSubmittingReplacement) return;
+    if (!queue || isSubmittingReplacement || isRevalidating) return;
     setIsSubmittingReplacement(true);
     setActionError(null);
     setRevisionConflictMsg(null);
@@ -752,11 +867,11 @@ export default function Phase5RosterContainer({
     } finally {
       setIsSubmittingReplacement(false);
     }
-  }, [queue, isSubmittingReplacement, period, loadAuthoritativeData]);
+  }, [queue, isSubmittingReplacement, isRevalidating, period, loadAuthoritativeData]);
 
   // Handle Phase 6 Absence Reversal
   const handleReverseAbsence = useCallback(async (absenceId, adminNote = '') => {
-    if (!queue || !absenceId || isReversingPhase6) return;
+    if (!queue || !absenceId || isReversingPhase6 || isRevalidating) return;
     setIsReversingPhase6(true);
     setActionError(null);
     setRevisionConflictMsg(null);
@@ -776,11 +891,11 @@ export default function Phase5RosterContainer({
     } finally {
       setIsReversingPhase6(false);
     }
-  }, [queue, period, isReversingPhase6, loadAuthoritativeData]);
+  }, [queue, period, isReversingPhase6, isRevalidating, loadAuthoritativeData]);
 
   // Handle Phase 6 Replacement Reversal
   const handleReverseReplacement = useCallback(async (replacementId, options = {}) => {
-    if (!queue || !replacementId || isReversingPhase6) return;
+    if (!queue || !replacementId || isReversingPhase6 || isRevalidating) return;
     setIsReversingPhase6(true);
     setActionError(null);
     setRevisionConflictMsg(null);
@@ -800,7 +915,7 @@ export default function Phase5RosterContainer({
     } finally {
       setIsReversingPhase6(false);
     }
-  }, [queue, period, isReversingPhase6, loadAuthoritativeData]);
+  }, [queue, period, isReversingPhase6, isRevalidating, loadAuthoritativeData]);
 
   // Handle Dedicated Recovery
   const handleRetryRecovery = useCallback(async (opId, opType) => {
@@ -984,7 +1099,7 @@ export default function Phase5RosterContainer({
 
   // Phase 8 Slice 2: Handle single cell edit in DRAFT
   const handleDraftCellChange = useCallback(async (personId, date, dutyDomain, newShiftCode) => {
-    if (!queue || lifecycle?.state !== 'DRAFT') return;
+    if (!queue || lifecycle?.state !== 'DRAFT' || isRevalidating) return;
     setIsSavingDraft(true);
     setDraftSaveStatus('saving');
     setActionError(null);
@@ -1051,11 +1166,11 @@ export default function Phase5RosterContainer({
     } finally {
       setIsSavingDraft(false);
     }
-  }, [queue, lifecycle, currentRoster, period, loadAuthoritativeData, syncRecoveryState]);
+  }, [queue, lifecycle, currentRoster, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
 
   // Phase 8 Slice 2: Handle bulk shift edit in DRAFT
   const handleBulkDraftChange = useCallback(async (cellsWithShift) => {
-    if (!queue || lifecycle?.state !== 'DRAFT' || !cellsWithShift.length) return;
+    if (!queue || lifecycle?.state !== 'DRAFT' || !cellsWithShift.length || isRevalidating) return;
     setIsSavingDraft(true);
     setDraftSaveStatus('saving');
     setActionError(null);
@@ -1123,11 +1238,11 @@ export default function Phase5RosterContainer({
     } finally {
       setIsSavingDraft(false);
     }
-  }, [queue, lifecycle, period, loadAuthoritativeData, syncRecoveryState]);
+  }, [queue, lifecycle, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
 
   // Phase 8 Slice 2: Handle undo in DRAFT
   const handleUndoDraft = useCallback(async () => {
-    if (draftUndoStack.length === 0 || lifecycle?.state !== 'DRAFT') return;
+    if (draftUndoStack.length === 0 || lifecycle?.state !== 'DRAFT' || isRevalidating) return;
     const lastOp = draftUndoStack[draftUndoStack.length - 1];
 
     // Concurrency check: Ensure current state matches what this operation produced (lastOp.next)
@@ -1202,11 +1317,11 @@ export default function Phase5RosterContainer({
       await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       syncRecoveryState(queue, period);
     }
-  }, [draftUndoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData, syncRecoveryState]);
+  }, [draftUndoStack, lifecycle, currentRoster, queue, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
 
   // Phase 8 Slice 2: Handle redo in DRAFT
   const handleRedoDraft = useCallback(async () => {
-    if (draftRedoStack.length === 0 || lifecycle?.state !== 'DRAFT') return;
+    if (draftRedoStack.length === 0 || lifecycle?.state !== 'DRAFT' || isRevalidating) return;
     const lastOp = draftRedoStack[draftRedoStack.length - 1];
 
     // Concurrency check: Ensure current state matches what was undone (lastOp.previous)
@@ -1282,7 +1397,7 @@ export default function Phase5RosterContainer({
       await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
       syncRecoveryState(queue, period);
     }
-  }, [draftRedoStack, lifecycle, currentRoster, queue, period, loadAuthoritativeData, syncRecoveryState]);
+  }, [draftRedoStack, lifecycle, currentRoster, queue, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
 
   // If not enrolled or V2 read is disabled: container does not render
   const state = lifecycle?.state;
@@ -1406,6 +1521,8 @@ export default function Phase5RosterContainer({
                   ? 'bg-rose-100 text-rose-800 border border-rose-300'
                   : draftReadError === 'AUTHORIZATION_REQUIRED' || !isVerifiedAdmin
                   ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                  : isRevalidating
+                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
                   : isSavingDraft
                   ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
                   : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
@@ -1419,6 +1536,8 @@ export default function Phase5RosterContainer({
                 ? '⚠️ Save failed'
                 : draftReadError === 'AUTHORIZATION_REQUIRED' || !isVerifiedAdmin
                 ? '🔒 Verification required'
+                : isRevalidating
+                ? '⏳ Verifying with server…'
                 : isSavingDraft
                 ? '⏳ Saving…'
                 : '✓ All changes saved'}
@@ -1438,15 +1557,27 @@ export default function Phase5RosterContainer({
 
           {isAdmin && (
             isVerifiedAdmin ? (
-              <span
-                id="admin-auth-verified-badge"
-                data-testid="admin-auth-verified-badge"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
-                title={adminEmail || 'Verified administrator'}
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                Verified administrator{adminEmail ? ` (${adminEmail})` : ''}
-              </span>
+              <div className="inline-flex items-center gap-2">
+                <span
+                  id="admin-auth-verified-badge"
+                  data-testid="admin-auth-verified-badge"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  title={adminEmail || 'Verified administrator'}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  Verified administrator{adminEmail ? ` (${adminEmail})` : ''}
+                </span>
+                <button
+                  type="button"
+                  id="btn-admin-auth-sign-out"
+                  data-testid="btn-admin-auth-sign-out"
+                  onClick={() => clearAdminSessionToken()}
+                  className="px-2 py-0.5 rounded text-[11px] font-semibold text-slate-500 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 transition cursor-pointer"
+                  title="Sign out of administrator session"
+                >
+                  Sign Out
+                </button>
+              </div>
             ) : (
               <div className="inline-flex items-center gap-2">
                 <span

@@ -1719,4 +1719,10 @@ export class DraftQueue {
   async getEntitlementTransactions(params){
     return this.repository.getEntitlementTransactions(params);
   }
+  getCachedSchema(){
+    return this.repository?.getCachedSchema ? this.repository.getCachedSchema() : null;
+  }
+  getCachedPeople(){
+    return this.repository?.getCachedPeople ? this.repository.getCachedPeople() : null;
+  }
 }

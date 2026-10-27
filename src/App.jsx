@@ -12,6 +12,7 @@ import AdminPinModal from './components/AdminPinModal';
 import OnboardingOverlay from './components/OnboardingOverlay';
 import ToastNotification from './components/ToastNotification';
 import PwaInstallBanner from './components/PwaInstallBanner';
+import { clearAdminSessionToken } from './features/roster/auth/adminAuth.js';
 
 import {
   deleteRequest,
@@ -211,12 +212,14 @@ export default function App() {
       // Logout / Exit
       localStorage.removeItem('resq_member_name');
       sessionStorage.removeItem('resq_admin_verified');
+      clearAdminSessionToken();
       setSelectedName('');
       setCurrentPage('dashboard');
     } else if (name?.trim().toLowerCase() === 'admin') {
       setPendingSelectName('Admin');
       setIsPinModalOpen(true);
     } else {
+      clearAdminSessionToken();
       localStorage.setItem('resq_member_name', name);
       setSelectedName(name);
     }

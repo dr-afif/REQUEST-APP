@@ -22,6 +22,7 @@ export const PRODUCTION_OAUTH_REDIRECT_URI =
 let inMemorySessionToken = null;
 let inMemoryAdminEmail = null;
 let inMemoryExpiresAt = null;
+let inMemoryExpiryTimer = null;
 
 const authListeners = new Set();
 
@@ -48,7 +49,7 @@ export function getGoogleClientId() {
 export function getAdminSessionToken() {
   if (inMemorySessionToken && inMemoryExpiresAt) {
     const now = Math.floor(Date.now() / 1000);
-    if (inMemoryExpiresAt > (now + 10)) {
+    if (inMemoryExpiresAt > now) {
       return inMemorySessionToken;
     }
     clearAdminSessionToken();
@@ -57,14 +58,54 @@ export function getAdminSessionToken() {
   return inMemorySessionToken || null;
 }
 
-export function setAdminSessionToken(token, email = null, expiresAt = null) {
+export function setAdminSessionToken(token, emailOrExpires = null, maybeExpiresAt = null) {
+  if (inMemoryExpiryTimer) {
+    clearTimeout(inMemoryExpiryTimer);
+    inMemoryExpiryTimer = null;
+  }
+
+  let email = null;
+  let expiresAt = null;
+  if (typeof emailOrExpires === 'number') {
+    expiresAt = emailOrExpires;
+  } else if (typeof emailOrExpires === 'string') {
+    email = emailOrExpires;
+    if (typeof maybeExpiresAt === 'number') {
+      expiresAt = maybeExpiresAt;
+    }
+  }
+
   inMemorySessionToken = token || null;
   inMemoryAdminEmail = email || null;
-  inMemoryExpiresAt = typeof expiresAt === 'number' ? expiresAt : (token ? Math.floor(Date.now() / 1000) + 900 : null);
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (typeof expiresAt === 'number') {
+    if (expiresAt < 1000000000) {
+      inMemoryExpiresAt = nowSec + expiresAt;
+    } else {
+      inMemoryExpiresAt = expiresAt;
+    }
+  } else {
+    inMemoryExpiresAt = token ? nowSec + 900 : null;
+  }
+
+  if (inMemorySessionToken && inMemoryExpiresAt) {
+    const remainingMs = Math.max(1, (inMemoryExpiresAt - nowSec) * 1000);
+    inMemoryExpiryTimer = setTimeout(() => {
+      clearAdminSessionToken();
+    }, remainingMs);
+    if (inMemoryExpiryTimer && typeof inMemoryExpiryTimer.unref === 'function') {
+      inMemoryExpiryTimer.unref();
+    }
+  }
   notifyAdminAuth();
 }
 
 export function clearAdminSessionToken() {
+  if (inMemoryExpiryTimer) {
+    clearTimeout(inMemoryExpiryTimer);
+    inMemoryExpiryTimer = null;
+  }
   const hadSession = Boolean(inMemorySessionToken);
   inMemorySessionToken = null;
   inMemoryAdminEmail = null;

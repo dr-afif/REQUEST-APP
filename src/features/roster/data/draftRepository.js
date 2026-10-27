@@ -1,8 +1,46 @@
 // Separate transport: legacy request() behavior remains untouched.
+import { isSessionTokenActive, subscribeAdminAuth } from '../auth/adminAuth.js';
 
 // Module-scoped shared in-flight read broker across independent repository instances.
 // READS ONLY: mutations strictly bypass this broker and are never coalesced.
 const sharedInFlightReads = new Map();
+
+// Module-scoped session staff directory cache (in-memory only).
+// Retains verified directory after first authorized read, invalidating on auth revocation.
+let sessionStaffDirectory = null;
+
+if (typeof subscribeAdminAuth === 'function') {
+  subscribeAdminAuth(() => {
+    if (!isSessionTokenActive()) {
+      sessionStaffDirectory = null;
+    }
+  });
+}
+
+export function getCachedStaffDirectory() {
+  if (!isSessionTokenActive()) return null;
+  return (sessionStaffDirectory && Array.isArray(sessionStaffDirectory.people))
+    ? sessionStaffDirectory.people
+    : null;
+}
+
+export function getCachedSchema() {
+  if (!isSessionTokenActive()) return null;
+  return sessionStaffDirectory;
+}
+
+export function setCachedStaffDirectory(schemaOrPeople) {
+  if (!isSessionTokenActive()) return;
+  if (Array.isArray(schemaOrPeople)) {
+    sessionStaffDirectory = { ok: true, people: schemaOrPeople };
+  } else if (schemaOrPeople && Array.isArray(schemaOrPeople.people)) {
+    sessionStaffDirectory = schemaOrPeople;
+  }
+}
+
+export function clearCachedStaffDirectory() {
+  sessionStaffDirectory = null;
+}
 
 export function _clearSharedInFlightReads() {
   sharedInFlightReads.clear();
@@ -275,7 +313,19 @@ export function createDraftRepository({baseUrl=import.meta.env?.VITE_APPS_SCRIPT
     return {...base,payload:op.payload};
   };
   return {
-    schema:()=>request('rosterv2draftschema'),
+    schema:async(options={})=>{
+      const forceRefresh = Boolean(options?.forceRefresh);
+      if(!forceRefresh && isSessionTokenActive() && sessionStaffDirectory && Array.isArray(sessionStaffDirectory.people)){
+        return sessionStaffDirectory;
+      }
+      const res = await request('rosterv2draftschema');
+      if(res?.ok && Array.isArray(res.people) && isSessionTokenActive()){
+        sessionStaffDirectory = res;
+      }
+      return res;
+    },
+    getCachedSchema:()=>getCachedSchema(),
+    getCachedPeople:()=>getCachedStaffDirectory(),
     read:entityKey=>request('rosterv2draft',{entityKey}),
     write:op=>request('rosterv2draftpatch',wire(op),true),
     status:operationId=>request('rosterv2operation',{operationId}),

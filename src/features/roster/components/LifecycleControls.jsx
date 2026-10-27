@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { draftRuntime } from '../queue/runtime.js';
 import { terminal } from '../queue/state.js';
 import protocol from '../queue/protocol.js';
-import { getAdminSessionToken } from '../auth/adminAuth.js';
+import { getAdminSessionToken, subscribeAdminAuth } from '../auth/adminAuth.js';
 
 const ERROR_MESSAGES = {
   REVISION_CONFLICT: 'The roster or lifecycle state was updated from another session. Please refresh before proceeding.',
@@ -20,7 +20,16 @@ const ERROR_MESSAGES = {
   PERMANENT_FAILURE: 'The lifecycle operation failed permanently and cannot be retried unchanged.'
 };
 
-export function LifecycleBadge({ state, pendingOp, loading, error = null }) {
+export function LifecycleBadge({ state, pendingOp, loading, error = null, isRevalidating = false }) {
+  if (isRevalidating) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200" aria-live="polite">
+        <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+        Verifying with server…
+      </span>
+    );
+  }
+
   if (loading) {
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200" aria-live="polite">
@@ -402,11 +411,17 @@ export default function LifecycleControls({
   runtimeFactory = draftRuntime,
   onLifecycleStateChange = null,
   allowPublish = true,
-  reloadTrigger = 0
+  reloadTrigger = 0,
+  isRevalidating = false
 }) {
   const [queue, setQueue] = useState(externalQueue);
   const [, setTick] = useState(0);
+  const [, setAuthTick] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    return subscribeAdminAuth(() => setAuthTick((t) => t + 1));
+  }, []);
   const [isEnrolled, setIsEnrolled] = useState(false);
   const [fetchedLifecycle, setFetchedLifecycle] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -735,7 +750,13 @@ export default function LifecycleControls({
 
   return (
     <div className="flex flex-wrap items-center gap-3" aria-label="Roster lifecycle status and controls">
-      <LifecycleBadge state={confirmedState} pendingOp={pendingOp} loading={loading} error={actionError} />
+      <LifecycleBadge
+        state={confirmedState}
+        pendingOp={pendingOp}
+        loading={loading && !isRevalidating}
+        error={actionError}
+        isRevalidating={isRevalidating}
+      />
 
       {/* Recover / Retry action if operation is blocked */}
       {pendingOp?.status === 'RECOVERY_REQUIRED' && isVerifiedAdmin && (
@@ -749,7 +770,7 @@ export default function LifecycleControls({
       )}
 
       {/* Admin Action Buttons */}
-      {isVerifiedAdmin && !hasActiveLifecycleOp && !loading && (
+      {isVerifiedAdmin && !hasActiveLifecycleOp && !loading && !isRevalidating && (
         <div className="flex items-center gap-2">
           {confirmedState === 'DRAFT' && (
             <button

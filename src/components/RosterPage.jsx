@@ -12,6 +12,12 @@ import {
   projectNormalizedAssignmentsToCalendarRows,
   filterMoCalendarRows
 } from '../features/roster/data/calendarProjection.js';
+import {
+  getAdminSessionToken,
+  subscribeAdminAuth,
+  isSessionTokenActive
+} from '../features/roster/auth/adminAuth.js';
+import { getCachedStaffDirectory } from '../features/roster/data/draftRepository.js';
 
 const formatEmergencyPhysicianName = (entry) => {
   const rawName = typeof entry === 'string' ? entry : entry?.name || '';
@@ -649,6 +655,7 @@ const cleanDayDataForNameOverlap = (dayData, modifiedShiftCol, newValue, allowDo
 
 export default function RosterPage({
   selectedName,
+  isAdmin: propIsAdmin = false,
   names = [],
   masterRoster = [],
   onUploadMasterRoster,
@@ -726,7 +733,7 @@ export default function RosterPage({
   }, [tallyThresholds]);
 
   // 1. Set the initial roster month to propRosterMonth or current month (YYYY-MM)
-  const [rosterMonth, setRosterMonth] = useState(() => {
+  const [internalRosterMonth, setRosterMonth] = useState(() => {
     if (propRosterMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(propRosterMonth)) {
       return propRosterMonth;
     }
@@ -735,6 +742,10 @@ export default function RosterPage({
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     return `${yyyy}-${mm}`;
   });
+
+  const rosterMonth = (propRosterMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(propRosterMonth))
+    ? propRosterMonth
+    : internalRosterMonth;
 
   useEffect(() => {
     if (propRosterMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(propRosterMonth)) {
@@ -746,7 +757,7 @@ export default function RosterPage({
   rosterMonthRef.current = rosterMonth;
 
   // Phase 4 Roster Lifecycle State
-  const [lifecycleInfo, setLifecycleInfo] = useState({
+  const [rawLifecycleInfo, setLifecycleInfo] = useState({
     period: rosterMonth,
     isEnrolled: false,
     state: null,
@@ -767,16 +778,33 @@ export default function RosterPage({
     setLifecycleReloadTrigger((prev) => prev + 1);
   }, []);
 
+  const isAdmin = Boolean(propIsAdmin || selectedName?.trim().toLowerCase() === 'admin');
+
+  // In-memory cache for fast month navigation
+  const cacheByPeriodRef = useRef({});
+  const prevMonthRef = useRef(rosterMonth);
+
   useEffect(() => {
-    setLifecycleInfo({
-      period: rosterMonth,
-      isEnrolled: false,
-      state: null,
-      revision: null,
-      draftRevision: null,
-      error: null,
-      checked: false,
-    });
+    const cached = cacheByPeriodRef.current[rosterMonth];
+    const canUseCached = Boolean(
+      isAdmin &&
+      cached?.lifecycle?.isEnrolled &&
+      cached?.lifecycle?.state &&
+      cached?.snapshot?.isLoaded &&
+      cached?.snapshot?.assignments?.length > 0 &&
+      isSessionTokenActive()
+    );
+    if (!canUseCached) {
+      setLifecycleInfo({
+        period: rosterMonth,
+        isEnrolled: false,
+        state: null,
+        revision: null,
+        draftRevision: null,
+        error: null,
+        checked: false,
+      });
+    }
   }, [rosterMonth]);
 
   const handleLifecycleStateChange = useCallback((nextInfo) => {
@@ -784,18 +812,26 @@ export default function RosterPage({
     const targetPeriod = nextInfo.period ?? rosterMonthRef.current;
     if (targetPeriod !== rosterMonthRef.current) return;
 
-    setLifecycleInfo((prev) => {
-      const normalized = {
-        period: targetPeriod,
-        isEnrolled: Boolean(nextInfo.isEnrolled),
-        state: nextInfo.state ?? null,
-        revision: nextInfo.revision ?? null,
-        draftRevision: nextInfo.draftRevision ?? null,
-        error: nextInfo.error ?? null,
-        checked: typeof nextInfo.checked === 'boolean'
-          ? nextInfo.checked
-          : Boolean(nextInfo.state || nextInfo.error || nextInfo.isEnrolled === false),
+    const normalized = {
+      period: targetPeriod,
+      isEnrolled: Boolean(nextInfo.isEnrolled),
+      state: nextInfo.state ?? null,
+      revision: nextInfo.revision ?? null,
+      draftRevision: nextInfo.draftRevision ?? null,
+      error: nextInfo.error ?? null,
+      checked: typeof nextInfo.checked === 'boolean'
+        ? nextInfo.checked
+        : Boolean(nextInfo.state || nextInfo.error || nextInfo.isEnrolled === false),
+    };
+
+    if (normalized.isEnrolled && normalized.state) {
+      cacheByPeriodRef.current[targetPeriod] = {
+        ...cacheByPeriodRef.current[targetPeriod],
+        lifecycle: normalized
       };
+    }
+
+    setLifecycleInfo((prev) => {
       if (
         prev.period === normalized.period &&
         prev.isEnrolled === normalized.isEnrolled &&
@@ -803,16 +839,17 @@ export default function RosterPage({
         prev.revision === normalized.revision &&
         prev.draftRevision === normalized.draftRevision &&
         prev.error === normalized.error &&
-        prev.checked === normalized.checked
+        prev.checked === normalized.checked &&
+        prev.isRevalidating === false
       ) {
         return prev;
       }
-      return normalized;
+      return { ...normalized, isRevalidating: false };
     });
   }, []);
 
   // V2 Authoritative Live Snapshot (Strictly period-keyed, updated via Phase5RosterContainer)
-  const [v2LiveSnapshot, setV2LiveSnapshot] = useState({
+  const [rawV2LiveSnapshot, setV2LiveSnapshot] = useState({
     period: rosterMonth,
     state: null,
     revision: null,
@@ -822,67 +859,184 @@ export default function RosterPage({
     draftSaveStatus: null
   });
 
+  // Immediate fail-closed cleanup of private data on admin logout or token expiration
   useEffect(() => {
-    setV2LiveSnapshot({
-      period: rosterMonth,
-      state: null,
-      revision: null,
-      assignments: [],
-      isLoaded: false,
-      isSaving: false,
-      draftSaveStatus: null
+    const unsub = subscribeAdminAuth(() => {
+      if (!isSessionTokenActive() || !isAdmin) {
+        cacheByPeriodRef.current = {};
+        setV2LiveSnapshot({
+          period: rosterMonthRef.current,
+          state: null,
+          revision: null,
+          assignments: [],
+          isLoaded: false,
+          isSaving: false,
+          draftSaveStatus: null
+        });
+      }
     });
+    return unsub;
+  }, [isAdmin]);
+
+  const prevIsAdminRef = useRef(isAdmin);
+  // Immediately fail closed if role switches away from Admin while mounted
+  useEffect(() => {
+    if (prevIsAdminRef.current && !isAdmin) {
+      cacheByPeriodRef.current = {};
+      setV2LiveSnapshot({
+        period: rosterMonthRef.current,
+        state: null,
+        revision: null,
+        assignments: [],
+        isLoaded: false,
+        isSaving: false,
+        draftSaveStatus: null
+      });
+    }
+    prevIsAdminRef.current = isAdmin;
+  }, [isAdmin]);
+
+  // Synchronous Frame-0 derived values for instant revisit without unsafe render-time setState:
+  const cachedForCurrentPeriod = cacheByPeriodRef.current[rosterMonth];
+  const canUseCachedSession = Boolean(
+    isAdmin &&
+    isSessionTokenActive() &&
+    cachedForCurrentPeriod?.lifecycle?.isEnrolled &&
+    cachedForCurrentPeriod?.lifecycle?.period === rosterMonth &&
+    cachedForCurrentPeriod?.snapshot?.isLoaded &&
+    cachedForCurrentPeriod?.snapshot?.assignments?.length > 0
+  );
+
+  const lifecycleInfo = rawLifecycleInfo.period === rosterMonth
+    ? rawLifecycleInfo
+    : (canUseCachedSession
+        ? { ...cachedForCurrentPeriod.lifecycle, isRevalidating: true }
+        : {
+            period: rosterMonth,
+            isEnrolled: false,
+            state: null,
+            revision: null,
+            draftRevision: null,
+            error: null,
+            checked: false,
+          });
+
+  const v2LiveSnapshot = rawV2LiveSnapshot.period === rosterMonth
+    ? rawV2LiveSnapshot
+    : (canUseCachedSession
+        ? { ...cachedForCurrentPeriod.snapshot, isRevalidating: true }
+        : {
+            period: rosterMonth,
+            state: null,
+            revision: null,
+            assignments: [],
+            isLoaded: false,
+            isSaving: false,
+            draftSaveStatus: null
+          });
+
+  // State synchronization on period navigation (side effects handled cleanly in effect):
+  useEffect(() => {
+    prevMonthRef.current = rosterMonth;
+    const cached = cacheByPeriodRef.current[rosterMonth];
+    const canUseCached = Boolean(
+      isAdmin &&
+      isSessionTokenActive() &&
+      cached?.lifecycle?.isEnrolled &&
+      cached?.lifecycle?.period === rosterMonth &&
+      cached?.snapshot?.isLoaded &&
+      cached?.snapshot?.assignments?.length > 0
+    );
+    if (canUseCached) {
+      setLifecycleInfo({ ...cached.lifecycle, isRevalidating: true });
+      setV2LiveSnapshot({ ...cached.snapshot, isRevalidating: true });
+    } else {
+      setLifecycleInfo({
+        period: rosterMonth,
+        isEnrolled: false,
+        state: null,
+        revision: null,
+        draftRevision: null,
+        error: null,
+        checked: false,
+      });
+      setV2LiveSnapshot({
+        period: rosterMonth,
+        state: null,
+        revision: null,
+        assignments: [],
+        isLoaded: false,
+        isSaving: false,
+        draftSaveStatus: null
+      });
+    }
   }, [rosterMonth]);
 
   // Stable callback passed to Phase5RosterContainer
   const handleLiveSnapshotChange = useCallback((snapshot) => {
     if (!snapshot || typeof snapshot !== 'object') return;
-    // Strict period identity guard: disregard cross-month or stale period responses
-    if (snapshot.period !== rosterMonth) return;
+    const targetPeriod = snapshot.period;
+    if (targetPeriod !== rosterMonthRef.current) return;
+
+    const normalized = {
+      period: snapshot.period,
+      state: snapshot.state ?? null,
+      revision: snapshot.revision ?? null,
+      assignments: Array.isArray(snapshot.assignments) ? snapshot.assignments : [],
+      isLoaded: Boolean(snapshot.isLoaded),
+      isSaving: Boolean(snapshot.isSaving),
+      draftSaveStatus: snapshot.draftSaveStatus ?? null,
+    };
+
+    if (normalized.isLoaded && normalized.assignments.length > 0) {
+      cacheByPeriodRef.current[targetPeriod] = {
+        ...cacheByPeriodRef.current[targetPeriod],
+        snapshot: normalized
+      };
+    }
 
     setV2LiveSnapshot((prev) => {
-      // Avoid duplicate renders when identical snapshot is received
       if (
-        prev.period === snapshot.period &&
-        prev.state === snapshot.state &&
-        prev.revision === snapshot.revision &&
-        prev.isLoaded === snapshot.isLoaded &&
-        prev.isSaving === snapshot.isSaving &&
-        prev.draftSaveStatus === snapshot.draftSaveStatus
+        prev.period === normalized.period &&
+        prev.state === normalized.state &&
+        prev.revision === normalized.revision &&
+        prev.isLoaded === normalized.isLoaded &&
+        prev.isSaving === normalized.isSaving &&
+        prev.draftSaveStatus === normalized.draftSaveStatus &&
+        prev.assignments.length === normalized.assignments.length &&
+        prev.isRevalidating === false
       ) {
-        if (prev.assignments === snapshot.assignments) return prev;
-        if (
-          Array.isArray(prev.assignments) &&
-          Array.isArray(snapshot.assignments) &&
-          prev.assignments.length === snapshot.assignments.length
-        ) {
-          const isIdentical = prev.assignments.every((a, i) => {
-            const b = snapshot.assignments[i];
-            return (
-              a === b ||
-              (a?.assignmentId === b?.assignmentId &&
-                a?.personId === b?.personId &&
-                a?.date === b?.date &&
-                a?.shiftCode === b?.shiftCode &&
-                a?.dutyDomain === b?.dutyDomain &&
-                a?.rawShift === b?.rawShift)
-            );
-          });
-          if (isIdentical) return prev;
-        }
+        const isIdentical = prev.assignments.every((a, i) => {
+          const b = normalized.assignments[i];
+          return (
+            a === b ||
+            (a?.assignmentId === b?.assignmentId &&
+              a?.personId === b?.personId &&
+              a?.date === b?.date &&
+              a?.shiftCode === b?.shiftCode &&
+              a?.dutyDomain === b?.dutyDomain &&
+              a?.rawShift === b?.rawShift)
+          );
+        });
+        if (isIdentical) return prev;
       }
-
-      return {
-        period: snapshot.period,
-        state: snapshot.state ?? null,
-        revision: snapshot.revision ?? null,
-        assignments: Array.isArray(snapshot.assignments) ? snapshot.assignments : [],
-        isLoaded: Boolean(snapshot.isLoaded),
-        isSaving: Boolean(snapshot.isSaving),
-        draftSaveStatus: snapshot.draftSaveStatus ?? null
-      };
+      return { ...normalized, isRevalidating: false };
     });
-  }, [rosterMonth]);
+  }, []);
+
+  const handleRevalidationComplete = useCallback((targetPeriod) => {
+    if (targetPeriod !== rosterMonthRef.current) return;
+    // Mark DRAFT revalidation complete; lifecycle revalidation is marked separately by handleLifecycleStateChange
+    setV2LiveSnapshot((prev) => prev?.isRevalidating ? { ...prev, isRevalidating: false } : prev);
+  }, []);
+
+  const isRevalidating = Boolean(lifecycleInfo.isRevalidating || v2LiveSnapshot.isRevalidating);
+  const cachedSnapshot = cacheByPeriodRef.current[rosterMonth]?.snapshot || null;
+  const hasValidCachedSession = Boolean(
+    isSessionTokenActive() &&
+    cacheByPeriodRef.current[rosterMonth]?.lifecycle?.isEnrolled &&
+    cachedSnapshot?.isLoaded
+  );
 
   // In-memory derivation of calendar-compatible rows from live V2 snapshot (DO NOT render yet)
   const derivedV2CalendarRows = useMemo(() => {
@@ -2431,8 +2585,6 @@ export default function RosterPage({
     setEditedGrid({});
   };
 
-  const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
-
   const openExportModal = () => {
     setExportSettings((prev) => ({
       ...prev,
@@ -2579,6 +2731,7 @@ export default function RosterPage({
               onLifecycleStateChange={handleLifecycleStateChange}
               allowPublish={false}
               reloadTrigger={lifecycleReloadTrigger}
+              isRevalidating={isRevalidating}
             />
           </div>
         )}
@@ -2779,13 +2932,18 @@ export default function RosterPage({
       lifecycleInfo.isEnrolled && lifecycleInfo.period === rosterMonth && ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(lifecycleInfo.state) && settings?.roster_v2_read_enabled !== false && (
         <div className={activeTab === 'table' ? 'block mb-6' : 'hidden'}>
           <Phase5RosterContainer
+            key={rosterMonth}
             period={rosterMonth}
             verifiedLifecycle={lifecycleInfo}
             settings={settings}
             isAdmin={isAdmin}
             onLifecycleStateChange={handleLifecycleStateChange}
             onLiveSnapshotChange={handleLiveSnapshotChange}
+            onRevalidationComplete={handleRevalidationComplete}
+            initialSnapshot={hasValidCachedSession ? cachedSnapshot : null}
+            isRevalidating={isRevalidating}
             allowDraft={true}
+            people={getCachedStaffDirectory() || []}
             teamMembers={teamMembers}
             legacyNames={names}
             isActiveView={activeTab === 'table'}
