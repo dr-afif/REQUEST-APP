@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { buildUserMonthlyUsage } from '../utils/quota';
 import { APP_ICONS } from '../constants/icons';
+import { isSessionTokenActive } from '../features/roster/auth/adminAuth.js';
 
 export default function AdminPanel({
   requests = [],
@@ -31,6 +32,16 @@ export default function AdminPanel({
   onUpsertPublicHoliday,
   onDeletePublicHoliday,
 }) {
+  if (!isSessionTokenActive()) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-900">
+        <h3 className="text-base font-bold">Administrator Verification Required</h3>
+        <p className="mt-2 text-sm text-amber-700">
+          Access to administrative controls requires an active Google-authenticated session.
+        </p>
+      </div>
+    );
+  }
 
   // Shift block inputs
   const [blockDate, setBlockDate] = useState('');

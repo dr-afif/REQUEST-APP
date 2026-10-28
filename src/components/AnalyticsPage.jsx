@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { isSessionTokenActive } from '../features/roster/auth/adminAuth.js';
 import {
   calculateRosterAnalytics,
   calculateRosterHealthScore,
@@ -24,7 +25,7 @@ export default function AnalyticsPage({
   onUpsertLeaveApplication,
   onDeleteLeaveApplication,
 }) {
-  const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+  const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
 
   // State
   const [searchQuery, setSearchQuery] = useState('');

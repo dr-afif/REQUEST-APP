@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isSessionTokenActive } from '../features/roster/auth/adminAuth.js';
 import { createPortal } from 'react-dom';
 import { normalizeForComparison, toIsoDate } from '../utils/normalise';
 import NewRequestForm from './NewRequestForm';
@@ -139,7 +140,7 @@ export default function DateDetailPanel({
                 {allDateRequests.map((r) => {
                   const isSaving = r.isOptimistic;
                   const style = getVariantStyle(r.request);
-                  const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+                  const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
                   const isOwnOrAdmin =
                     isAdmin ||
                     (selectedName && normalizeForComparison(r.name) === normalizeForComparison(selectedName));

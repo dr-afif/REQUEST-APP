@@ -6,8 +6,12 @@ import path from 'node:path';
 // Helper to load api.js with mock fetch
 async function createMockApiClient() {
   const calls = [];
+  const authUrl = new URL('../../src/features/roster/auth/adminAuth.js', import.meta.url).href;
+  const { setAdminSessionToken, clearAdminSessionToken } = await import(authUrl);
+  setAdminSessionToken('phase1-mutation-token', 'admin@example.invalid', Math.floor(Date.now() / 1000) + 3600);
   const source = fs.readFileSync(new URL('../../src/api.js', import.meta.url), 'utf8')
-    .replace('import.meta.env.VITE_APPS_SCRIPT_URL', JSON.stringify('https://example.invalid/test/exec'));
+    .replace('import.meta.env.VITE_APPS_SCRIPT_URL', JSON.stringify('https://example.invalid/test/exec'))
+    .replace('./features/roster/auth/adminAuth.js', authUrl);
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
@@ -23,7 +27,7 @@ async function createMockApiClient() {
   return {
     api,
     calls,
-    restore: () => { globalThis.fetch = originalFetch; }
+    restore: () => { clearAdminSessionToken(); globalThis.fetch = originalFetch; }
   };
 }
 

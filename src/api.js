@@ -1,3 +1,28 @@
+import { getAdminSessionToken } from './features/roster/auth/adminAuth.js';
+
+export const LEGACY_ADMIN_MUTATION_ACTIONS = new Set([
+  'uploadmasterroster',
+  'updaterequestapproval',
+  'addshiftblock',
+  'deleteshiftblock',
+  'addshifttype',
+  'updateshifttype',
+  'deleteshifttype',
+  'reordershifttypes',
+  'addlimitgroup',
+  'updatelimitgroup',
+  'deletelimitgroup',
+  'addactivity',
+  'deleteactivity',
+  'updatesetting',
+  'updateteammembers',
+  'updateemergencyphysicians',
+  'upsertpublicholiday',
+  'deletepublicholiday',
+  'upsertleaveapplication',
+  'deleteleaveapplication',
+]);
+
 const rawBaseUrl = import.meta.env.VITE_APPS_SCRIPT_URL ?? '';
 const APP_SCRIPT_BASE_URL = rawBaseUrl.trim().replace(/\/$/, '');
 
@@ -29,7 +54,16 @@ async function request({ method = 'GET', body, headers, query } = {}) {
   };
 
   if (body !== undefined) {
-    options.body = JSON.stringify(body);
+    let finalBody = body;
+    const action = typeof body?.action === 'string' ? body.action.trim().toLowerCase() : '';
+    if (LEGACY_ADMIN_MUTATION_ACTIONS.has(action)) {
+      const token = getAdminSessionToken() || body.adminSessionToken;
+      if (!token) {
+        throw new Error('Administrator session required for this operation.');
+      }
+      finalBody = { ...body, adminSessionToken: token };
+    }
+    options.body = JSON.stringify(finalBody);
     // Apps Script receives write actions from the JSON body while reads use query params.
     if (!options.headers['Content-Type']) {
       options.headers['Content-Type'] = 'text/plain;charset=UTF-8';

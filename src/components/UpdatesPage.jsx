@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { isSessionTokenActive } from '../features/roster/auth/adminAuth.js';
 
 export default function UpdatesPage({
   requests = [],
@@ -7,7 +8,7 @@ export default function UpdatesPage({
   selectedName = '',
   onDeleteActivity,
 }) {
-  const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+  const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
 

@@ -28,7 +28,7 @@ function setupHarnessWithRoster(rosterRows = createYearlyRoster()) {
   tables.MasterRoster = structuredClone(rosterRows);
   // Ensure RosterPeriods does not have V2 enrolled periods interfering with test
   tables.RosterPeriods = [['PeriodId', 'State', 'Status', 'SchemaVersion']];
-  return harness(currentSource, { tables });
+  return harness(currentSource, { tables, adminEmail: 'owner@example.invalid', activeEmail: 'owner@example.invalid' });
 }
 
 test('1. October update preserves Jan–Sep byte-for-byte', () => {
@@ -545,7 +545,7 @@ test('19. Missing MasterRoster sheet fails closed and does not auto-create repla
   const tables = structuredClone(fixture.tables);
   delete tables.MasterRoster;
   tables.RosterPeriods = [['PeriodId', 'State', 'Status', 'SchemaVersion']];
-  const h = harness(currentSource, { tables });
+  const h = harness(currentSource, { tables, adminEmail: 'owner@example.invalid', activeEmail: 'owner@example.invalid' });
 
   const res = h.post({
     action: 'uploadmasterroster',

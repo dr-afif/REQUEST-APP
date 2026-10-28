@@ -101,7 +101,11 @@ export function setAdminSessionToken(token, emailOrExpires = null, maybeExpiresA
   notifyAdminAuth();
 }
 
+let authRevocationEpoch = 0;
+
 export function clearAdminSessionToken() {
+  authRevocationEpoch += 1;
+  resetAuthHandoffState();
   if (inMemoryExpiryTimer) {
     clearTimeout(inMemoryExpiryTimer);
     inMemoryExpiryTimer = null;
@@ -129,8 +133,8 @@ export function isSessionTokenActive() {
 export async function requestAuthChallenge({
   baseUrl = import.meta.env?.VITE_APPS_SCRIPT_URL,
   fetcher = globalThis.fetch,
-  origin = (typeof window !== 'undefined' ? window.location.origin : ''),
-  returnUrl = (typeof window !== 'undefined' ? window.location.href : '')
+  origin = (typeof window !== 'undefined' && window.location ? window.location.origin : ''),
+  returnUrl = (typeof window !== 'undefined' && window.location ? window.location.href : '')
 } = {}) {
   if (!baseUrl) throw new Error('BACKEND_URL_UNCONFIGURED');
   const url = new URL(baseUrl);
@@ -158,6 +162,32 @@ export async function requestAuthChallenge({
   };
 }
 
+let inFlightHandoffPromise = null;
+let inFlightHandoffCode = null;
+let lastRedeemedHandoff = null;
+let lastHandoffError = null;
+const failedHandoffCodes = new Set();
+
+export function isAuthHandoffPending() {
+  return inFlightHandoffPromise !== null;
+}
+
+export function getActiveAuthHandoff() {
+  return inFlightHandoffPromise;
+}
+
+export function hasRecentAuthHandoff() {
+  return Boolean(lastRedeemedHandoff && (Date.now() - lastRedeemedHandoff.timestamp < 30000));
+}
+
+export function resetAuthHandoffState() {
+  inFlightHandoffPromise = null;
+  inFlightHandoffCode = null;
+  lastRedeemedHandoff = null;
+  lastHandoffError = null;
+  failedHandoffCodes.clear();
+}
+
 /**
  * Redeem one-time authentication handoff code for short-lived HMAC admin session token.
  * On success, stores the returned HMAC admin session token in memory only.
@@ -165,74 +195,183 @@ export async function requestAuthChallenge({
 export async function redeemAuthHandoff({
   handoffCode,
   baseUrl = import.meta.env?.VITE_APPS_SCRIPT_URL,
-  fetcher = globalThis.fetch
+  fetcher = globalThis.fetch,
+  timeoutMs = 15000
 } = {}) {
   if (!baseUrl) throw new Error('BACKEND_URL_UNCONFIGURED');
   if (!handoffCode || typeof handoffCode !== 'string') {
     throw new Error('MISSING_HANDOFF_CODE');
   }
 
-  const response = await fetcher(baseUrl, {
-    method: 'POST',
-    cache: 'no-store',
-    headers: {
-      'Content-Type': 'text/plain;charset=UTF-8',
-      Accept: 'application/json'
-    },
-    body: JSON.stringify({
-      action: 'rosterv2authredeem',
-      handoffCode: handoffCode.trim()
-    })
-  });
+  const trimmedCode = handoffCode.trim();
+  const startEpoch = authRevocationEpoch;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let timeoutId = null;
 
-  if (!response.ok) throw new Error('AUTH_REDEEM_HTTP_FAILED');
-  const data = await response.json();
-  if (!data.ok || !data.adminSessionToken) {
-    throw new Error(data.error?.message || 'AUTH_REDEEM_REJECTED');
+  try {
+    const fetchPromise = (async () => {
+      const response = await fetcher(baseUrl, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'text/plain;charset=UTF-8',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({
+          action: 'rosterv2authredeem',
+          handoffCode: trimmedCode
+        }),
+        ...(controller ? { signal: controller.signal } : {})
+      });
+
+      if (!response.ok) {
+        const err = new Error('AUTH_REDEEM_HTTP_FAILED');
+        err.code = 'AUTH_REDEEM_HTTP_FAILED';
+        throw err;
+      }
+      const data = await response.json();
+      if (!data.ok || !data.adminSessionToken) {
+        const errCode = data.error?.code || 'AUTH_REDEEM_REJECTED';
+        const errMsg = data.error?.message || 'Authentication handoff expired or invalid.';
+        const err = new Error(errMsg);
+        err.code = errCode;
+        throw err;
+      }
+
+      // Check if session was revoked / logged out while network request was in-flight
+      if (authRevocationEpoch !== startEpoch) {
+        const err = new Error('Session was revoked before verification completed.');
+        err.code = 'AUTH_SESSION_REVOKED';
+        throw err;
+      }
+
+      setAdminSessionToken(data.adminSessionToken, data.email, data.expiresAt);
+      return {
+        ok: true,
+        adminSessionToken: data.adminSessionToken,
+        email: data.email,
+        expiresAt: data.expiresAt
+      };
+    })();
+
+    if (timeoutMs > 0) {
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          if (controller) {
+            try { controller.abort(); } catch (_) {}
+          }
+          const err = new Error('AUTH_REDEEM_TIMEOUT');
+          err.code = 'AUTH_REDEEM_TIMEOUT';
+          reject(err);
+        }, timeoutMs);
+      });
+      return await Promise.race([fetchPromise, timeoutPromise]);
+    }
+
+    return await fetchPromise;
+  } catch (err) {
+    if (err.name === 'AbortError' || err.code === 'AUTH_REDEEM_TIMEOUT') {
+      const timeoutErr = new Error('Verification timed out. Check your network connection and try again.');
+      timeoutErr.code = 'AUTH_REDEEM_TIMEOUT';
+      throw timeoutErr;
+    }
+    throw err;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
-
-  setAdminSessionToken(data.adminSessionToken, data.email, data.expiresAt);
-  return {
-    ok: true,
-    adminSessionToken: data.adminSessionToken,
-    email: data.email,
-    expiresAt: data.expiresAt
-  };
 }
 
 /**
  * Check window location for incoming '?v2auth=<handoff-code>', immediately remove it from URL
  * history via history.replaceState, and redeem it for an HMAC admin session token.
+ * Centralized, idempotent coordinator: deduplicates in-flight calls and caches recent results.
  */
-export async function handleUrlAuthHandoff({
+export function handleUrlAuthHandoff({
   baseUrl = import.meta.env?.VITE_APPS_SCRIPT_URL,
   fetcher = globalThis.fetch,
-  urlStr = (typeof window !== 'undefined' ? window.location.href : '')
+  urlStr = (typeof window !== 'undefined' && window.location ? window.location.href : ''),
+  timeoutMs = 15000
 } = {}) {
-  if (typeof window === 'undefined' || !urlStr) return null;
-
-  try {
-    const currentUrl = new URL(urlStr, 'http://localhost');
-    const handoffCode = currentUrl.searchParams.get('v2auth');
-    if (!handoffCode) return null;
-
-    // Remove ?v2auth= immediately from URL bar and browser history before making network call
-    currentUrl.searchParams.delete('v2auth');
-    const cleanSearch = currentUrl.searchParams.toString();
-    const cleanPath = currentUrl.pathname + (cleanSearch ? `?${cleanSearch}` : '') + currentUrl.hash;
-    if (window.history && typeof window.history.replaceState === 'function') {
-      const docTitle = typeof document !== 'undefined' ? document.title : '';
-      window.history.replaceState(window.history.state, docTitle, cleanPath);
-    }
-
-    return await redeemAuthHandoff({
-      handoffCode,
-      baseUrl,
-      fetcher
-    });
-  } catch (err) {
-    throw err;
+  // If a redemption is already in-flight, reuse that exact promise (strict deduplication)
+  if (inFlightHandoffPromise) {
+    return inFlightHandoffPromise;
   }
+
+  let handoffCode = null;
+  if (urlStr) {
+    try {
+      const currentUrl = new URL(urlStr, 'http://localhost');
+      handoffCode = currentUrl.searchParams.get('v2auth');
+      if (handoffCode) {
+        handoffCode = handoffCode.trim();
+        // Remove ?v2auth= immediately from URL bar and browser history before making network call
+        currentUrl.searchParams.delete('v2auth');
+        const cleanSearch = currentUrl.searchParams.toString();
+        const cleanPath = currentUrl.pathname + (cleanSearch ? `?${cleanSearch}` : '') + currentUrl.hash;
+        if (typeof window !== 'undefined' && window.history && typeof window.history.replaceState === 'function') {
+          const docTitle = typeof document !== 'undefined' ? document.title : '';
+          window.history.replaceState(window.history.state, docTitle, cleanPath);
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (!handoffCode) {
+    // If no code in URL, check if we recently redeemed one successfully
+    if (lastRedeemedHandoff && (Date.now() - lastRedeemedHandoff.timestamp < 30000)) {
+      return Promise.resolve(lastRedeemedHandoff.result);
+    }
+    return Promise.resolve(null);
+  }
+
+  // If this code was already successfully redeemed recently, return existing result without re-fetching
+  if (lastRedeemedHandoff && lastRedeemedHandoff.code === handoffCode && (Date.now() - lastRedeemedHandoff.timestamp < 30000)) {
+    return Promise.resolve(lastRedeemedHandoff.result);
+  }
+
+  // If this code previously failed, do not repeat with expired/consumed code
+  if (failedHandoffCodes.has(handoffCode)) {
+    if (lastHandoffError && lastHandoffError.code === handoffCode) {
+      return Promise.reject(lastHandoffError.error);
+    }
+    const err = new Error('Authentication handoff expired or invalid.');
+    err.code = 'INVALID_HANDOFF';
+    return Promise.reject(err);
+  }
+
+  inFlightHandoffCode = handoffCode;
+  inFlightHandoffPromise = (async () => {
+    try {
+      const result = await redeemAuthHandoff({
+        handoffCode,
+        baseUrl,
+        fetcher,
+        timeoutMs
+      });
+      lastRedeemedHandoff = {
+        code: handoffCode,
+        result,
+        timestamp: Date.now()
+      };
+      lastHandoffError = null;
+      return result;
+    } catch (err) {
+      failedHandoffCodes.add(handoffCode);
+      lastHandoffError = {
+        code: handoffCode,
+        error: err,
+        timestamp: Date.now()
+      };
+      throw err;
+    } finally {
+      inFlightHandoffPromise = null;
+      inFlightHandoffCode = null;
+    }
+  })();
+
+  return inFlightHandoffPromise;
 }
 
 /**
@@ -277,10 +416,28 @@ export const GIS_LOAD_ERROR_USER_MESSAGE =
   'Google authentication could not be loaded. Check the network connection and try again.';
 
 export function formatAdminAuthError(err) {
-  if (!err) return 'Verification initiation failed';
+  if (!err) return 'Verification failed';
   const code = err.code || err.message;
   if (code === 'GIS_SCRIPT_LOAD_FAILED' || code === 'GIS_SCRIPT_NOT_LOADED' || String(err).includes('GIS_SCRIPT')) {
     return GIS_LOAD_ERROR_USER_MESSAGE;
+  }
+  if (code === 'AUTH_REDEEM_TIMEOUT' || String(err).includes('timed out')) {
+    return 'Verification timed out. Check your network connection and try again.';
+  }
+  if (code === 'AUTH_SESSION_REVOKED') {
+    return 'Verification was cancelled because the session was logged out.';
+  }
+  if (code === 'AUTH_REDEEM_HTTP_FAILED' || code === 'FETCH_ERROR') {
+    return 'Could not connect to authentication service. Check your network connection and try again.';
+  }
+  if (code === 'INVALID_HANDOFF') {
+    return 'Authentication session expired or has already been used. Please sign in again.';
+  }
+  if (code === 'UNAUTHORIZED_EMAIL') {
+    return 'The Google account selected is not authorized as an administrator.';
+  }
+  if (code === 'CONFIG_INCOMPLETE') {
+    return 'Server authentication configuration is incomplete.';
   }
   return err.userMessage || err.message || String(err);
 }
@@ -409,8 +566,8 @@ export async function startGoogleRedirectAuth({
   clientId = getGoogleClientId(),
   baseUrl = import.meta.env?.VITE_APPS_SCRIPT_URL,
   fetcher = globalThis.fetch,
-  origin = (typeof window !== 'undefined' ? window.location.origin : ''),
-  returnUrl = (typeof window !== 'undefined' ? window.location.href : ''),
+  origin = (typeof window !== 'undefined' && window.location ? window.location.origin : ''),
+  returnUrl = (typeof window !== 'undefined' && window.location ? window.location.href : ''),
   onError
 } = {}) {
   if (!clientId) {

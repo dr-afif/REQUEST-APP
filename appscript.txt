@@ -68,6 +68,32 @@ function doPost(e) {
     const payload = parseRequestBody(e);
     const action = String(payload.action || '').toLowerCase();
 
+    const ADMIN_MUTATION_ACTIONS = {
+      'uploadmasterroster': true,
+      'updaterequestapproval': true,
+      'addshiftblock': true,
+      'deleteshiftblock': true,
+      'addshifttype': true,
+      'updateshifttype': true,
+      'deleteshifttype': true,
+      'reordershifttypes': true,
+      'addlimitgroup': true,
+      'updatelimitgroup': true,
+      'deletelimitgroup': true,
+      'addactivity': true,
+      'deleteactivity': true,
+      'updatesetting': true,
+      'updateteammembers': true,
+      'updateemergencyphysicians': true,
+      'upsertpublicholiday': true,
+      'deletepublicholiday': true,
+      'upsertleaveapplication': true,
+      'deleteleaveapplication': true
+    };
+    if (ADMIN_MUTATION_ACTIONS[action]) {
+      rosterV2RequireAdmin_(payload);
+    }
+
     let response;
     if (action.startsWith('rosterv2')) {
       response = rosterV2DispatchPost_(payload);

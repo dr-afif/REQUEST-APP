@@ -8,11 +8,21 @@ import UpdatesPage from './components/UpdatesPage';
 import AdminPanel from './components/AdminPanel';
 import AnalyticsPage from './components/AnalyticsPage';
 import PublicHolidayTrackerPage from './components/PublicHolidayTrackerPage';
-import AdminPinModal from './components/AdminPinModal';
+
 import OnboardingOverlay from './components/OnboardingOverlay';
 import ToastNotification from './components/ToastNotification';
 import PwaInstallBanner from './components/PwaInstallBanner';
-import { clearAdminSessionToken } from './features/roster/auth/adminAuth.js';
+import {
+  clearAdminSessionToken,
+  formatAdminAuthError,
+  handleUrlAuthHandoff,
+  hasRecentAuthHandoff,
+  isAuthHandoffPending,
+  isSessionTokenActive,
+  resetAuthHandoffState,
+  startGoogleRedirectAuth,
+  subscribeAdminAuth
+} from './features/roster/auth/adminAuth.js';
 
 import {
   deleteRequest,
@@ -126,13 +136,19 @@ export default function App() {
   const [selectedName, setSelectedName] = useState(() => {
     const stored = localStorage.getItem('resq_member_name') || '';
     if (stored?.trim().toLowerCase() === 'admin') {
-      const isVerified = sessionStorage.getItem('resq_admin_verified') === 'true';
-      return isVerified ? 'Admin' : '';
+      // Never treat localStorage or sessionStorage as proof of administrator identity
+      return isSessionTokenActive() ? 'Admin' : '';
     }
     return stored;
   });
-  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
-  const [pendingSelectName, setPendingSelectName] = useState('');
+  const [isAuthenticatingAdmin, setIsAuthenticatingAdmin] = useState(() => (
+    typeof window !== 'undefined' && (
+      Boolean(new URLSearchParams(window.location.search).get('v2auth')) ||
+      isAuthHandoffPending()
+    )
+  ));
+  const [adminAuthError, setAdminAuthError] = useState(null);
+  const [adminAuthTick, setAdminAuthTick] = useState(0);
   const [refreshError, setRefreshError] = useState('');
   
   const inFlightMutationsRef = useRef(0);
@@ -193,9 +209,83 @@ export default function App() {
     setShowInstallBanner(false);
   };
 
+  // Administrator identity is strictly backed by an active Google HMAC session token
+  const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
+
+  // Subscribe to administrator session changes across the app
+  useEffect(() => {
+    const unsubscribe = subscribeAdminAuth(() => {
+      setAdminAuthTick((t) => t + 1);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Handle Google OAuth redirect return (?v2auth=<handoff-code>)
+  useEffect(() => {
+    const hasUrlCode = typeof window !== 'undefined' && Boolean(new URLSearchParams(window.location.search).get('v2auth'));
+    const isPending = isAuthHandoffPending();
+    const hadRecent = hasRecentAuthHandoff();
+
+    if (!hasUrlCode && !isPending && !hadRecent) {
+      if (isAuthenticatingAdmin) {
+        setIsAuthenticatingAdmin(false);
+      }
+      return;
+    }
+
+    setIsAuthenticatingAdmin(true);
+    setAdminAuthError(null);
+
+    let isEffectAlive = true;
+
+    handleUrlAuthHandoff({
+      baseUrl: settings?.apps_script_url || import.meta.env?.VITE_APPS_SCRIPT_URL
+    })
+      .then((redeemed) => {
+        if (!isEffectAlive) return;
+        setIsAuthenticatingAdmin(false);
+        if (redeemed?.ok) {
+          setSelectedName('Admin');
+          localStorage.setItem('resq_member_name', 'Admin');
+          sessionStorage.setItem('resq_admin_verified', 'true');
+          const returnPage = sessionStorage.getItem('resq_auth_return_page');
+          if (returnPage) {
+            sessionStorage.removeItem('resq_auth_return_page');
+            setCurrentPage(returnPage);
+          } else {
+            setCurrentPage('roster');
+          }
+          addToast('Administrator verified via Google Identity Services', 'success');
+        }
+      })
+      .catch((err) => {
+        if (!isEffectAlive) return;
+        setIsAuthenticatingAdmin(false);
+        clearAdminSessionToken();
+        setSelectedName('');
+        localStorage.removeItem('resq_member_name');
+        sessionStorage.removeItem('resq_admin_verified');
+        const formatted = formatAdminAuthError(err);
+        setAdminAuthError(formatted);
+        addToast(`Administrator verification failed: ${formatted}`, 'error');
+      });
+
+    return () => {
+      isEffectAlive = false;
+    };
+  }, []);
+
+  // Enforce session expiration / revocation across the app
+  useEffect(() => {
+    if (selectedName?.trim().toLowerCase() === 'admin' && !isSessionTokenActive() && !isAuthenticatingAdmin) {
+      setSelectedName('');
+      localStorage.removeItem('resq_member_name');
+      sessionStorage.removeItem('resq_admin_verified');
+    }
+  }, [selectedName, adminAuthTick, isAuthenticatingAdmin]);
+
   // Automatic navigation guard for admin page access control
   useEffect(() => {
-    const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
     const isGuest = selectedName?.trim().toLowerCase() === 'guest';
     const isNormalUser = selectedName && !isAdmin && !isGuest;
 
@@ -205,9 +295,9 @@ export default function App() {
     if (currentPage === 'ph-tracker' && !isAdmin && !isNormalUser) {
       setCurrentPage('dashboard');
     }
-  }, [currentPage, selectedName]);
+  }, [currentPage, selectedName, isAdmin]);
 
-  const handleSelectName = (name) => {
+  const handleSelectName = async (name) => {
     if (name === '') {
       // Logout / Exit
       localStorage.removeItem('resq_member_name');
@@ -216,31 +306,55 @@ export default function App() {
       setSelectedName('');
       setCurrentPage('dashboard');
     } else if (name?.trim().toLowerCase() === 'admin') {
-      setPendingSelectName('Admin');
-      setIsPinModalOpen(true);
+      if (isSessionTokenActive()) {
+        setSelectedName('Admin');
+        localStorage.setItem('resq_member_name', 'Admin');
+        sessionStorage.setItem('resq_admin_verified', 'true');
+      } else {
+        try {
+          sessionStorage.setItem('resq_auth_return_page', currentPage === 'admin' ? 'admin' : (currentPage || 'roster'));
+          await startGoogleRedirectAuth({
+            baseUrl: settings?.apps_script_url || import.meta.env?.VITE_APPS_SCRIPT_URL,
+            onError: (err) => {
+              const formatted = formatAdminAuthError(err);
+              setAdminAuthError(formatted);
+              addToast(`Administrator verification failed: ${formatted}`, 'error');
+            }
+          });
+        } catch (err) {
+          const formatted = formatAdminAuthError(err);
+          setAdminAuthError(formatted);
+          addToast(`Administrator verification failed: ${formatted}`, 'error');
+        }
+      }
     } else {
+      // Normal doctor / member: clear administrator token and establish member identity
       clearAdminSessionToken();
+      sessionStorage.removeItem('resq_admin_verified');
       localStorage.setItem('resq_member_name', name);
       setSelectedName(name);
     }
   };
 
+  const handleRetryAdminAuth = async () => {
+    setAdminAuthError(null);
+    setIsAuthenticatingAdmin(false);
+    resetAuthHandoffState();
+    await handleSelectName('Admin');
+  };
+
+  const handleCancelAdminAuth = () => {
+    setAdminAuthError(null);
+    setIsAuthenticatingAdmin(false);
+    resetAuthHandoffState();
+    setSelectedName('');
+    localStorage.removeItem('resq_member_name');
+    sessionStorage.removeItem('resq_admin_verified');
+    setCurrentPage('dashboard');
+  };
+
   const handleAdminInit = () => {
-    setPendingSelectName('Admin');
-    setIsPinModalOpen(true);
-  };
-
-  const handlePinSuccess = () => {
-    sessionStorage.setItem('resq_admin_verified', 'true');
-    localStorage.setItem('resq_member_name', 'Admin');
-    setSelectedName('Admin');
-    setIsPinModalOpen(false);
-    setPendingSelectName('');
-  };
-
-  const handlePinClose = () => {
-    setIsPinModalOpen(false);
-    setPendingSelectName('');
+    handleSelectName('Admin');
   };
 
   // 1. Unified Roster Data Synchronization Handler with Resilient Legacy Fallback
@@ -1303,6 +1417,7 @@ export default function App() {
         names={rosterNames}
         syncStatus={isSyncing ? 'loading' : refreshError ? 'error' : 'connected'}
         onRefresh={loadAllData}
+        isAdmin={isAdmin}
       />
 
       {/* Content wrapper which translates right on desktop */}
@@ -1339,6 +1454,7 @@ export default function App() {
           <div className="animate-fadeIn">
             <RosterPage
               selectedName={selectedName}
+              isAdmin={isAdmin}
               names={allRosterNames}
               requests={requests}
               masterRoster={masterRoster}
@@ -1390,7 +1506,7 @@ export default function App() {
           </div>
         )}
 
-        {currentPage === 'summary' && selectedName?.trim().toLowerCase() === 'admin' && (
+        {currentPage === 'summary' && isAdmin && (
           <div className="animate-fadeIn">
             <AnalyticsPage
               selectedName={selectedName}
@@ -1421,7 +1537,7 @@ export default function App() {
           </div>
         )}
 
-        {currentPage === 'admin' && selectedName?.trim().toLowerCase() === 'admin' && (
+        {currentPage === 'admin' && isAdmin && (
           <div className="animate-fadeIn">
             <AdminPanel
               requests={requests}
@@ -1459,7 +1575,7 @@ export default function App() {
       </div>
 
       {/* Onboarding Screen Dialog Overlay */}
-      {selectedName === '' && (
+      {selectedName === '' && !isAuthenticatingAdmin && !adminAuthError && (
         <OnboardingOverlay
           names={rosterNames}
           onSelect={handleSelectName}
@@ -1468,12 +1584,48 @@ export default function App() {
         />
       )}
 
-      {/* Admin security PIN verification dialog */}
-      <AdminPinModal
-        isOpen={isPinModalOpen}
-        onClose={handlePinClose}
-        onSuccess={handlePinSuccess}
-      />
+      {/* Admin Verifying State */}
+      {isAuthenticatingAdmin && !adminAuthError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs">
+          <div className="flex flex-col items-center gap-3 rounded-2xl bg-white p-6 shadow-xl text-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+            <span className="text-sm font-bold text-slate-800">Verifying administrator credentials...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Verification Failure Dialog Overlay with Actionable Retry / Cancel */}
+      {adminAuthError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="flex flex-col items-center gap-4 rounded-2xl bg-white p-6 shadow-xl max-w-sm w-full text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Administrator Verification Failed</h3>
+              <p className="mt-1 text-sm text-slate-600">{adminAuthError}</p>
+            </div>
+            <div className="flex w-full gap-2">
+              <button
+                type="button"
+                onClick={handleCancelAdminAuth}
+                className="flex-1 rounded-xl border border-slate-300 bg-white py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRetryAdminAuth}
+                className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* PWA Install Banner */}
       {showInstallBanner && (

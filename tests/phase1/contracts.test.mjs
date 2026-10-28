@@ -39,17 +39,17 @@ test('comparison oracle is exactly the frozen Version 1 Git blob',()=>{
   assert.equal(crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'),'b9601899509b276742f516dc237d00af40a8b026');
 });
 for(const action of getActions)test(`legacy GET ${action||'(default)'} payload and workbook effects match Version 1`,()=>{
-  const old=harness(legacySource),now=harness();
+  const old=harness(legacySource),now=harness(currentSource,{adminEmail:'owner@example.invalid',activeEmail:'owner@example.invalid'});
   assert.deepEqual(now.get(action),old.get(action));assert.deepEqual(now.jsonState(),old.jsonState());assert.deepEqual(now.writes,old.writes);
 });
 for(const payload of posts.filter(p=>p.action!=='uploadmasterroster'))test(`legacy POST ${payload.action} success and error contracts match Version 1`,()=>{
-  const old=harness(legacySource),now=harness();
+  const old=harness(legacySource),now=harness(currentSource,{adminEmail:'owner@example.invalid',activeEmail:'owner@example.invalid'});
   const expected=old.post(payload);assert.equal(expected.result,'success',JSON.stringify(expected));assert.deepEqual(now.post(payload),expected);
   assert.deepEqual(now.jsonState(),old.jsonState());assert.deepEqual(now.writes,old.writes);
-  const badOld=harness(legacySource),badNow=harness();assert.deepEqual(badNow.post({action:payload.action}),badOld.post({action:payload.action}));assert.deepEqual(badNow.jsonState(),badOld.jsonState());
+  const badOld=harness(legacySource),badNow=harness(currentSource,{adminEmail:'owner@example.invalid',activeEmail:'owner@example.invalid'});assert.deepEqual(badNow.post({action:payload.action}),badOld.post({action:payload.action}));assert.deepEqual(badNow.jsonState(),badOld.jsonState());
 });
 test('legacy POST uploadmasterroster safety hotfix: requires targetMonth and fails closed on missing targetMonth',()=>{
-  const h=harness();const before=h.jsonState();
+  const h=harness(currentSource,{adminEmail:'owner@example.invalid',activeEmail:'owner@example.invalid'});const before=h.jsonState();
   const bad=h.post({action:'uploadmasterroster',rows:[{name:'Person A',date:'2030-07-28',shift:'AM'}]});
   assert.equal(bad.result,'error');assert.match(bad.message,/targetMonth/);
   assert.deepEqual(h.jsonState(),before);assert.deepEqual(h.writes,[]);
@@ -110,7 +110,7 @@ test('enrolled periods block ANY old global upload, including omitted months and
   for(const row of [['2030-07',2,'2030-06-01','owner'],['malformed','','','']]){
     for(const rows of [[],[{name:'Other',date:'2030-08-01',shift:'AM'}],null]){
       const tables=structuredClone(fixture.tables);tables.RosterPeriods=[core.schemas.RosterPeriods,row];
-      const h=harness(currentSource,{tables}),before=h.jsonState();const result=h.post({action:'uploadmasterroster',rows});assert.equal(result.result,'error');assert.match(result.message,/enrollment data/);
+      const h=harness(currentSource,{tables,adminEmail:'owner@example.invalid',activeEmail:'owner@example.invalid'}),before=h.jsonState();const result=h.post({action:'uploadmasterroster',rows});assert.equal(result.result,'error');assert.match(result.message,/enrollment data/);
       assert.deepEqual(h.jsonState(),before);assert.deepEqual(h.writes,[]);assert.deepEqual(h.locks,['acquire','release']);
     }
   }
@@ -118,8 +118,8 @@ test('enrolled periods block ANY old global upload, including omitted months and
 test('empty foundation tables keep legacy upload working; lock failure cannot clear data',()=>{
   const tables=structuredClone(fixture.tables);tables.RosterPeriods=[core.schemas.RosterPeriods];
   const payloadWithMonth={...posts[3],targetMonth:'2030-07'};
-  const h=harness(currentSource,{tables});assert.equal(h.post(payloadWithMonth).result,'success');
-  const locked=harness(currentSource,{failLock:true}),before=locked.jsonState();assert.equal(locked.post(payloadWithMonth).result,'error');assert.deepEqual(locked.jsonState(),before);assert.deepEqual(locked.writes,[]);
+  const h=harness(currentSource,{tables,adminEmail:'owner@example.invalid',activeEmail:'owner@example.invalid'});assert.equal(h.post(payloadWithMonth).result,'success');
+  const locked=harness(currentSource,{failLock:true,adminEmail:'owner@example.invalid',activeEmail:'owner@example.invalid'}),before=locked.jsonState();assert.equal(locked.post(payloadWithMonth).result,'error');assert.deepEqual(locked.jsonState(),before);assert.deepEqual(locked.writes,[]);
 });
 test('stored semantic catalog drift is reported and never silently changes rule 1',()=>{
   const h=harness();h.grids.ShiftSemantics=[core.schemas.ShiftSemantics,...h.context.rosterV2CatalogRows_()];

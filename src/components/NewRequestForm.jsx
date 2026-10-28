@@ -32,7 +32,7 @@ export default function NewRequestForm({
 }) {
   const availableShiftTypes = useMemo(() => {
     if (shiftTypes.length === 0) return ['AM', 'PM', 'ON', 'OFF', 'AL', 'HKA', 'GHKA', 'COURSE']; // fallback
-    const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+    const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
     return shiftTypes
       .filter((st) => isAdmin || st.IsPublic)
       .map((st) => st.Name);
@@ -127,7 +127,7 @@ export default function NewRequestForm({
     event.preventDefault();
     if (!isReady || !formState.date || !formState.request) return;
 
-    const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+    const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
     const finalName = isAdmin ? onBehalfOfName : selectedName;
 
     if (!finalName) {
@@ -302,7 +302,7 @@ export default function NewRequestForm({
           <div className="grid grid-cols-4 gap-2">
             {availableShiftTypes.map((type) => {
               const limitStatus = getLimitStatusForType(type, selectedDateKey);
-              const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+              const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
               const isCapped = !isAdmin && limitStatus.isLimited && limitStatus.isAtLimit;
               const isSelected = formState.request === type;
 
