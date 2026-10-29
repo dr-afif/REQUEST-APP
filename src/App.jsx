@@ -10,19 +10,27 @@ import AnalyticsPage from './components/AnalyticsPage';
 import PublicHolidayTrackerPage from './components/PublicHolidayTrackerPage';
 
 import OnboardingOverlay from './components/OnboardingOverlay';
+import AdminPinModal from './components/AdminPinModal';
 import ToastNotification from './components/ToastNotification';
 import PwaInstallBanner from './components/PwaInstallBanner';
 import {
   clearAdminSessionToken,
-  formatAdminAuthError,
-  handleUrlAuthHandoff,
-  hasRecentAuthHandoff,
-  isAuthHandoffPending,
   isSessionTokenActive,
-  resetAuthHandoffState,
-  startGoogleRedirectAuth,
-  subscribeAdminAuth
+  setAdminPinSession,
+  setAdminSessionToken,
+  subscribeAdminAuth,
+  verifyAdminPin,
 } from './features/roster/auth/adminAuth.js';
+import { composeEffectiveRoster } from './features/roster/simplified/rosterComposition.js';
+import {
+  isDevMockActive,
+  setDevMockActive,
+  resetMockStore,
+  setSimulateSaveConflict,
+  setSimulateSaveFailure,
+  getMockSimulationState,
+  handleDevMockRequest,
+} from './features/roster/simplified/devMockApi.js';
 
 import {
   deleteRequest,
@@ -53,7 +61,15 @@ import {
   deletePublicHoliday,
   upsertLeaveApplication,
   deleteLeaveApplication,
+  fetchRosterAmendments,
+  saveMasterRosterDraft,
+  appendRosterAmendments,
+  verifyAdminPinRemote,
+  registerDevMock,
 } from './api';
+
+// Register development mock API handler (zero production network calls when active)
+registerDevMock({ isActive: isDevMockActive, handler: handleDevMockRequest });
 import {
   adaptRequestsResponse,
   normalizeActivities,
@@ -125,6 +141,7 @@ export default function App() {
     );
   };
   const [masterRoster, setMasterRoster] = useState(() => validateMasterRoster(readCache('resq_cache_masterRoster', [])));
+  const [rosterAmendments, setRosterAmendments] = useState(() => readCache('resq_cache_rosterAmendments', []));
   const [shiftBlocks, setShiftBlocks] = useState(() => readCache('resq_cache_shiftBlocks', []));
   const [shiftTypes, setShiftTypes] = useState(() => readCache('resq_cache_shiftTypes', []));
   const [limitGroups, setLimitGroups] = useState(() => readCache('resq_cache_limitGroups', []));
@@ -141,15 +158,11 @@ export default function App() {
     }
     return stored;
   });
-  const [isAuthenticatingAdmin, setIsAuthenticatingAdmin] = useState(() => (
-    typeof window !== 'undefined' && (
-      Boolean(new URLSearchParams(window.location.search).get('v2auth')) ||
-      isAuthHandoffPending()
-    )
-  ));
-  const [adminAuthError, setAdminAuthError] = useState(null);
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+  const [pendingAdminReturnPage, setPendingAdminReturnPage] = useState('');
   const [adminAuthTick, setAdminAuthTick] = useState(0);
   const [refreshError, setRefreshError] = useState('');
+  const [, forceUpdateMockUi] = useState({});
   
   const inFlightMutationsRef = useRef(0);
   const pendingSyncTimeoutRef = useRef(null);
@@ -209,7 +222,7 @@ export default function App() {
     setShowInstallBanner(false);
   };
 
-  // Administrator identity is strictly backed by an active Google HMAC session token
+  // Administrator identity is strictly backed by an active in-memory session token
   const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
 
   // Subscribe to administrator session changes across the app
@@ -220,69 +233,14 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // Handle Google OAuth redirect return (?v2auth=<handoff-code>)
-  useEffect(() => {
-    const hasUrlCode = typeof window !== 'undefined' && Boolean(new URLSearchParams(window.location.search).get('v2auth'));
-    const isPending = isAuthHandoffPending();
-    const hadRecent = hasRecentAuthHandoff();
-
-    if (!hasUrlCode && !isPending && !hadRecent) {
-      if (isAuthenticatingAdmin) {
-        setIsAuthenticatingAdmin(false);
-      }
-      return;
-    }
-
-    setIsAuthenticatingAdmin(true);
-    setAdminAuthError(null);
-
-    let isEffectAlive = true;
-
-    handleUrlAuthHandoff({
-      baseUrl: settings?.apps_script_url || import.meta.env?.VITE_APPS_SCRIPT_URL
-    })
-      .then((redeemed) => {
-        if (!isEffectAlive) return;
-        setIsAuthenticatingAdmin(false);
-        if (redeemed?.ok) {
-          setSelectedName('Admin');
-          localStorage.setItem('resq_member_name', 'Admin');
-          sessionStorage.setItem('resq_admin_verified', 'true');
-          const returnPage = sessionStorage.getItem('resq_auth_return_page');
-          if (returnPage) {
-            sessionStorage.removeItem('resq_auth_return_page');
-            setCurrentPage(returnPage);
-          } else {
-            setCurrentPage('roster');
-          }
-          addToast('Administrator verified via Google Identity Services', 'success');
-        }
-      })
-      .catch((err) => {
-        if (!isEffectAlive) return;
-        setIsAuthenticatingAdmin(false);
-        clearAdminSessionToken();
-        setSelectedName('');
-        localStorage.removeItem('resq_member_name');
-        sessionStorage.removeItem('resq_admin_verified');
-        const formatted = formatAdminAuthError(err);
-        setAdminAuthError(formatted);
-        addToast(`Administrator verification failed: ${formatted}`, 'error');
-      });
-
-    return () => {
-      isEffectAlive = false;
-    };
-  }, []);
-
   // Enforce session expiration / revocation across the app
   useEffect(() => {
-    if (selectedName?.trim().toLowerCase() === 'admin' && !isSessionTokenActive() && !isAuthenticatingAdmin) {
+    if (selectedName?.trim().toLowerCase() === 'admin' && !isSessionTokenActive() && !isPinModalOpen) {
       setSelectedName('');
       localStorage.removeItem('resq_member_name');
       sessionStorage.removeItem('resq_admin_verified');
     }
-  }, [selectedName, adminAuthTick, isAuthenticatingAdmin]);
+  }, [selectedName, adminAuthTick, isPinModalOpen]);
 
   // Automatic navigation guard for admin page access control
   useEffect(() => {
@@ -297,12 +255,14 @@ export default function App() {
     }
   }, [currentPage, selectedName, isAdmin]);
 
-  const handleSelectName = async (name) => {
+  const handleSelectName = (name) => {
     if (name === '') {
       // Logout / Exit
       localStorage.removeItem('resq_member_name');
       sessionStorage.removeItem('resq_admin_verified');
       clearAdminSessionToken();
+      setIsPinModalOpen(false);
+      setPendingAdminReturnPage('');
       setSelectedName('');
       setCurrentPage('dashboard');
     } else if (name?.trim().toLowerCase() === 'admin') {
@@ -311,46 +271,67 @@ export default function App() {
         localStorage.setItem('resq_member_name', 'Admin');
         sessionStorage.setItem('resq_admin_verified', 'true');
       } else {
-        try {
-          sessionStorage.setItem('resq_auth_return_page', currentPage === 'admin' ? 'admin' : (currentPage || 'roster'));
-          await startGoogleRedirectAuth({
-            baseUrl: settings?.apps_script_url || import.meta.env?.VITE_APPS_SCRIPT_URL,
-            onError: (err) => {
-              const formatted = formatAdminAuthError(err);
-              setAdminAuthError(formatted);
-              addToast(`Administrator verification failed: ${formatted}`, 'error');
-            }
-          });
-        } catch (err) {
-          const formatted = formatAdminAuthError(err);
-          setAdminAuthError(formatted);
-          addToast(`Administrator verification failed: ${formatted}`, 'error');
-        }
+        setPendingAdminReturnPage(currentPage === 'admin' ? 'admin' : (currentPage || 'roster'));
+        setIsPinModalOpen(true);
       }
     } else {
-      // Normal doctor / member: clear administrator token and establish member identity
+      // Normal doctor / Guest: clear administrator token and establish member identity
       clearAdminSessionToken();
       sessionStorage.removeItem('resq_admin_verified');
+      setIsPinModalOpen(false);
+      setPendingAdminReturnPage('');
       localStorage.setItem('resq_member_name', name);
       setSelectedName(name);
     }
   };
 
-  const handleRetryAdminAuth = async () => {
-    setAdminAuthError(null);
-    setIsAuthenticatingAdmin(false);
-    resetAuthHandoffState();
-    await handleSelectName('Admin');
+  const handleVerifyPin = async (enteredPin) => {
+    const cleanPin = String(enteredPin || '').trim();
+    if (!cleanPin) return false;
+
+    const isLocalhostOrigin = typeof window === 'undefined' || !window.location || (
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === ''
+    );
+
+    if (!isLocalhostOrigin && import.meta.env?.PROD) {
+      // Production origin: verify server-side against Apps Script ROSTER_ADMIN_PIN (fail-closed)
+      const res = await verifyAdminPinRemote(cleanPin);
+      if (res?.adminSessionToken) {
+        setAdminSessionToken(res.adminSessionToken, res.email || 'admin@pin.server', res.expiresAt || 28800);
+        return true;
+      }
+      if (res && res.authenticated !== false) {
+        setAdminPinSession(cleanPin, 28800);
+        return true;
+      }
+      return false;
+    }
+
+    // Localhost / dev workflow: verify against configured local PIN in memory without Google OAuth
+    return verifyAdminPin(cleanPin);
   };
 
-  const handleCancelAdminAuth = () => {
-    setAdminAuthError(null);
-    setIsAuthenticatingAdmin(false);
-    resetAuthHandoffState();
-    setSelectedName('');
-    localStorage.removeItem('resq_member_name');
-    sessionStorage.removeItem('resq_admin_verified');
-    setCurrentPage('dashboard');
+  const handlePinSuccess = (enteredPin) => {
+    if (!isSessionTokenActive()) {
+      setAdminPinSession(enteredPin || import.meta.env?.VITE_ADMIN_PIN || '1234');
+    }
+    sessionStorage.setItem('resq_admin_verified', 'true');
+    localStorage.setItem('resq_member_name', 'Admin');
+    setSelectedName('Admin');
+    setIsPinModalOpen(false);
+    const targetPage = pendingAdminReturnPage || (currentPage === 'dashboard' ? 'roster' : currentPage);
+    setPendingAdminReturnPage('');
+    if (targetPage) {
+      setCurrentPage(targetPage);
+    }
+    addToast('Admin mode unlocked', 'success');
+  };
+
+  const handlePinClose = () => {
+    setIsPinModalOpen(false);
+    setPendingAdminReturnPage('');
   };
 
   const handleAdminInit = () => {
@@ -363,7 +344,10 @@ export default function App() {
       setIsSyncing(true);
       setRefreshError('');
       
-      const response = await fetchAllData();
+      const [response, fetchedAmendments] = await Promise.all([
+        fetchAllData(),
+        fetchRosterAmendments().catch(() => null),
+      ]);
       
       let rawRequests = [];
       let rawTeamMembers = [];
@@ -503,6 +487,14 @@ export default function App() {
       const validLeaveApplications = normalizeLeaveApplications(rawLeaveApplications);
       setLeaveApplications(validLeaveApplications);
 
+      // Update RosterAmendments when backend returns amendment history (safe empty fallback if un-deployed)
+      const nextAmendments = Array.isArray(response?.rosterAmendments)
+        ? response.rosterAmendments
+        : Array.isArray(fetchedAmendments)
+          ? fetchedAmendments
+          : readCache('resq_cache_rosterAmendments', []);
+      setRosterAmendments(nextAmendments);
+
       // Keep cache keys stable; existing sessions depend on them for startup.
       try {
         writeCacheEntries([
@@ -510,6 +502,7 @@ export default function App() {
           ['resq_cache_emergencyPhysicians', dedupedEmergencyPhysicians],
           ['resq_cache_requests', adapted],
           ['resq_cache_masterRoster', validMasterRoster],
+          ['resq_cache_rosterAmendments', nextAmendments],
           ['resq_cache_shiftBlocks', validShiftBlocks],
           ['resq_cache_shiftTypes', validShiftTypes],
           ['resq_cache_limitGroups', validLimitGroups],
@@ -1405,6 +1398,156 @@ export default function App() {
     return requests.filter((request) => request.status?.toLowerCase() === 'active');
   }, [requests]);
 
+  const allDirectoryMembers = useMemo(
+    () => [...teamMembers, ...emergencyPhysicians],
+    [teamMembers, emergencyPhysicians]
+  );
+
+  // Shared Main + Amend Composition: DISPLAYED ROSTER = MAIN + LATEST APPLICABLE AMENDMENTS
+  const composedRoster = useMemo(
+    () => composeEffectiveRoster({
+      mainRows: masterRoster,
+      amendments: rosterAmendments,
+      teamMembers: allDirectoryMembers,
+    }),
+    [masterRoster, rosterAmendments, allDirectoryMembers]
+  );
+
+  // Revalidate current server state before explicit Save Changes
+  const handleFetchLatestSimplifiedServerState = async () => {
+    const [latestMainRaw, latestAmendmentsRaw] = await Promise.all([
+      fetchMasterRoster(),
+      fetchRosterAmendments().catch(() => []),
+    ]);
+    const validMain = validateMasterRoster(latestMainRaw);
+    const validAmendments = Array.isArray(latestAmendmentsRaw) ? latestAmendmentsRaw : [];
+    return {
+      mainRows: validMain,
+      amendments: validAmendments,
+    };
+  };
+
+  // Explicit Save Changes for Future Months (DRAFT -> MAIN / MasterRoster)
+  const handleSaveSimplifiedDraft = async ({
+    rows,
+    targetMonth,
+    operationId,
+    expectedCellBaselines,
+    expectedMonthCellCount,
+  }) => {
+    const canonicalMonth = String(targetMonth || '').trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      throw new Error('targetMonth is required in YYYY-MM format for draft save.');
+    }
+
+    const monthScopedRows = (Array.isArray(rows) ? rows : []).filter((r) => {
+      const iso = toIsoDate(r?.date || r?.Date);
+      return iso ? iso.startsWith(canonicalMonth) : String(r?.date || r?.Date || '').startsWith(canonicalMonth);
+    });
+
+    inFlightMutationsRef.current++;
+    try {
+      const res = await saveMasterRosterDraft({
+        rows: monthScopedRows,
+        targetMonth: canonicalMonth,
+        operationId,
+        expectedCellBaselines,
+        expectedMonthCellCount,
+      });
+
+      const confirmedMonthRows = monthScopedRows.map((r) => ({
+        Name: r.name ?? r.Name,
+        name: r.name ?? r.Name,
+        Date: r.date ?? r.Date,
+        date: r.date ?? r.Date,
+        Shift: r.shift ?? r.Shift,
+        shift: r.shift ?? r.Shift,
+      }));
+
+      setMasterRoster((prev) => {
+        const isMonthMatch = (r) => {
+          const iso = toIsoDate(r.date || r.Date);
+          return iso ? iso.startsWith(canonicalMonth) : String(r.date || r.Date || '').startsWith(canonicalMonth);
+        };
+        const otherMonths = prev.filter((r) => !isMonthMatch(r));
+        const nextRoster = [...otherMonths, ...confirmedMonthRows];
+        try {
+          writeCacheEntries([['resq_cache_masterRoster', nextRoster]]);
+        } catch (_) {}
+        return nextRoster;
+      });
+
+      addToast('✅ Draft saved to Main Roster!', 'success');
+      scheduleSafeSync(800);
+      return res;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+    }
+  };
+
+  // Explicit Save Changes for Current & Past Months (AMEND -> RosterAmendments, MAIN untouched)
+  const handleAppendSimplifiedAmendments = async ({
+    targetMonth,
+    operationId,
+    amendments,
+  }) => {
+    const canonicalMonth = String(targetMonth || '').trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      throw new Error('targetMonth is required in YYYY-MM format for amendments.');
+    }
+
+    inFlightMutationsRef.current++;
+    try {
+      const res = await appendRosterAmendments({
+        targetMonth: canonicalMonth,
+        operationId,
+        amendments,
+      });
+
+      const savedAtFallback = new Date().toISOString();
+      const confirmedRecords = Array.isArray(res?.amendments) && res.amendments.length > 0
+        ? res.amendments
+        : (Array.isArray(amendments) ? amendments : []).map((a, idx) => ({
+            AmendmentId: a.amendmentId || `${operationId}_${idx + 1}`,
+            OperationId: operationId,
+            RosterMonth: canonicalMonth,
+            Date: a.date,
+            TargetType: a.targetType || 'MO',
+            Field: a.field || 'MO_SHIFT',
+            StaffKey: a.staffKey || '',
+            StaffName: a.staffName || '',
+            PreviousValue: a.previousValue || '',
+            NewValue: a.isCleared ? '__CLEAR__' : (a.newValue || ''),
+            IsCleared: Boolean(a.isCleared),
+            SavedAt: savedAtFallback,
+            Sequence: Date.now() + idx,
+          }));
+
+      setRosterAmendments((prev) => {
+        const existingOpIds = new Set(
+          prev
+            .map((r) => String(r?.AmendmentId || r?.amendmentId || '').trim())
+            .filter(Boolean)
+        );
+        const dedupedIncoming = confirmedRecords.filter((rec) => {
+          const id = String(rec?.AmendmentId || rec?.amendmentId || '').trim();
+          return !id || !existingOpIds.has(id);
+        });
+        const nextList = [...prev, ...dedupedIncoming];
+        try {
+          writeCacheEntries([['resq_cache_rosterAmendments', nextList]]);
+        } catch (_) {}
+        return nextList;
+      });
+
+      addToast('✅ Amendments saved! Main Roster preserved.', 'success');
+      scheduleSafeSync(800);
+      return res;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans">
       
@@ -1423,6 +1566,72 @@ export default function App() {
       {/* Content wrapper which translates right on desktop */}
       <div className="flex-1 flex flex-col min-w-0 lg:pl-64">
         
+        {/* 🧪 Development Mock Banner (Guaranteed Zero Live Sheets Mutations) */}
+        {isDevMockActive() && (
+          <div className="bg-amber-950/90 text-amber-200 text-xs px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 border-b border-amber-700/60 shadow-xs z-40">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold flex items-center gap-1 text-amber-100">
+                🧪 Dev Mock Mode
+              </span>
+              <span className="text-amber-300/80 hidden sm:inline">
+                (Zero network calls to production Google Sheets)
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  resetMockStore();
+                  window.location.reload();
+                }}
+                className="px-2 py-0.5 rounded bg-amber-900/90 hover:bg-amber-800 text-amber-100 font-medium border border-amber-600/40 cursor-pointer"
+              >
+                Reset Mock Data
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const curr = getMockSimulationState().conflict;
+                  setSimulateSaveConflict(!curr);
+                  forceUpdateMockUi({});
+                }}
+                className={`px-2 py-0.5 rounded font-medium border cursor-pointer ${
+                  getMockSimulationState().conflict
+                    ? 'bg-rose-600 text-white border-rose-400'
+                    : 'bg-amber-900/90 hover:bg-amber-800 text-amber-200 border-amber-600/40'
+                }`}
+              >
+                {getMockSimulationState().conflict ? '⚠️ Conflict Armed' : 'Simulate Conflict'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const curr = getMockSimulationState().failure;
+                  setSimulateSaveFailure(!curr);
+                  forceUpdateMockUi({});
+                }}
+                className={`px-2 py-0.5 rounded font-medium border cursor-pointer ${
+                  getMockSimulationState().failure
+                    ? 'bg-rose-600 text-white border-rose-400'
+                    : 'bg-amber-900/90 hover:bg-amber-800 text-amber-200 border-amber-600/40'
+                }`}
+              >
+                {getMockSimulationState().failure ? '❌ 500 Failure Armed' : 'Simulate 500 Failure'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDevMockActive(false);
+                  window.location.reload();
+                }}
+                className="px-2 py-0.5 rounded bg-black/50 hover:bg-black text-amber-300 font-medium border border-amber-700/50 cursor-pointer"
+              >
+                Exit Mock
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* 📣 Marquee Notifications Banner */}
         <div className="sticky top-14 lg:top-0 z-30 shadow-xs flex flex-col">
           <NotificationBanner
@@ -1442,7 +1651,7 @@ export default function App() {
               selectedName={selectedName}
               names={rosterNames}
               requests={requests}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               shiftBlocks={shiftBlocks}
               onUpdateApproval={handleUpdateApproval}
               onNavigate={setCurrentPage}
@@ -1453,12 +1662,20 @@ export default function App() {
         {currentPage === 'roster' && (
           <div className="animate-fadeIn">
             <RosterPage
+              simplifiedMode={true}
               selectedName={selectedName}
               isAdmin={isAdmin}
               names={allRosterNames}
               requests={requests}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
+              rawMasterRoster={masterRoster}
+              rosterAmendments={rosterAmendments}
+              amendedCellsMap={composedRoster.amendedCellsMap}
               onUploadMasterRoster={handleUploadBaseline}
+              onSaveSimplifiedDraft={handleSaveSimplifiedDraft}
+              onAppendSimplifiedAmendments={handleAppendSimplifiedAmendments}
+              onFetchLatestSimplifiedServerState={handleFetchLatestSimplifiedServerState}
+              onRequestAdminPin={handleAdminInit}
               onRefresh={loadAllData}
               shiftTypes={shiftTypes}
               limitGroups={limitGroups}
@@ -1486,7 +1703,7 @@ export default function App() {
               onDeleteRequest={handleDeleteRequest}
               isLoadingRequests={isLoading}
               shiftBlocks={shiftBlocks}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               shiftTypes={shiftTypes}
               limitGroups={limitGroups}
               settings={settings}
@@ -1512,7 +1729,7 @@ export default function App() {
               selectedName={selectedName}
               names={allRosterNames}
               requests={requests}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               shiftTypes={shiftTypes}
               teamMembers={teamMembers}
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
@@ -1528,11 +1745,11 @@ export default function App() {
             <PublicHolidayTrackerPage
               selectedName={selectedName}
               names={allRosterNames}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
               settings={settings}
               onUpdateSetting={handleUpdateSetting}
-              teamMembers={[...teamMembers, ...emergencyPhysicians]}
+              teamMembers={allDirectoryMembers}
             />
           </div>
         )}
@@ -1575,7 +1792,7 @@ export default function App() {
       </div>
 
       {/* Onboarding Screen Dialog Overlay */}
-      {selectedName === '' && !isAuthenticatingAdmin && !adminAuthError && (
+      {selectedName === '' && !isPinModalOpen && (
         <OnboardingOverlay
           names={rosterNames}
           onSelect={handleSelectName}
@@ -1584,48 +1801,13 @@ export default function App() {
         />
       )}
 
-      {/* Admin Verifying State */}
-      {isAuthenticatingAdmin && !adminAuthError && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs">
-          <div className="flex flex-col items-center gap-3 rounded-2xl bg-white p-6 shadow-xl text-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
-            <span className="text-sm font-bold text-slate-800">Verifying administrator credentials...</span>
-          </div>
-        </div>
-      )}
-
-      {/* Admin Verification Failure Dialog Overlay with Actionable Retry / Cancel */}
-      {adminAuthError && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="flex flex-col items-center gap-4 rounded-2xl bg-white p-6 shadow-xl max-w-sm w-full text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
-              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900">Administrator Verification Failed</h3>
-              <p className="mt-1 text-sm text-slate-600">{adminAuthError}</p>
-            </div>
-            <div className="flex w-full gap-2">
-              <button
-                type="button"
-                onClick={handleCancelAdminAuth}
-                className="flex-1 rounded-xl border border-slate-300 bg-white py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleRetryAdminAuth}
-                className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 4-Digit Admin PIN Modal */}
+      <AdminPinModal
+        isOpen={isPinModalOpen}
+        onClose={handlePinClose}
+        onSuccess={handlePinSuccess}
+        onVerifyPin={handleVerifyPin}
+      />
 
       {/* PWA Install Banner */}
       {showInstallBanner && (

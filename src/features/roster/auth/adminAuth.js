@@ -128,6 +128,39 @@ export function isSessionTokenActive() {
 }
 
 /**
+ * Establishes an in-memory administrator session from a verified 4-digit Admin PIN.
+ * PIN is entered once per Admin session; cleared immediately on logout or role switch.
+ */
+export function setAdminPinSession(pin, ttlSeconds = 86400) {
+  const cleanPin = String(pin || '').trim();
+  if (!cleanPin) {
+    clearAdminSessionToken();
+    return false;
+  }
+  setAdminSessionToken(`pin-session:${cleanPin}`, 'admin@pin.local', ttlSeconds);
+  return true;
+}
+
+/**
+ * Verifies a 4-digit Admin PIN against the configured expected PIN and establishes
+ * the in-memory Admin session if valid.
+ */
+export function verifyAdminPin(enteredPin, expectedPin = (import.meta.env?.VITE_ADMIN_PIN || '1234')) {
+  const cleanEntered = String(enteredPin || '').trim();
+  const cleanExpected = String(expectedPin || '1234').trim();
+  if (!cleanEntered || !cleanExpected || cleanEntered !== cleanExpected) {
+    return false;
+  }
+  return setAdminPinSession(cleanEntered);
+}
+
+export function isPinSessionActive() {
+  const tok = getAdminSessionToken();
+  return Boolean(tok && String(tok).startsWith('pin-session:'));
+}
+
+
+/**
  * Request single-use cryptographically random challenge/state bound to the frontend origin.
  */
 export async function requestAuthChallenge({

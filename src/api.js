@@ -1,5 +1,13 @@
 import { getAdminSessionToken } from './features/roster/auth/adminAuth.js';
 
+let devMockChecker = null;
+let devMockDispatcher = null;
+
+export function registerDevMock({ isActive, handler } = {}) {
+  devMockChecker = typeof isActive === 'function' ? isActive : null;
+  devMockDispatcher = typeof handler === 'function' ? handler : null;
+}
+
 export const LEGACY_ADMIN_MUTATION_ACTIONS = new Set([
   'uploadmasterroster',
   'updaterequestapproval',
@@ -23,6 +31,11 @@ export const LEGACY_ADMIN_MUTATION_ACTIONS = new Set([
   'deleteleaveapplication',
 ]);
 
+export const SIMPLIFIED_ADMIN_MUTATION_ACTIONS = new Set([
+  'savemasterrosterdraft',
+  'appendrosteramendments',
+]);
+
 const rawBaseUrl = import.meta.env.VITE_APPS_SCRIPT_URL ?? '';
 const APP_SCRIPT_BASE_URL = rawBaseUrl.trim().replace(/\/$/, '');
 
@@ -44,6 +57,9 @@ function buildUrl(query) {
 }
 
 async function request({ method = 'GET', body, headers, query } = {}) {
+  if (devMockChecker && devMockChecker() && devMockDispatcher) {
+    return devMockDispatcher({ method, body, headers, query });
+  }
   const url = buildUrl(query);
   const options = {
     method,
@@ -56,7 +72,7 @@ async function request({ method = 'GET', body, headers, query } = {}) {
   if (body !== undefined) {
     let finalBody = body;
     const action = typeof body?.action === 'string' ? body.action.trim().toLowerCase() : '';
-    if (LEGACY_ADMIN_MUTATION_ACTIONS.has(action)) {
+    if (LEGACY_ADMIN_MUTATION_ACTIONS.has(action) || SIMPLIFIED_ADMIN_MUTATION_ACTIONS.has(action)) {
       const token = getAdminSessionToken() || body.adminSessionToken;
       if (!token) {
         throw new Error('Administrator session required for this operation.');
@@ -236,4 +252,92 @@ export async function fetchRosterSchema() {
 
 export async function fetchRosterPeriodShadow(period) {
   return request({ query: { action: 'rosterv2period', period, mode: 'shadow' } });
+}
+
+export async function verifyAdminPinRemote(pin) {
+  const cleanPin = String(pin ?? '').trim();
+  if (!cleanPin) {
+    throw new Error('Security PIN is required.');
+  }
+  return request({
+    method: 'POST',
+    body: {
+      action: 'verifyadminpin',
+      pin: cleanPin,
+    },
+  });
+}
+
+export async function fetchRosterAmendments(month) {
+  const response = await request({
+    query: {
+      action: 'rosteramendments',
+      ...(month ? { month: String(month).trim() } : {}),
+    },
+  });
+  if (!Array.isArray(response)) return [];
+  // Guard against un-deployed legacy Apps Script returning Requests rows for unknown GET actions
+  return response.filter(
+    (row) =>
+      row &&
+      typeof row === 'object' &&
+      ('AmendmentId' in row ||
+        'amendmentId' in row ||
+        'NewValue' in row ||
+        'newValue' in row ||
+        'IsCleared' in row ||
+        'isCleared' in row ||
+        'RosterMonth' in row ||
+        'rosterMonth' in row)
+  );
+}
+
+export async function saveMasterRosterDraft({
+  rows,
+  targetMonth,
+  operationId,
+  expectedCellBaselines,
+  expectedMonthCellCount,
+} = {}) {
+  const trimmedMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
+  if (!trimmedMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmedMonth) || trimmedMonth.startsWith('0000')) {
+    throw new Error('targetMonth is required in YYYY-MM format for draft roster save.');
+  }
+  const payload = {
+    action: 'savemasterrosterdraft',
+    rows: Array.isArray(rows) ? rows : [],
+    targetMonth: trimmedMonth,
+    ...(operationId ? { operationId: String(operationId).trim() } : {}),
+    ...(Array.isArray(expectedCellBaselines) ? { expectedCellBaselines } : {}),
+    ...(typeof expectedMonthCellCount === 'number' ? { expectedMonthCellCount } : {}),
+  };
+  return request({ method: 'POST', body: payload });
+}
+
+export async function appendRosterAmendments({
+  targetMonth,
+  operationId,
+  amendments,
+} = {}) {
+  const trimmedMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
+  if (!trimmedMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmedMonth) || trimmedMonth.startsWith('0000')) {
+    throw new Error('targetMonth is required in YYYY-MM format for roster amendments.');
+  }
+  const trimmedOpId = typeof operationId === 'string' ? operationId.trim() : '';
+  if (!trimmedOpId) {
+    throw new Error('operationId is required for idempotent amendment saves.');
+  }
+  if (!Array.isArray(amendments) || amendments.length === 0) {
+    throw new Error('At least one amendment record is required.');
+  }
+  return request({
+    method: 'POST',
+    body: {
+      action: 'appendrosteramendments',
+      targetMonth: trimmedMonth,
+      operationId: trimmedOpId,
+      amendments,
+    },
+  });
+
 }

@@ -9,6 +9,22 @@ const ACTIVITY_HISTORY_SHEET_NAME = 'ActivityHistory';
 const SETTINGS_SHEET_NAME = 'Settings';
 const PUBLIC_HOLIDAYS_SHEET_NAME = 'PublicHolidays';
 const LEAVE_APPLICATIONS_SHEET_NAME = 'LeaveApplications';
+const ROSTER_AMENDMENTS_SHEET_NAME = 'RosterAmendments';
+const ROSTER_AMENDMENTS_HEADERS = [
+  'AmendmentId',
+  'OperationId',
+  'RosterMonth',
+  'Date',
+  'TargetType',
+  'Field',
+  'StaffKey',
+  'StaffName',
+  'PreviousValue',
+  'NewValue',
+  'IsCleared',
+  'SavedAt',
+  'Sequence'
+];
 
 const STATUS_ACTIVE = 'Active';
 const STATUS_OLD = 'Old Request';
@@ -38,6 +54,9 @@ function doGet(e) {
     }
     if (action === 'masterroster') {
       return createJsonResponse(getMasterRosterData());
+    }
+    if (action === 'rosteramendments') {
+      return createJsonResponse(getRosterAmendmentsData(params));
     }
     if (action === 'shiftblocks') {
       return createJsonResponse(getShiftBlocksData());
@@ -70,6 +89,8 @@ function doPost(e) {
 
     const ADMIN_MUTATION_ACTIONS = {
       'uploadmasterroster': true,
+      'savemasterrosterdraft': true,
+      'appendrosteramendments': true,
       'updaterequestapproval': true,
       'addshiftblock': true,
       'deleteshiftblock': true,
@@ -91,12 +112,14 @@ function doPost(e) {
       'deleteleaveapplication': true
     };
     if (ADMIN_MUTATION_ACTIONS[action]) {
-      rosterV2RequireAdmin_(payload);
+      requireLegacyOrSimplifiedAdmin_(payload);
     }
 
     let response;
     if (action.startsWith('rosterv2')) {
       response = rosterV2DispatchPost_(payload);
+    } else if (action === 'verifyadminpin') {
+      response = handleVerifyAdminPin_(payload);
     } else if (action === 'submit') {
       response = handleSubmit(payload);
     } else if (action === 'update') {
@@ -105,6 +128,10 @@ function doPost(e) {
       response = handleDelete(payload);
     } else if (action === 'uploadmasterroster') {
       response = handleUploadMasterRoster(payload);
+    } else if (action === 'savemasterrosterdraft') {
+      response = handleSaveMasterRosterDraft(payload);
+    } else if (action === 'appendrosteramendments') {
+      response = handleAppendRosterAmendments(payload);
     } else if (action === 'updaterequestapproval') {
       response = handleUpdateRequestApproval(payload);
     } else if (action === 'addshiftblock') {
@@ -1658,6 +1685,636 @@ function handleUpdateDirectoryMembers(data, sheetName) {
     }
   }
   return createJsonResponse({ result: 'success', count: members ? members.length : 0 });
+}
+
+function issueSimplifiedPinHmacToken_(sub, email, sessionSecret, ttlSeconds) {
+  var now = Math.floor(Date.now() / 1000);
+  var exp = now + (ttlSeconds || 28800);
+  var headerObj = { alg: 'HS256', typ: 'JWT' };
+  var payloadObj = {
+    v: 1,
+    sub: sub || 'admin-pin',
+    email: String(email || 'admin@pin.local').trim().toLowerCase(),
+    iat: now,
+    exp: exp,
+    jti: Utilities.getUuid()
+  };
+  var headerStr = Utilities.base64EncodeWebSafe(JSON.stringify(headerObj)).replace(/=+$/, '');
+  var payloadStr = Utilities.base64EncodeWebSafe(JSON.stringify(payloadObj)).replace(/=+$/, '');
+  var dataToSign = headerStr + '.' + payloadStr;
+  var sigBytes = Utilities.computeHmacSha256Signature(dataToSign, sessionSecret);
+  var sigStr = Utilities.base64EncodeWebSafe(sigBytes).replace(/=+$/, '');
+  return {
+    token: dataToSign + '.' + sigStr,
+    expiresAt: exp,
+    email: payloadObj.email
+  };
+}
+
+function handleVerifyAdminPin_(data) {
+  var configuredPin = '';
+  var hmacSecret = '';
+  var configuredAdminEmail = 'admin@pin.local';
+  try {
+    var props = PropertiesService.getScriptProperties();
+    configuredPin = String(props.getProperty('ROSTER_ADMIN_PIN') || '').trim();
+    hmacSecret = String(props.getProperty('ROSTER_V2_SESSION_SECRET') || props.getProperty('ROSTER_SESSION_HMAC_SECRET') || '').trim();
+    configuredAdminEmail = String(props.getProperty('ROSTER_V2_ADMIN_EMAIL') || props.getProperty('ROSTER_ADMIN_EMAIL') || 'admin@pin.local').trim().toLowerCase();
+  } catch (_) {}
+
+  if (!configuredPin) {
+    return createJsonResponse({
+      result: 'error',
+      code: 'PIN_NOT_CONFIGURED',
+      message: 'Server ROSTER_ADMIN_PIN is not configured in ScriptProperties.'
+    });
+  }
+
+  // Server-wide and client-scoped throttling:
+  // Cannot be bypassed by omitting or rotating caller-controlled clientIdentifier.
+  var globalThrottleKey = 'pin_fails_global';
+  var clientKey = String((data && (data.clientIdentifier || data.clientId)) || '').trim();
+  var clientThrottleKey = clientKey ? ('pin_fails_' + clientKey.replace(/[^a-zA-Z0-9_-]/g, '')) : '';
+
+  var globalFails = 0;
+  var clientFails = 0;
+  var cache = null;
+  try {
+    if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) {
+      cache = CacheService.getScriptCache();
+      if (cache) {
+        var cachedGlobal = cache.get(globalThrottleKey);
+        if (cachedGlobal) {
+          globalFails = parseInt(cachedGlobal, 10) || 0;
+        }
+        if (clientThrottleKey) {
+          var cachedClient = cache.get(clientThrottleKey);
+          if (cachedClient) {
+            clientFails = parseInt(cachedClient, 10) || 0;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  // Fail-closed lockout if either global or client failures reach 5
+  if (globalFails >= 5 || clientFails >= 5) {
+    return createJsonResponse({
+      result: 'error',
+      code: 'PIN_LOCKED',
+      message: 'Too many incorrect PIN attempts. Security lockout active for 5 minutes.'
+    });
+  }
+
+  var candidatePin = String((data && (data.pin !== undefined ? data.pin : data.adminPin)) || '').trim();
+  if (!candidatePin || !rosterV2ConstantTimeEquals_(candidatePin, configuredPin)) {
+    if (cache) {
+      try {
+        cache.put(globalThrottleKey, String(globalFails + 1), 300);
+        if (clientThrottleKey) {
+          cache.put(clientThrottleKey, String(clientFails + 1), 300);
+        }
+      } catch (_) {}
+    }
+    return createJsonResponse({
+      result: 'error',
+      code: 'INVALID_PIN',
+      message: 'Incorrect Security PIN.'
+    });
+  }
+
+  // Clear throttle on successful verification
+  if (cache) {
+    try {
+      cache.remove(globalThrottleKey);
+      if (clientThrottleKey) {
+        cache.remove(clientThrottleKey);
+      }
+    } catch (_) {}
+  }
+
+  var ttlSeconds = 28800; // 8 hours (once per Admin session)
+  var sessionToken = '';
+  if (hmacSecret) {
+    try {
+      var signed = issueSimplifiedPinHmacToken_('admin-pin', configuredAdminEmail, hmacSecret, ttlSeconds);
+      if (signed && signed.token) {
+        sessionToken = signed.token;
+      }
+    } catch (_) {}
+  }
+
+  return createJsonResponse({
+    result: 'success',
+    verified: true,
+    adminSessionToken: sessionToken || ('pin-session:' + configuredPin),
+    expiresInSeconds: ttlSeconds
+  });
+}
+
+function mapLegacyStaffAlias_(name) {
+  var raw = String(name || '').trim();
+  if (!raw) return '';
+  if (raw.toUpperCase() === 'SYU') return 'SYUHADA';
+  return raw;
+}
+
+function resolveServerStaffKey_(rawIdOrName, rawFallbackName, teamMembersList) {
+  var cleanId = String(rawIdOrName || '').trim();
+  var cleanFallback = String(rawFallbackName || '').trim();
+  var normRawId = normalizeStaffKey_(cleanId);
+  var normId = normalizeStaffKey_(mapLegacyStaffAlias_(cleanId));
+  var normFallback = normalizeStaffKey_(mapLegacyStaffAlias_(cleanFallback));
+
+  if (Array.isArray(teamMembersList) && teamMembersList.length > 0) {
+    for (var i = 0; i < teamMembersList.length; i++) {
+      var m = teamMembersList[i];
+      if (!m || typeof m !== 'object') continue;
+      var sId = normalizeStaffKey_(m.staffId || m.StaffId || '');
+      var mName = normalizeStaffKey_(mapLegacyStaffAlias_(m.name || m.MemberName || ''));
+      var fName = normalizeStaffKey_(m.fullName || m.FullName || '');
+      var matchById = Boolean(sId && (sId === normRawId || sId === normId));
+      var matchByName = Boolean(mName && (mName === normId || mName === normFallback));
+      var matchByFull = Boolean(fName && (fName === normId || fName === normFallback));
+      if (matchById || matchByName || matchByFull) {
+        return sId || mName || normRawId || normId || normFallback;
+      }
+    }
+  }
+  return normRawId || normId || normFallback;
+}
+
+function requireLegacyOrSimplifiedAdmin_(data) {
+  var configuredPin = '';
+  var hmacSecret = '';
+  var configuredEmail = '';
+  try {
+    var props = PropertiesService.getScriptProperties();
+    configuredPin = String(props.getProperty('ROSTER_ADMIN_PIN') || '').trim();
+    hmacSecret = String(props.getProperty('ROSTER_V2_SESSION_SECRET') || props.getProperty('ROSTER_SESSION_HMAC_SECRET') || '').trim();
+    configuredEmail = String(props.getProperty('ROSTER_V2_ADMIN_EMAIL') || props.getProperty('ROSTER_ADMIN_EMAIL') || '').trim().toLowerCase();
+  } catch (_) {}
+
+  var rawToken = data && (data.adminSessionToken || (data.auth && data.auth.adminSessionToken));
+
+  if (configuredPin) {
+    var hasPinCandidate = Boolean(
+      (data && data.adminPin !== undefined && data.adminPin !== null && String(data.adminPin).trim() !== '') ||
+      (typeof rawToken === 'string' && rawToken.indexOf('pin-session:') === 0)
+    );
+    if (hasPinCandidate) {
+      var candidatePin = (data && data.adminPin !== undefined && data.adminPin !== null && String(data.adminPin).trim() !== '')
+        ? String(data.adminPin).trim()
+        : String(rawToken).slice('pin-session:'.length).trim();
+      if (rosterV2ConstantTimeEquals_(candidatePin, configuredPin)) {
+        return { authMethod: 'PIN', email: configuredEmail || 'admin@pin.local' };
+      }
+      throw new Error('V2 administrator authorization required.');
+    }
+
+    // Also allow PIN-issued HMAC JWT when ROSTER_V2_ADMIN_EMAIL is not configured (default email 'admin@pin.local')
+    if (hmacSecret && typeof rawToken === 'string' && rawToken.split('.').length === 3 && !configuredEmail) {
+      var pinClaims = rosterV2VerifyAdminSessionToken_(rawToken, hmacSecret, 'admin@pin.local');
+      if (pinClaims && pinClaims.email === 'admin@pin.local') {
+        return { authMethod: 'PIN_HMAC', email: pinClaims.email, sub: pinClaims.sub };
+      }
+    }
+  }
+
+  return rosterV2RequireAdmin_(data);
+}
+
+function getCurrentMonthMalaysia_() {
+  var now = new Date();
+  try {
+    if (typeof Utilities !== 'undefined' && typeof Utilities.formatDate === 'function') {
+      var formatted = Utilities.formatDate(now, 'Asia/Kuala_Lumpur', 'yyyy-MM');
+      if (formatted && /^\d{4}-(0[1-9]|1[0-2])/.test(formatted)) {
+        return formatted.slice(0, 7);
+      }
+    }
+  } catch (_) {}
+  var klDate = new Date(now.getTime() + 8 * 3600 * 1000);
+  var y = klDate.getUTCFullYear();
+  var m = String(klDate.getUTCMonth() + 1).padStart(2, '0');
+  return y + '-' + m;
+}
+
+function normalizeStaffKey_(val) {
+  return String(val || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function normalizeShiftCompare_(val) {
+  return String(val || '')
+    .split(/[,\n]+/)
+    .map(function(s) { return s.trim().toUpperCase(); })
+    .filter(Boolean)
+    .join(', ');
+}
+
+function getRosterAmendmentsData(params) {
+  var sheet = getSheetByName(ROSTER_AMENDMENTS_SHEET_NAME);
+  if (!sheet) {
+    return [];
+  }
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length <= 1) {
+    return [];
+  }
+  var headers = values[0] || [];
+  var filterMonth = params && params.month ? String(params.month).trim() : '';
+  var records = [];
+
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i];
+    if (!row || !row.some(function(cell) { return cell !== '' && cell !== null && cell !== undefined; })) {
+      continue;
+    }
+    var rec = {};
+    for (var c = 0; c < headers.length; c++) {
+      var h = String(headers[c] || '').trim();
+      if (!h) continue;
+      var val = row[c];
+      if (h === 'Date') {
+        val = formatCellDate_(val);
+      } else if (h === 'RosterMonth') {
+        var mVal = getMonthFromValue_(val);
+        val = mVal || String(val || '').trim();
+      } else if (h === 'IsCleared') {
+        val = val === true || String(val || '').trim().toUpperCase() === 'TRUE' || String(rec.NewValue || '').trim() === '__CLEAR__';
+      } else if (h === 'Sequence') {
+        val = (val !== '' && val !== null && val !== undefined && !isNaN(Number(val))) ? Number(val) : i;
+      } else if (val instanceof Date) {
+        val = val.toISOString();
+      }
+      rec[h] = val;
+    }
+    if (rec.NewValue === '__CLEAR__') {
+      rec.IsCleared = true;
+    }
+    if (filterMonth && rec.RosterMonth !== filterMonth) {
+      continue;
+    }
+    records.push(rec);
+  }
+  return records;
+}
+
+function composeServerSideEffectiveCells_(targetMonth) {
+  var cells = {};
+  var teamMembersList = [];
+  try {
+    teamMembersList = getTeamMembersData();
+  } catch (_) {}
+  var masterRows = getMasterRosterData();
+  for (var i = 0; i < masterRows.length; i++) {
+    var r = masterRows[i];
+    var dateStr = formatCellDate_(r.Date !== undefined ? r.Date : r.date);
+    if (!dateStr || dateStr.slice(0, 7) !== targetMonth) continue;
+    var nameStr = String(r.Name !== undefined ? r.Name : (r.name || '')).trim();
+    var shiftStr = String(r.Shift !== undefined ? r.Shift : (r.shift || '')).trim();
+    if (!nameStr || !shiftStr) continue;
+
+    var upShift = shiftStr.toUpperCase();
+    if (upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL') {
+      var epKey = 'EP|' + dateStr + '|' + upShift;
+      if (cells[epKey]) {
+        var existingNames = cells[epKey].split(/[,\n]+/).map(function(n) { return n.trim(); }).filter(Boolean);
+        if (!existingNames.some(function(n) { return normalizeStaffKey_(n) === normalizeStaffKey_(nameStr); })) {
+          existingNames.push(nameStr);
+        }
+        cells[epKey] = existingNames.join(', ');
+      } else {
+        cells[epKey] = nameStr;
+      }
+    } else {
+      var staffKey = resolveServerStaffKey_(nameStr, nameStr, teamMembersList);
+      var moKey = 'MO|' + dateStr + '|' + staffKey;
+      if (cells[moKey]) {
+        var existingShifts = cells[moKey].split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+        if (!existingShifts.some(function(s) { return s.toUpperCase() === upShift; })) {
+          existingShifts.push(shiftStr);
+        }
+        cells[moKey] = existingShifts.join(', ');
+      } else {
+        cells[moKey] = shiftStr;
+      }
+    }
+  }
+
+  var amendments = getRosterAmendmentsData({ month: targetMonth });
+  amendments.sort(function(a, b) {
+    var seqA = typeof a.Sequence === 'number' ? a.Sequence : 0;
+    var seqB = typeof b.Sequence === 'number' ? b.Sequence : 0;
+    if (seqA !== seqB) return seqA - seqB;
+    var tA = String(a.SavedAt || '');
+    var tB = String(b.SavedAt || '');
+    return tA.localeCompare(tB);
+  });
+
+  for (var j = 0; j < amendments.length; j++) {
+    var amd = amendments[j];
+    var dStr = String(amd.Date || '').trim();
+    if (!dStr || dStr.slice(0, 7) !== targetMonth) continue;
+    var field = String(amd.Field || 'MO_SHIFT').trim().toUpperCase();
+    var isCleared = Boolean(amd.IsCleared === true || String(amd.IsCleared).toUpperCase() === 'TRUE' || String(amd.NewValue || '').trim() === '__CLEAR__');
+    var newVal = isCleared ? '' : String(amd.NewValue || '').trim();
+    var cKey = (field === 'EP_OFFICE_HOUR' || field === 'EP_ONCALL')
+      ? ('EP|' + dStr + '|' + field)
+      : ('MO|' + dStr + '|' + resolveServerStaffKey_(amd.StaffKey || amd.StaffName, amd.StaffName, teamMembersList));
+    cells[cKey] = newVal;
+  }
+
+  return cells;
+}
+
+var SIMPLIFIED_DRAFT_OP_MEMORY_ = {};
+
+function handleSaveMasterRosterDraft(data) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var rawTargetMonth = data && data.targetMonth;
+    if (!rawTargetMonth || String(rawTargetMonth).trim() === '') {
+      throw new Error('targetMonth is required in YYYY-MM format for draft roster save.');
+    }
+    var targetMonth = String(rawTargetMonth).trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth) || targetMonth.slice(0, 4) === '0000') {
+      throw new Error('Invalid targetMonth format. Expected YYYY-MM. Received: ' + rawTargetMonth);
+    }
+
+    var currentMonth = getCurrentMonthMalaysia_();
+    if (targetMonth <= currentMonth) {
+      throw new Error('Draft saves to Main Roster are only allowed for future months (targetMonth "' + targetMonth + '" <= currentMonth "' + currentMonth + '"). Current and past months must use Amendments.');
+    }
+
+    var operationId = data && data.operationId ? String(data.operationId).trim() : '';
+    if (operationId) {
+      if (SIMPLIFIED_DRAFT_OP_MEMORY_[operationId]) {
+        return createJsonResponse(JSON.parse(SIMPLIFIED_DRAFT_OP_MEMORY_[operationId]));
+      }
+      try {
+        if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) {
+          var cache = CacheService.getScriptCache();
+          var cached = cache.get('simplified_draft_op_' + operationId);
+          if (cached) {
+            return createJsonResponse(JSON.parse(cached));
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Server-side month-level drift check if expectedMonthCellCount is provided
+    if (data && typeof data.expectedMonthCellCount === 'number' && data.expectedMonthCellCount >= 0) {
+      var currentCellsForCount = composeServerSideEffectiveCells_(targetMonth);
+      var currentNonEmptyCount = Object.keys(currentCellsForCount).filter(function(k) {
+        return Boolean(currentCellsForCount[k] && String(currentCellsForCount[k]).trim());
+      }).length;
+      if (currentNonEmptyCount !== data.expectedMonthCellCount) {
+        throw new Error('CONFLICT: Master roster was modified by another session (expected ' + data.expectedMonthCellCount + ' filled cells, found ' + currentNonEmptyCount + '). Please reload the roster.');
+      }
+    }
+
+    // Server-side conflict check against expectedCellBaselines if provided
+    if (data && Array.isArray(data.expectedCellBaselines) && data.expectedCellBaselines.length > 0) {
+      var draftTeamList = [];
+      try { draftTeamList = getTeamMembersData(); } catch (_) {}
+      var currentCells = composeServerSideEffectiveCells_(targetMonth);
+      for (var bIdx = 0; bIdx < data.expectedCellBaselines.length; bIdx++) {
+        var b = data.expectedCellBaselines[bIdx];
+        if (!b || typeof b !== 'object') continue;
+        var bDate = String(b.date || '').trim();
+        var bField = String(b.field || 'MO_SHIFT').trim().toUpperCase();
+        var bKey = (bField === 'EP_OFFICE_HOUR' || bField === 'EP_ONCALL')
+          ? ('EP|' + bDate + '|' + bField)
+          : ('MO|' + bDate + '|' + resolveServerStaffKey_(b.staffKey || b.staffName, b.staffName, draftTeamList));
+        var serverVal = String(currentCells[bKey] || '').trim();
+        var expectedVal = String(b.expectedValue !== undefined ? b.expectedValue : (b.previousValue || '')).trim();
+        var incomingVal = String(b.newValue || '').trim();
+        if (
+          normalizeShiftCompare_(serverVal) !== normalizeShiftCompare_(expectedVal) &&
+          normalizeShiftCompare_(serverVal) !== normalizeShiftCompare_(incomingVal)
+        ) {
+          throw new Error('CONFLICT: Concurrent edit detected on ' + bDate + ' for ' + (b.staffName || b.staffKey || bField) + '. Server value changed to "' + (serverVal || 'blank') + '".');
+        }
+      }
+    }
+
+    var uploadRes = handleLegacyMasterRosterUpload_(data);
+    var parsedUpload = JSON.parse(uploadRes.text || '{}');
+    var responsePayload = {
+      result: 'success',
+      mode: 'DRAFT',
+      target: 'MAIN',
+      targetMonth: targetMonth,
+      count: parsedUpload.count || 0,
+      operationId: operationId || null,
+      savedAt: new Date().toISOString()
+    };
+
+    if (operationId) {
+      var replayStr = JSON.stringify({
+        result: 'success',
+        mode: 'DRAFT',
+        target: 'MAIN',
+        targetMonth: targetMonth,
+        count: parsedUpload.count || 0,
+        operationId: operationId,
+        idempotentReplay: true,
+        savedAt: responsePayload.savedAt
+      });
+      SIMPLIFIED_DRAFT_OP_MEMORY_[operationId] = replayStr;
+      try {
+        if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) {
+          CacheService.getScriptCache().put(
+            'simplified_draft_op_' + operationId,
+            replayStr,
+            600
+          );
+        }
+      } catch (_) {}
+    }
+
+    return createJsonResponse(responsePayload);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleAppendRosterAmendments(data) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var rawTargetMonth = data && data.targetMonth;
+    if (!rawTargetMonth || String(rawTargetMonth).trim() === '') {
+      throw new Error('targetMonth is required in YYYY-MM format for roster amendments.');
+    }
+    var targetMonth = String(rawTargetMonth).trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth) || targetMonth.slice(0, 4) === '0000') {
+      throw new Error('Invalid targetMonth format. Expected YYYY-MM. Received: ' + rawTargetMonth);
+    }
+
+    var currentMonth = getCurrentMonthMalaysia_();
+    if (targetMonth > currentMonth) {
+      throw new Error('Amendments are only allowed for current or past months (targetMonth "' + targetMonth + '" > currentMonth "' + currentMonth + '"). Future months save directly to Main Roster.');
+    }
+
+    var operationId = String((data && data.operationId) || '').trim();
+    if (!operationId) {
+      throw new Error('operationId is required for idempotent amendment saves.');
+    }
+
+    var rawAmendments = Array.isArray(data && data.amendments) ? data.amendments : [];
+    if (rawAmendments.length === 0) {
+      throw new Error('At least one amendment record is required.');
+    }
+
+    var sheet = createSheetIfNotExist(ROSTER_AMENDMENTS_SHEET_NAME, ROSTER_AMENDMENTS_HEADERS);
+    var existingValues = sheet.getDataRange().getValues();
+    var headers = ensureSpecificHeaders(sheet, existingValues[0] || [], ROSTER_AMENDMENTS_HEADERS);
+    var indexes = buildHeaderIndex(headers);
+
+    // 1. Check idempotency by OperationId and find current max Sequence
+    var maxSequence = 0;
+    var existingOpRecords = [];
+    for (var i = 1; i < existingValues.length; i++) {
+      var row = existingValues[i];
+      var rowSeq = Number(row[indexes.Sequence]);
+      if (!isNaN(rowSeq) && rowSeq > maxSequence) {
+        maxSequence = rowSeq;
+      }
+      var rowOpId = String(row[indexes.OperationId] || '').trim();
+      if (rowOpId && rowOpId === operationId) {
+        existingOpRecords.push({
+          AmendmentId: String(row[indexes.AmendmentId] || ''),
+          OperationId: rowOpId,
+          RosterMonth: String(row[indexes.RosterMonth] || ''),
+          Date: formatCellDate_(row[indexes.Date]),
+          TargetType: String(row[indexes.TargetType] || ''),
+          Field: String(row[indexes.Field] || ''),
+          StaffKey: String(row[indexes.StaffKey] || ''),
+          StaffName: String(row[indexes.StaffName] || ''),
+          PreviousValue: String(row[indexes.PreviousValue] || ''),
+          NewValue: String(row[indexes.NewValue] || ''),
+          IsCleared: row[indexes.IsCleared] === true || String(row[indexes.IsCleared]).toUpperCase() === 'TRUE',
+          SavedAt: row[indexes.SavedAt] instanceof Date ? row[indexes.SavedAt].toISOString() : String(row[indexes.SavedAt] || ''),
+          Sequence: rowSeq
+        });
+      }
+    }
+
+    if (existingOpRecords.length > 0) {
+      return createJsonResponse({
+        result: 'success',
+        mode: 'AMEND',
+        target: 'AMEND',
+        targetMonth: targetMonth,
+        operationId: operationId,
+        idempotentReplay: true,
+        count: existingOpRecords.length,
+        records: existingOpRecords
+      });
+    }
+
+    // 2. Server-side conflict check against current effective roster state
+    var enforceConflictCheck = !(data && data.enforceConflictCheck === false);
+    var amdTeamList = [];
+    try { amdTeamList = getTeamMembersData(); } catch (_) {}
+    var currentEffectiveCells = composeServerSideEffectiveCells_(targetMonth);
+
+    var savedAtIso = new Date().toISOString();
+    var batchRows = [];
+    var createdRecords = [];
+
+    for (var j = 0; j < rawAmendments.length; j++) {
+      var item = rawAmendments[j];
+      if (!item || typeof item !== 'object') {
+        throw new Error('Invalid amendment item at index ' + j + '.');
+      }
+      var dateStr = formatCellDate_(item.date !== undefined ? item.date : item.Date);
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || dateStr.slice(0, 7) !== targetMonth) {
+        throw new Error('Amendment at index ' + j + ' date "' + dateStr + '" does not match targetMonth "' + targetMonth + '".');
+      }
+
+      var field = String(item.field || item.Field || 'MO_SHIFT').trim().toUpperCase();
+      var isEpField = (field === 'EP_OFFICE_HOUR' || field === 'EP_ONCALL');
+      var targetType = isEpField ? 'EP' : String(item.targetType || item.TargetType || 'MO').trim().toUpperCase();
+      var staffName = String(item.staffName || item.StaffName || item.name || item.Name || '').trim();
+      var rawStaffKey = String(item.staffKey || item.StaffKey || (isEpField ? '__EP__' : staffName)).trim();
+      var staffKey = isEpField ? '__EP__' : resolveServerStaffKey_(rawStaffKey || staffName, staffName, amdTeamList);
+
+      if (!isEpField && !staffKey) {
+        throw new Error('Amendment at index ' + j + ' is missing staff identifier.');
+      }
+
+      var rawNewVal = String(item.newValue !== undefined ? item.newValue : (item.NewValue !== undefined ? item.NewValue : '')).trim();
+      var isCleared = Boolean(
+        item.isCleared === true ||
+        item.IsCleared === true ||
+        String(item.isCleared || item.IsCleared || '').toUpperCase() === 'TRUE' ||
+        rawNewVal === '__CLEAR__' ||
+        rawNewVal === ''
+      );
+      var storedNewValue = isCleared ? '__CLEAR__' : rawNewVal;
+      var previousValue = String(item.previousValue !== undefined ? item.previousValue : (item.PreviousValue || '')).trim();
+
+      var cellLookupKey = isEpField ? ('EP|' + dateStr + '|' + field) : ('MO|' + dateStr + '|' + staffKey);
+      var currentServerVal = String(currentEffectiveCells[cellLookupKey] || '').trim();
+
+      if (enforceConflictCheck && item.previousValue !== undefined) {
+        if (
+          normalizeShiftCompare_(currentServerVal) !== normalizeShiftCompare_(previousValue) &&
+          normalizeShiftCompare_(currentServerVal) !== normalizeShiftCompare_(isCleared ? '' : rawNewVal)
+        ) {
+          throw new Error('CONFLICT: Concurrent edit detected on ' + dateStr + ' for ' + (staffName || staffKey) + '. Server value is "' + (currentServerVal || 'blank') + '", expected "' + (previousValue || 'blank') + '".');
+        }
+      }
+
+      var seq = maxSequence + 1 + j;
+      var amendmentId = 'amd_' + targetMonth + '_' + seq + '_' + j;
+      var valuesByHeader = {
+        AmendmentId: amendmentId,
+        OperationId: operationId,
+        RosterMonth: targetMonth,
+        Date: dateStr,
+        TargetType: targetType,
+        Field: field,
+        StaffKey: staffKey,
+        StaffName: staffName || (isEpField ? field : staffKey),
+        PreviousValue: previousValue,
+        NewValue: storedNewValue,
+        IsCleared: isCleared,
+        SavedAt: savedAtIso,
+        Sequence: seq
+      };
+
+      batchRows.push(buildRowFromHeaders(headers, valuesByHeader));
+      createdRecords.push(valuesByHeader);
+      // Update in-memory effective map for subsequent items in the same batch
+      currentEffectiveCells[cellLookupKey] = isCleared ? '' : rawNewVal;
+    }
+
+    var startRow = Math.max(2, sheet.getLastRow() + 1);
+    sheet.getRange(startRow, 1, batchRows.length, headers.length).setValues(batchRows);
+    ['RosterMonth', 'Date', 'SavedAt'].forEach(function(h) {
+      if (indexes[h] !== undefined) {
+        sheet.getRange(startRow, indexes[h] + 1, batchRows.length, 1).setNumberFormat('@');
+      }
+    });
+
+    return createJsonResponse({
+      result: 'success',
+      mode: 'AMEND',
+      target: 'AMEND',
+      targetMonth: targetMonth,
+      operationId: operationId,
+      count: batchRows.length,
+      savedAt: savedAtIso,
+      records: createdRecords
+    });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // BEGIN GENERATED PHASE 1 COMPATIBILITY
