@@ -1,6 +1,6 @@
-import { HOLIDAYS } from './holidays';
-import { toIsoDate, normalizeForComparison } from './normalise';
-import { mapName } from './adapters';
+import { HOLIDAYS } from './holidays.js';
+import { toIsoDate, normalizeForComparison } from './normalise.js';
+import { mapName } from './adapters.js';
 
 /**
  * Normalizes roster row data explicitly to ensure date matching works and names are consistent.
@@ -67,7 +67,15 @@ export const classifyPublicHolidayShift = (shift) => {
     normalizedShift = 'NIGHT';
   }
 
-  if (['AM', 'PM', 'AMX', 'PMX', 'NIGHT', 'PN'].includes(normalizedShift)) {
+  if (['POSTNIGHT', 'POST NIGHT', 'POST-NIGHT', 'PN'].includes(s)) {
+    normalizedShift = 'PN';
+  }
+
+  if (s === 'COURSE' || s.startsWith('COURSE') || s.includes('COURSE')) {
+    normalizedShift = 'COURSE';
+  }
+
+  if (['AM', 'PM', 'AMX', 'PMX', 'NIGHT', 'PN', 'COURSE'].includes(normalizedShift)) {
     return {
       normalizedShift, category: 'worked', isWorkedPublicHoliday: true, isPublicHolidayOff: false, earnsCredit: true
     };
@@ -79,7 +87,13 @@ export const classifyPublicHolidayShift = (shift) => {
     };
   }
 
-  // AL, MC, EL, OFF, COURSE, etc.
+  if (s === 'MC' || s.startsWith('MC ') || ['MC1', 'MC2'].includes(s)) {
+    return {
+      normalizedShift: 'MC', category: 'mc', isWorkedPublicHoliday: false, isPublicHolidayOff: true, earnsCredit: false
+    };
+  }
+
+  // AL, EL, OFF, etc.
   return {
     normalizedShift, category: 'other_non_working', isWorkedPublicHoliday: false, isPublicHolidayOff: true, earnsCredit: false
   };

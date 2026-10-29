@@ -8,7 +8,7 @@
         "build": "vite build",
         "preview": "vite preview",
         "test": "npm run test:legacy && npm run test:phase1",
-        "test:legacy": "node src/utils/adapters.test.js && node src/utils/cache.test.js && node src/utils/quota.test.js && node src/utils/holidays.test.js && node src/utils/leaveTracking.test.js",
+        "test:legacy": "node src/utils/adapters.test.js && node src/utils/cache.test.js && node src/utils/quota.test.js && node src/utils/holidays.test.js && node src/utils/leaveTracking.test.js && node src/utils/publicHolidayTracker.test.js",
         "test:phase1": "node --test tests/*.test.mjs",
         "predeploy": "npm run build",
         "deploy": "gh-pages -d dist"

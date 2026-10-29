@@ -903,6 +903,13 @@ export default function PublicHolidayTrackerPage({
                                 </td>
                               );
                             }
+                            if (cellData && (cellData.classification.category === 'mc' || cellData.classification.normalizedShift === 'MC')) {
+                              return (
+                                <td key={docKey} className="py-1 px-1 text-center align-middle border-b border-slate-100">
+                                  <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">MC</span>
+                                </td>
+                              );
+                            }
                             // Empty / Other Non-Working
                             return (
                               <td key={docKey} className="py-1.5 px-1 bg-slate-50/30 text-center border-b border-slate-100">
