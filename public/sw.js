@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ed-roster-cache-v2';
+const CACHE_NAME = 'ed-roster-cache-v3';
 const ASSETS_TO_CACHE = [
   '/REQUEST-APP/',
   '/REQUEST-APP/index.html',
