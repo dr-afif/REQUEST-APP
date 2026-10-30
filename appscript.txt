@@ -9,7 +9,7 @@ const ACTIVITY_HISTORY_SHEET_NAME = 'ActivityHistory';
 const SETTINGS_SHEET_NAME = 'Settings';
 const PUBLIC_HOLIDAYS_SHEET_NAME = 'PublicHolidays';
 const LEAVE_APPLICATIONS_SHEET_NAME = 'LeaveApplications';
-const ROSTER_AMENDMENTS_SHEET_NAME = 'RosterAmendments';
+const ROSTER_AMENDMENTS_SHEET_NAME = 'AmendRoster';
 const ROSTER_AMENDMENTS_HEADERS = [
   'AmendmentId',
   'OperationId',
@@ -55,7 +55,7 @@ function doGet(e) {
     if (action === 'masterroster') {
       return createJsonResponse(getMasterRosterData());
     }
-    if (action === 'rosteramendments') {
+    if (action === 'rosteramendments' || action === 'amendroster') {
       return createJsonResponse(getRosterAmendmentsData(params));
     }
     if (action === 'shiftblocks') {
@@ -76,6 +76,9 @@ function doGet(e) {
     if (action === 'leaveapplications') {
       return createJsonResponse(getLeaveApplicationsData());
     }
+    if (action === 'stagingidentity') {
+      return getStagingIdentityResponse();
+    }
     return getRequestsResponse();
   } catch (error) {
     return createJsonResponse({ result: 'error', message: error.message || error.toString() });
@@ -91,6 +94,7 @@ function doPost(e) {
       'uploadmasterroster': true,
       'savemasterrosterdraft': true,
       'appendrosteramendments': true,
+      'appendamendroster': true,
       'updaterequestapproval': true,
       'addshiftblock': true,
       'deleteshiftblock': true,
@@ -130,7 +134,7 @@ function doPost(e) {
       response = handleUploadMasterRoster(payload);
     } else if (action === 'savemasterrosterdraft') {
       response = handleSaveMasterRosterDraft(payload);
-    } else if (action === 'appendrosteramendments') {
+    } else if (action === 'appendrosteramendments' || action === 'appendamendroster') {
       response = handleAppendRosterAmendments(payload);
     } else if (action === 'updaterequestapproval') {
       response = handleUpdateRequestApproval(payload);
@@ -1913,7 +1917,7 @@ function normalizeShiftCompare_(val) {
 }
 
 function getRosterAmendmentsData(params) {
-  var sheet = getSheetByName(ROSTER_AMENDMENTS_SHEET_NAME);
+  var sheet = getSheetByName(ROSTER_AMENDMENTS_SHEET_NAME) || getSheetByName('RosterAmendments');
   if (!sheet) {
     return [];
   }
@@ -2030,6 +2034,24 @@ function composeServerSideEffectiveCells_(targetMonth) {
 
 var SIMPLIFIED_DRAFT_OP_MEMORY_ = {};
 
+function getCanonicalStaffName_(staffKey, fallbackName, teamMembersList) {
+  var cleanFallback = String(fallbackName || '').trim();
+  if (Array.isArray(teamMembersList) && teamMembersList.length > 0) {
+    var normKey = normalizeStaffKey_(staffKey);
+    for (var i = 0; i < teamMembersList.length; i++) {
+      var m = teamMembersList[i];
+      if (!m || typeof m !== 'object') continue;
+      var sId = normalizeStaffKey_(m.staffId || m.StaffId || '');
+      var mName = String(m.name || m.MemberName || '').trim();
+      var normName = normalizeStaffKey_(mName);
+      if ((sId && sId === normKey) || (normName && normName === normKey)) {
+        return mName || cleanFallback || staffKey;
+      }
+    }
+  }
+  return cleanFallback || staffKey || '';
+}
+
 function handleSaveMasterRosterDraft(data) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -2075,10 +2097,11 @@ function handleSaveMasterRosterDraft(data) {
       }
     }
 
+    var draftTeamList = [];
+    try { draftTeamList = getTeamMembersData(); } catch (_) {}
+
     // Server-side conflict check against expectedCellBaselines if provided
     if (data && Array.isArray(data.expectedCellBaselines) && data.expectedCellBaselines.length > 0) {
-      var draftTeamList = [];
-      try { draftTeamList = getTeamMembersData(); } catch (_) {}
       var currentCells = composeServerSideEffectiveCells_(targetMonth);
       for (var bIdx = 0; bIdx < data.expectedCellBaselines.length; bIdx++) {
         var b = data.expectedCellBaselines[bIdx];
@@ -2100,14 +2123,233 @@ function handleSaveMasterRosterDraft(data) {
       }
     }
 
-    var uploadRes = handleLegacyMasterRosterUpload_(data);
-    var parsedUpload = JSON.parse(uploadRes.text || '{}');
+    // Retrieve existing sheet; fail closed if missing (do not auto-create on mutation endpoint)
+    var sheet = typeof getSheetByName === 'function'
+      ? getSheetByName(MASTER_ROSTER_SHEET_NAME)
+      : SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MASTER_ROSTER_SHEET_NAME);
+    if (!sheet) {
+      throw new Error('Sheet "' + MASTER_ROSTER_SHEET_NAME + '" not found.');
+    }
+
+    var lastRow = sheet.getLastRow();
+    var lastCol = Math.max(sheet.getLastColumn(), 3);
+    var oldDataRowCount = Math.max(0, lastRow - 1);
+    var existingValues = [];
+    if (oldDataRowCount > 0) {
+      try {
+        existingValues = sheet.getRange(2, 1, oldDataRowCount, 3).getValues();
+      } catch (readErr) {
+        throw new Error('Failed to read existing MasterRoster rows: ' + (readErr && readErr.message ? readErr.message : readErr));
+      }
+      if (!Array.isArray(existingValues)) {
+        throw new Error('Failed to read existing MasterRoster rows: result is not an array.');
+      }
+    }
+
+    // Separate rows: preserve non-target months 100% as-is
+    var preservedRows = [];
+    var targetMonthRows = [];
+    for (var i = 0; i < existingValues.length; i++) {
+      var row = existingValues[i];
+      var rDate = row[1];
+      var rMonth = getMonthFromValue_(rDate);
+      if (rMonth === targetMonth) {
+        targetMonthRows.push({
+          origRow: row,
+          name: row[0] !== undefined ? String(row[0]).trim() : '',
+          date: rDate,
+          shift: row[2] !== undefined ? String(row[2]).trim() : ''
+        });
+      } else {
+        preservedRows.push([
+          row[0] !== undefined ? row[0] : '',
+          row[1] !== undefined ? row[1] : '',
+          row[2] !== undefined ? row[2] : ''
+        ]);
+      }
+    }
+
+    // Normalize incoming intentional modifications (from data.changes or delta rows)
+    var incomingChanges = [];
+    if (Array.isArray(data && data.changes) && data.changes.length > 0) {
+      for (var cIdx = 0; cIdx < data.changes.length; cIdx++) {
+        var ch = data.changes[cIdx];
+        if (!ch || typeof ch !== 'object') continue;
+        var chDate = formatCellDate_(ch.date !== undefined ? ch.date : ch.Date);
+        if (!chDate) continue;
+        var chMonth = chDate.slice(0, 7);
+        if (chMonth !== targetMonth) {
+          throw new Error('Change date "' + chDate + '" does not match targetMonth "' + targetMonth + '".');
+        }
+        var chField = String(ch.field || ch.Field || 'MO_SHIFT').trim().toUpperCase();
+        var chIsEp = (chField === 'EP_OFFICE_HOUR' || chField === 'EP_ONCALL');
+        var chTargetType = chIsEp ? 'EP' : String(ch.targetType || ch.TargetType || 'MO').trim().toUpperCase();
+        var chName = String(ch.staffName || ch.StaffName || ch.name || ch.Name || '').trim();
+        var chKey = chIsEp ? '__EP__' : resolveServerStaffKey_(ch.staffKey || ch.StaffKey || chName, chName, draftTeamList);
+        var chNewVal = ch.newValue !== undefined ? ch.newValue : (ch.NewValue !== undefined ? ch.NewValue : '');
+        var chCleared = Boolean(ch.isCleared === true || ch.IsCleared === true || String(chNewVal).trim() === '__CLEAR__' || String(ch.isCleared).toUpperCase() === 'TRUE');
+        incomingChanges.push({
+          targetType: chTargetType,
+          field: chField,
+          isEp: chIsEp,
+          date: chDate,
+          staffName: chName,
+          staffKey: chKey,
+          newValue: chCleared ? '' : String(chNewVal).trim(),
+          isCleared: chCleared
+        });
+      }
+    } else if (Array.isArray(data && data.rows) && data.rows.length > 0) {
+      for (var rIdx = 0; rIdx < data.rows.length; rIdx++) {
+        var rItem = data.rows[rIdx];
+        if (!rItem || typeof rItem !== 'object') continue;
+        var rDateStr = formatCellDate_(rItem.date !== undefined ? rItem.date : rItem.Date);
+        if (!rDateStr) {
+          throw new Error('Missing date for row at index ' + rIdx + '.');
+        }
+        var rRowMonth = rDateStr.slice(0, 7);
+        if (rRowMonth !== targetMonth) {
+          throw new Error('Row at index ' + rIdx + ' date "' + rDateStr + '" does not match targetMonth "' + targetMonth + '".');
+        }
+        var rShiftStr = String(rItem.shift !== undefined ? rItem.shift : (rItem.Shift !== undefined ? rItem.Shift : '')).trim();
+        var rNameStr = String(rItem.name !== undefined ? rItem.name : (rItem.Name !== undefined ? rItem.Name : '')).trim();
+        var upShift = rShiftStr.toUpperCase();
+        var rIsEp = (upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL' || rItem.field === 'EP_OFFICE_HOUR' || rItem.field === 'EP_ONCALL');
+        var rField = rIsEp ? (upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL' ? upShift : String(rItem.field).trim().toUpperCase()) : 'MO_SHIFT';
+        var rCleared = Boolean(rItem.isCleared === true || (rIsEp ? !rNameStr || rNameStr === '__CLEAR__' : !rShiftStr || rShiftStr === '__CLEAR__'));
+        var rStaffKey = rIsEp ? '__EP__' : resolveServerStaffKey_(rItem.staffKey || rNameStr, rNameStr, draftTeamList);
+        incomingChanges.push({
+          targetType: rIsEp ? 'EP' : 'MO',
+          field: rField,
+          isEp: rIsEp,
+          date: rDateStr,
+          staffName: rNameStr,
+          staffKey: rStaffKey,
+          newValue: rCleared ? '' : (rIsEp ? rNameStr : rShiftStr),
+          isCleared: rCleared
+        });
+      }
+    }
+
+    // Index intentional changes by cell key: EP|date|field or MO|date|staffKey
+    var changesByKey = {};
+    for (var k = 0; k < incomingChanges.length; k++) {
+      var item = incomingChanges[k];
+      var cellKey = item.isEp
+        ? ('EP|' + item.date + '|' + item.field)
+        : ('MO|' + item.date + '|' + item.staffKey);
+      changesByKey[cellKey] = item;
+    }
+
+    // Apply patch against existing target month rows: preserve untouched rows, update changed rows, omit cleared rows
+    var updatedTargetMonthRows = [];
+    var appliedKeys = {};
+    var affectedCount = 0;
+
+    for (var m = 0; m < targetMonthRows.length; m++) {
+      var existingRow = targetMonthRows[m];
+      var rowDateStr = formatCellDate_(existingRow.date);
+      var rowShiftUp = String(existingRow.shift || '').trim().toUpperCase();
+      var rowIsEp = (rowShiftUp === 'EP_OFFICE_HOUR' || rowShiftUp === 'EP_ONCALL');
+      var rowCellKey = rowIsEp
+        ? ('EP|' + rowDateStr + '|' + rowShiftUp)
+        : ('MO|' + rowDateStr + '|' + resolveServerStaffKey_(existingRow.name, existingRow.name, draftTeamList));
+
+      if (changesByKey.hasOwnProperty(rowCellKey)) {
+        if (!appliedKeys[rowCellKey]) {
+          appliedKeys[rowCellKey] = true;
+          var change = changesByKey[rowCellKey];
+          if (change.isCleared) {
+            // Explicitly cleared/deleted assignment: omitted from updatedTargetMonthRows
+            affectedCount++;
+          } else {
+            if (change.isEp) {
+              updatedTargetMonthRows.push([
+                change.newValue,
+                rowDateStr,
+                change.field
+              ]);
+            } else {
+              var staffDisplayName = getCanonicalStaffName_(change.staffKey, change.staffName || existingRow.name, draftTeamList);
+              updatedTargetMonthRows.push([
+                staffDisplayName,
+                rowDateStr,
+                change.newValue
+              ]);
+            }
+            affectedCount++;
+          }
+        }
+      } else {
+        // Untouched row: PRESERVE EXACTLY AS-IS!
+        updatedTargetMonthRows.push([
+          existingRow.origRow[0] !== undefined ? existingRow.origRow[0] : '',
+          existingRow.origRow[1] !== undefined ? existingRow.origRow[1] : '',
+          existingRow.origRow[2] !== undefined ? existingRow.origRow[2] : ''
+        ]);
+      }
+    }
+
+    // Append newly assigned cells that were NOT previously present in targetMonthRows
+    for (var cKey in changesByKey) {
+      if (changesByKey.hasOwnProperty(cKey) && !appliedKeys[cKey]) {
+        var newChange = changesByKey[cKey];
+        if (!newChange.isCleared && newChange.newValue) {
+          if (newChange.isEp) {
+            updatedTargetMonthRows.push([
+              newChange.newValue,
+              newChange.date,
+              newChange.field
+            ]);
+          } else {
+            var newStaffDisplayName = getCanonicalStaffName_(newChange.staffKey, newChange.staffName, draftTeamList);
+            updatedTargetMonthRows.push([
+              newStaffDisplayName,
+              newChange.date,
+              newChange.newValue
+            ]);
+          }
+          affectedCount++;
+        }
+      }
+    }
+
+    var finalValues = preservedRows.concat(updatedTargetMonthRows);
+
+    // WRITE-BEFORE-CLEANUP:
+    // 1. Primary write: Overwrite rows 2.. starting at row 2 with finalValues.
+    if (finalValues.length > 0) {
+      sheet.getRange(2, 1, finalValues.length, 3).setValues(finalValues);
+      if (typeof SpreadsheetApp.flush === 'function') {
+        SpreadsheetApp.flush();
+      }
+    }
+
+    // 2. Trailing obsolete row cleanup:
+    if (oldDataRowCount > finalValues.length) {
+      var obsoleteRowCount = oldDataRowCount - finalValues.length;
+      var cleanupStartRow = 2 + finalValues.length;
+      try {
+        sheet.getRange(cleanupStartRow, 1, obsoleteRowCount, lastCol).clearContent();
+        if (typeof SpreadsheetApp.flush === 'function') {
+          SpreadsheetApp.flush();
+        }
+      } catch (cleanupErr) {
+        throw new Error('MasterRoster written but trailing row cleanup failed: ' + (cleanupErr && cleanupErr.message ? cleanupErr.message : cleanupErr));
+      }
+    } else if (finalValues.length === 0 && oldDataRowCount > 0) {
+      sheet.getRange(2, 1, oldDataRowCount, lastCol).clearContent();
+      if (typeof SpreadsheetApp.flush === 'function') {
+        SpreadsheetApp.flush();
+      }
+    }
+
     var responsePayload = {
       result: 'success',
       mode: 'DRAFT',
       target: 'MAIN',
       targetMonth: targetMonth,
-      count: parsedUpload.count || 0,
+      count: affectedCount,
       operationId: operationId || null,
       savedAt: new Date().toISOString()
     };
@@ -2118,7 +2360,7 @@ function handleSaveMasterRosterDraft(data) {
         mode: 'DRAFT',
         target: 'MAIN',
         targetMonth: targetMonth,
-        count: parsedUpload.count || 0,
+        count: affectedCount,
         operationId: operationId,
         idempotentReplay: true,
         savedAt: responsePayload.savedAt
@@ -2169,7 +2411,8 @@ function handleAppendRosterAmendments(data) {
       throw new Error('At least one amendment record is required.');
     }
 
-    var sheet = createSheetIfNotExist(ROSTER_AMENDMENTS_SHEET_NAME, ROSTER_AMENDMENTS_HEADERS);
+    var sheet = getSheetByName(ROSTER_AMENDMENTS_SHEET_NAME) ||
+      (getSheetByName('RosterAmendments') ? getSheetByName('RosterAmendments') : createSheetIfNotExist(ROSTER_AMENDMENTS_SHEET_NAME, ROSTER_AMENDMENTS_HEADERS));
     var existingValues = sheet.getDataRange().getValues();
     var headers = ensureSpecificHeaders(sheet, existingValues[0] || [], ROSTER_AMENDMENTS_HEADERS);
     var indexes = buildHeaderIndex(headers);
@@ -2315,6 +2558,59 @@ function handleAppendRosterAmendments(data) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function getStagingIdentityResponse() {
+  var props = null;
+  try {
+    props = PropertiesService.getScriptProperties();
+  } catch (_) {}
+
+  var env = props ? String(props.getProperty('APP_ENVIRONMENT') || '').trim().toLowerCase() : '';
+  var isStagingEnv = (env === 'staging');
+  var expectedSsId = props ? String(props.getProperty('STAGING_SPREADSHEET_ID') || '').trim() : '';
+
+  var activeSsId = '';
+  var activeSsName = '';
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) {
+      if (typeof ss.getId === 'function') {
+        activeSsId = String(ss.getId() || '').trim();
+      }
+      if (typeof ss.getName === 'function') {
+        activeSsName = String(ss.getName() || '').trim();
+      }
+    }
+  } catch (_) {}
+
+  if (!activeSsId && expectedSsId) {
+    activeSsId = expectedSsId;
+  }
+  if (!activeSsName) {
+    activeSsName = props ? String(props.getProperty('STAGING_SPREADSHEET_NAME') || 'REQUEST-APP Staging Test').trim() : 'REQUEST-APP Staging Test';
+  }
+
+  var matchesSpreadsheet = Boolean(activeSsId && (!expectedSsId || activeSsId === expectedSsId));
+  var isVerifiedStaging = Boolean(isStagingEnv && matchesSpreadsheet);
+
+  if (!isVerifiedStaging) {
+    return createJsonResponse({
+      result: 'unverified',
+      isStaging: false,
+      appEnvironment: env || 'production',
+      message: 'Backend is not an authorized staging environment.'
+    });
+  }
+
+  return createJsonResponse({
+    result: 'success',
+    isStaging: true,
+    appEnvironment: 'staging',
+    spreadsheetId: activeSsId,
+    spreadsheetName: activeSsName,
+    stagingInitializedAt: props ? String(props.getProperty('STAGING_INITIALIZED_AT') || '') : ''
+  });
 }
 
 // BEGIN GENERATED PHASE 1 COMPATIBILITY

@@ -5,7 +5,7 @@ export const fixture = JSON.parse(fs.readFileSync(new URL('../fixtures/legacy-wo
 export const legacySource = fs.readFileSync(new URL('../fixtures/legacy-appscript-v1.txt', import.meta.url), 'utf8');
 export const currentSource = fs.readFileSync(new URL('../../appscript.txt', import.meta.url), 'utf8');
 export const digest = text => crypto.createHash('sha256').update(text).digest('hex');
-export function harness(source = currentSource, { tables = fixture.tables, activeEmail = '', adminEmail = '', effectiveEmail = 'owner@example.invalid', sessionSecret = '', adminPin = '', clockIso = '2030-09-07T08:00:00.000Z', failLock = false, coerceDates = false } = {}) {
+export function harness(source = currentSource, { tables = fixture.tables, activeEmail = '', adminEmail = '', effectiveEmail = 'owner@example.invalid', sessionSecret = '', adminPin = '', clockIso = '2030-09-07T08:00:00.000Z', failLock = false, coerceDates = false, appEnvironment = '', scriptProperties = {} } = {}) {
   const grids = structuredClone(tables), writes = [], locks = [];
   const blank = v => v === '' || v === undefined || v === null;
   const colFormats = {};
@@ -50,19 +50,19 @@ export function harness(source = currentSource, { tables = fixture.tables, activ
   class ClockDate extends NativeDate { constructor(...args){super(...(args.length ? args : [clockIso]));}static now(){return NativeDate.parse(clockIso);} }
   const inMemCache = new Map();
   const context=vm.createContext({Date:ClockDate, console,
-    SpreadsheetApp:{getActiveSpreadsheet:()=>({getSpreadsheetTimeZone:()=>'Asia/Kuala_Lumpur',getSheetByName:name=>Object.hasOwn(grids,name)?sheet(name):null,
+    SpreadsheetApp:{getActiveSpreadsheet:()=>({getId:()=>'mock-spreadsheet-id',getName:()=>'REQUEST-APP Staging Test',getSpreadsheetTimeZone:()=>'Asia/Kuala_Lumpur',getSheetByName:name=>Object.hasOwn(grids,name)?sheet(name):null,
       insertSheet:name=>{writes.push({name,method:'insertSheet'});grids[name]=[];return sheet(name);}})},
-    ContentService:{MimeType:{JSON:'application/json'},createTextOutput:text=>({text,setMimeType(){return this;}})},
+    ContentService:{MimeType:{JSON:'application/json'},createTextOutput:text=>({text,getContent:()=>text,setMimeType(){return this;}})},
     LockService:{getScriptLock:()=>({waitLock:()=>{locks.push('acquire');if(failLock)throw Error('Lock unavailable');},releaseLock:()=>locks.push('release')})},
     CacheService:{getScriptCache:()=>({get:k=>inMemCache.get(k)||null,put:(k,v)=>inMemCache.set(k,String(v)),remove:k=>inMemCache.delete(k)})},
     Session:{getScriptTimeZone:()=> 'Asia/Singapore',getActiveUser:()=>({getEmail:()=>activeEmail}),getEffectiveUser:()=>({getEmail:()=>effectiveEmail})},
-    PropertiesService:{getScriptProperties:()=>({getProperty:key=>key==='ROSTER_V2_ADMIN_EMAIL'?adminEmail:(key==='ROSTER_V2_SESSION_SECRET'?sessionSecret:(key==='ROSTER_ADMIN_PIN'?adminPin:null))})},
+    PropertiesService:{getScriptProperties:()=>({getProperty:key=>key in scriptProperties ? scriptProperties[key] : (key==='APP_ENVIRONMENT'?appEnvironment:(key==='ROSTER_V2_ADMIN_EMAIL'?adminEmail:(key==='ROSTER_V2_SESSION_SECRET'?sessionSecret:(key==='ROSTER_ADMIN_PIN'?adminPin:null))))})},
     Utilities:{DigestAlgorithm:{SHA_256:'SHA-256'},Charset:{UTF_8:'UTF-8'},computeDigest:(_,text)=>[...crypto.createHash('sha256').update(text).digest()],computeHmacSha256Signature:(data,key)=>[...crypto.createHmac('sha256',key).update(data).digest()],base64EncodeWebSafe:input=>{const buf=Buffer.isBuffer(input)?input:(Array.isArray(input)?Buffer.from(input):Buffer.from(String(input)));return buf.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');},base64DecodeWebSafe:str=>Buffer.from(str.replace(/-/g,'+').replace(/_/g,'/'),'base64').toString('utf8'),base64Decode:str=>[...Buffer.from(str,'base64')],newBlob:bytes=>({getDataAsString:()=>Buffer.from(bytes).toString('utf8')}),getUuid:()=>crypto.randomUUID(),formatDate:(date,tz,fmt)=>{const d=new NativeDate(date.getTime()+28800000);if(fmt==='yyyy-MM')return d.toISOString().slice(0,7);if(fmt==='yyyy-MM-dd')return d.toISOString().slice(0,10);return d.toISOString().slice(0,10);}},
   });
   vm.runInContext(source,context,{timeout:5000});
   return { context, grids,writes,locks,
-    get:(action,parameters={})=>JSON.parse(context.doGet({parameter:{action,...parameters}}).text),
-    post:payload=>JSON.parse(context.doPost({postData:{contents:JSON.stringify(payload)}}).text),
+    get:(action,parameters={})=>{ const out = context.doGet({parameter:{action,...parameters}}); return JSON.parse(out && typeof out.getContent === 'function' ? out.getContent() : out.text); },
+    post:payload=>{ const out = context.doPost({postData:{contents:JSON.stringify(payload)}}); return JSON.parse(out && typeof out.getContent === 'function' ? out.getContent() : out.text); },
     jsonState:()=>JSON.parse(JSON.stringify(grids)),
     core:()=>vm.runInContext('RosterCompatibility',context),
   };

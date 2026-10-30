@@ -38,6 +38,37 @@ function formatMalaysiaYearMonth(dateObj) {
 }
 
 /**
+ * Shifts a YYYY-MM string by delta months, seamlessly handling December-to-January and year rollovers.
+ * @param {string} yearMonth YYYY-MM
+ * @param {number} deltaMonths e.g. +1 (next month), -1 (previous month)
+ * @returns {string} YYYY-MM
+ */
+export function shiftYearMonth(yearMonth, deltaMonths = 0) {
+  const validYm = validateRosterMonth(yearMonth);
+  const [yStr, mStr] = validYm.split('-');
+  const y = parseInt(yStr, 10);
+  const m = parseInt(mStr, 10);
+  const totalMonths = (y * 12) + (m - 1) + deltaMonths;
+  const newY = Math.floor(totalMonths / 12);
+  const newM = (totalMonths % 12) + 1;
+  return `${newY}-${String(newM).padStart(2, '0')}`;
+}
+
+/**
+ * Returns month triad for dynamic month-independent testing:
+ * - currentMonth: Current calendar month in Malaysia (AMEND mode)
+ * - nextMonth: Next calendar month in Malaysia (DRAFT mode)
+ * - prevMonth: Previous calendar month in Malaysia (Historical AMEND mode)
+ * @param {Date|number|string} [now=new Date()]
+ */
+export function getRelativeTestMonths(now = new Date()) {
+  const currentMonth = getCurrentMonthMalaysia(now);
+  const nextMonth = shiftYearMonth(currentMonth, 1);
+  const prevMonth = shiftYearMonth(currentMonth, -1);
+  return { currentMonth, nextMonth, prevMonth };
+}
+
+/**
  * Validates a YYYY-MM month string.
  * @param {string} month
  * @returns {string} trimmed YYYY-MM
@@ -53,7 +84,7 @@ export function validateRosterMonth(month) {
 /**
  * Automatic Draft vs Amend routing based on Malaysia calendar month (Asia/Kuala_Lumpur):
  * - Future months (rosterMonth > currentMonth) -> DRAFT (writes target MAIN / MasterRoster)
- * - Current and past months (rosterMonth <= currentMonth) -> AMEND (writes target AMEND / RosterAmendments)
+ * - Current and past months (rosterMonth <= currentMonth) -> AMEND (writes target AMEND / AmendRoster)
  *
  * @param {string} rosterMonth YYYY-MM
  * @param {Date|number|string} [now=new Date()]
@@ -80,7 +111,7 @@ export function resolveSimplifiedRosterMode(rosterMonth, now = new Date()) {
   return {
     mode: 'AMEND',
     target: 'AMEND',
-    targetSheet: 'RosterAmendments',
+    targetSheet: 'AmendRoster',
     rosterMonth: validRosterMonth,
     currentMonth,
     isFutureMonth: false,

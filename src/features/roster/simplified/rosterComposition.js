@@ -243,7 +243,7 @@ export function computeCellsChecksum(cellsMap) {
  *
  * @param {object} params
  * @param {Array} [params.mainRows=[]] MasterRoster rows ({ Name, Date, Shift })
- * @param {Array} [params.amendments=[]] RosterAmendments rows
+ * @param {Array} [params.amendments=[]] AmendRoster rows
  * @param {string|null} [params.rosterMonth=null] Optional YYYY-MM filter
  */
 export function composeEffectiveRoster({

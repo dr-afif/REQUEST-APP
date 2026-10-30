@@ -34,17 +34,40 @@ export const LEGACY_ADMIN_MUTATION_ACTIONS = new Set([
 export const SIMPLIFIED_ADMIN_MUTATION_ACTIONS = new Set([
   'savemasterrosterdraft',
   'appendrosteramendments',
+  'appendamendroster',
 ]);
 
-const rawBaseUrl = import.meta.env.VITE_APPS_SCRIPT_URL ?? '';
-const APP_SCRIPT_BASE_URL = rawBaseUrl.trim().replace(/\/$/, '');
+export function getActiveBackendUrl() {
+  const rawBaseUrl = import.meta.env.VITE_APPS_SCRIPT_URL ?? '';
+  const prodUrl = rawBaseUrl.trim().replace(/\/$/, '');
+
+  if (typeof window !== 'undefined') {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const stagingParam = (urlParams.get('stagingUrl') || urlParams.get('staging_url') || '').trim().replace(/\/$/, '');
+      if (stagingParam && stagingParam.startsWith('https://script.google.com/')) {
+        if (!prodUrl || stagingParam !== prodUrl) {
+          return stagingParam;
+        }
+      }
+      const storedStaging = (window.localStorage?.getItem('resq_staging_api_url') || '').trim().replace(/\/$/, '');
+      if (storedStaging && storedStaging.startsWith('https://script.google.com/')) {
+        if (!prodUrl || storedStaging !== prodUrl) {
+          return storedStaging;
+        }
+      }
+    } catch (_) {}
+  }
+  return prodUrl;
+}
 
 function buildUrl(query) {
-  if (!APP_SCRIPT_BASE_URL) {
-    throw new Error('Apps Script URL is not configured. Set VITE_APPS_SCRIPT_URL in your .env file.');
+  const baseUrl = getActiveBackendUrl();
+  if (!baseUrl) {
+    throw new Error('Apps Script URL is not configured. Set VITE_APPS_SCRIPT_URL in your .env file or supply ?stagingUrl=...');
   }
 
-  const url = new URL(APP_SCRIPT_BASE_URL);
+  const url = new URL(baseUrl);
 
   if (query && typeof query === 'object') {
     Object.entries(query).forEach(([key, value]) => {
@@ -271,7 +294,7 @@ export async function verifyAdminPinRemote(pin) {
 export async function fetchRosterAmendments(month) {
   const response = await request({
     query: {
-      action: 'rosteramendments',
+      action: 'amendroster',
       ...(month ? { month: String(month).trim() } : {}),
     },
   });
@@ -293,6 +316,7 @@ export async function fetchRosterAmendments(month) {
 }
 
 export async function saveMasterRosterDraft({
+  changes,
   rows,
   targetMonth,
   operationId,
@@ -305,6 +329,7 @@ export async function saveMasterRosterDraft({
   }
   const payload = {
     action: 'savemasterrosterdraft',
+    ...(Array.isArray(changes) ? { changes } : {}),
     rows: Array.isArray(rows) ? rows : [],
     targetMonth: trimmedMonth,
     ...(operationId ? { operationId: String(operationId).trim() } : {}),
@@ -340,4 +365,76 @@ export async function appendRosterAmendments({
     },
   });
 
+}
+
+export const fetchAmendRoster = fetchRosterAmendments;
+export const appendAmendRoster = appendRosterAmendments;
+
+export async function verifyStagingBackendIdentity(targetUrl, { knownProductionUrl, fetchFn = (typeof fetch !== 'undefined' ? fetch : null) } = {}) {
+  const cleanUrl = String(targetUrl || '').trim().replace(/\/$/, '');
+  if (!cleanUrl || !cleanUrl.startsWith('https://script.google.com/macros/s/')) {
+    return {
+      verified: false,
+      reason: 'INVALID_URL',
+      message: 'Staging URL must be a valid Google Apps Script Web App URL.',
+    };
+  }
+
+  // Reject known production URL immediately
+  const prodUrl = (
+    knownProductionUrl ||
+    (typeof process !== 'undefined' && process.env?.VITE_APPS_SCRIPT_URL) ||
+    import.meta.env?.VITE_APPS_SCRIPT_URL ||
+    ''
+  ).trim().replace(/\/$/, '');
+  if (prodUrl && cleanUrl === prodUrl) {
+    return {
+      verified: false,
+      reason: 'PRODUCTION_URL_BLOCKED',
+      message: 'Safety lockout: The provided URL matches the production backend URL.',
+    };
+  }
+
+  if (typeof fetchFn !== 'function') {
+    return {
+      verified: false,
+      reason: 'FETCH_UNAVAILABLE',
+      message: 'Network fetch is not available in current environment.',
+    };
+  }
+
+  try {
+    const url = new URL(cleanUrl);
+    url.searchParams.set('action', 'stagingidentity');
+    const res = await fetchFn(url.toString(), {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      return {
+        verified: false,
+        reason: 'HTTP_ERROR',
+        message: `HTTP ${res.status} from staging identity endpoint.`,
+      };
+    }
+    const data = await res.json();
+    if (data && data.isStaging === true && data.result === 'success' && data.appEnvironment === 'staging' && data.spreadsheetId) {
+      return {
+        verified: true,
+        spreadsheetId: data.spreadsheetId,
+        spreadsheetName: data.spreadsheetName || '',
+        stagingInitializedAt: data.stagingInitializedAt || '',
+      };
+    }
+    return {
+      verified: false,
+      reason: 'UNVERIFIED_BACKEND',
+      message: data?.message || 'Target backend does not identify as an authorized staging environment.',
+    };
+  } catch (err) {
+    return {
+      verified: false,
+      reason: 'NETWORK_ERROR',
+      message: err.message || 'Failed to reach staging identity endpoint.',
+    };
+  }
 }

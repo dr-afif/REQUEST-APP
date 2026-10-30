@@ -2123,6 +2123,18 @@ export default function RosterPage({
           }
           if (onSaveSimplifiedDraft) {
             await onSaveSimplifiedDraft({
+              changes: [
+                {
+                  date: targetDate,
+                  targetType: 'MO',
+                  field: 'MO_SHIFT',
+                  staffKey: identity.staffKey,
+                  staffName: identity.staffName || doctorName,
+                  previousValue: prevVal,
+                  newValue: canonicalNewShift ? canonicalNewShift : '__CLEAR__',
+                  isCleared: !canonicalNewShift,
+                },
+              ],
               rows: currentMonthRows,
               targetMonth: canonicalMonth,
               operationId: opId,
@@ -3219,8 +3231,21 @@ export default function RosterPage({
           }
         }
 
+        const draftChangesPayload = changedCells.map((c) => ({
+          cellKey: c.cellKey,
+          date: c.date,
+          targetType: c.targetType,
+          field: c.field,
+          staffKey: c.staffKey,
+          staffName: c.staffName,
+          previousValue: c.previousValue || '',
+          newValue: c.isCleared ? '__CLEAR__' : (c.newValue || ''),
+          isCleared: Boolean(c.isCleared),
+        }));
+
         if (typeof onSaveSimplifiedDraft === 'function') {
           await onSaveSimplifiedDraft({
+            changes: draftChangesPayload,
             rows: flatRows,
             targetMonth: canonicalMonth,
             operationId,
@@ -3508,7 +3533,7 @@ export default function RosterPage({
                 title={
                   simplifiedRoute.mode === 'DRAFT'
                     ? 'Future month: Explicit Save Changes updates Main Roster (MasterRoster)'
-                    : 'Current or past month: Main Roster stays untouched; Explicit Save Changes appends to RosterAmendments'
+                    : 'Current or past month: Main Roster stays untouched; Explicit Save Changes appends to AmendRoster'
                 }
               >
                 <span>{simplifiedRoute.mode === 'DRAFT' ? '📝' : '🛡️'}</span>

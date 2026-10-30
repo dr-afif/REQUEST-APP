@@ -13,6 +13,8 @@ import {
   SIMPLIFIED_TIMEZONE,
   getCurrentMonthMalaysia,
   resolveSimplifiedRosterMode,
+  shiftYearMonth,
+  getRelativeTestMonths,
 } from '../../src/features/roster/simplified/rosterMode.js';
 import {
   CLEAR_MARKER,
@@ -59,6 +61,7 @@ import {
   getMockSimulationState,
   handleDevMockRequest,
 } from '../../src/features/roster/simplified/devMockApi.js';
+import { verifyStagingBackendIdentity } from '../../src/api.js';
 import * as adminAuthModule from '../../src/features/roster/auth/adminAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -325,7 +328,7 @@ function createInteractiveComponentHarness(Component, defaultProps = {}) {
   return { render, renderHtml, stateMap };
 }
 
-test('Simplified Roster Redesign — 28-Scenario End-to-End Verification Suite', async (t) => {
+test('Simplified Roster Redesign — 35-Scenario End-to-End Verification Suite', async (t) => {
   let RosterPage;
   let AdminPinModal;
 
@@ -541,11 +544,11 @@ test('Simplified Roster Redesign — 28-Scenario End-to-End Verification Suite',
     assert.equal(res.isFutureMonth, true);
   });
 
-  await t.test('Scenario 05 — Current month automatically selects AMEND (saves to AMEND / RosterAmendments)', () => {
+  await t.test('Scenario 05 — Current month automatically selects AMEND (saves to AMEND / AmendRoster)', () => {
     const res = resolveSimplifiedRosterMode('2026-10', '2026-10-29T12:00:00+08:00');
     assert.equal(res.mode, 'AMEND');
     assert.equal(res.target, 'AMEND');
-    assert.equal(res.targetSheet, 'RosterAmendments');
+    assert.equal(res.targetSheet, 'AmendRoster');
     assert.equal(res.isFutureMonth, false);
   });
 
@@ -788,9 +791,11 @@ test('Simplified Roster Redesign — 28-Scenario End-to-End Verification Suite',
       'October MasterRoster rows preserved untouched'
     );
     const novRows = masterAfter.filter((r) => String(r.Date).startsWith('2026-11'));
-    assert.equal(novRows.length, 2);
-    assert.equal(novRows[0].Shift, 'ON1');
-    assert.equal(h.grids.RosterAmendments, undefined, 'Draft save did not create or touch RosterAmendments');
+    assert.equal(novRows.length, 3, 'November rows preserved: Azrul remains alongside Adi and Muaz');
+    assert.ok(novRows.some((r) => (r.Name === 'Azrul' || r.name === 'Azrul') && (r.Shift === 'PM' || r.shift === 'PM')), 'Azrul preserved');
+    assert.ok(novRows.some((r) => (r.Name === 'Adi' || r.name === 'Adi') && (r.Shift === 'ON1' || r.shift === 'ON1')), 'Adi updated');
+    assert.ok(novRows.some((r) => (r.Name === 'Muaz' || r.name === 'Muaz') && (r.Shift === 'NIGHT' || r.shift === 'NIGHT')), 'Muaz added');
+    assert.equal(h.grids.AmendRoster, undefined, 'Draft save did not create or touch AmendRoster');
   });
 
   await t.test('Scenario 12 — Amend saves target Amend (RosterAmendments) for current/past months and resolve stable StaffId', () => {
@@ -849,6 +854,9 @@ test('Simplified Roster Redesign — 28-Scenario End-to-End Verification Suite',
     assert.equal(fetched.length, 1);
     assert.equal(fetched[0].NewValue, 'PM');
     assert.equal(fetched[0].Sequence, 1);
+    const fetchedByNewAction = h.get('amendroster', { month: '2026-10' });
+    assert.equal(fetchedByNewAction.length, 1);
+    assert.ok(h.grids.AmendRoster, 'AmendRoster grid created');
   });
 
   await t.test('Scenario 13 — Main (MasterRoster) remains byte-for-byte unchanged after multiple Amend saves', () => {
@@ -1750,6 +1758,7 @@ test('Simplified Roster Redesign — 28-Scenario End-to-End Verification Suite',
     assert.equal(allData.emergencyPhysicians.length, 6, '6 EP doctors in mock store');
     assert.ok(allData.masterRoster.length > 50, 'Master roster populated with synthetic shifts');
     assert.equal(allData.rosterAmendments.length, 2, '2 pre-seeded sample amendments for Main + Amend visual proof');
+    assert.equal(allData.amendRoster.length, 2, 'amendRoster returned in alldata');
 
     // 3. Mock PIN verification and throttling
     for (let i = 0; i < 5; i++) {
@@ -1953,5 +1962,397 @@ test('Simplified Roster Redesign — 28-Scenario End-to-End Verification Suite',
     assert.equal(conflictRes.result, 'error');
     assert.ok(conflictRes.message.includes('CONFLICT: Concurrent edit detected'));
     assert.deepEqual(h1.jsonState().MasterRoster, afterRoster, 'MasterRoster untouched on concurrent conflict rejection');
+  });
+
+  await t.test('Scenario 33 — Dynamic month routing calculations and December-to-January rollover safety', () => {
+    // 1. Shift year month handles standard transitions and rollovers
+    assert.equal(shiftYearMonth('2026-10', 1), '2026-11');
+    assert.equal(shiftYearMonth('2026-10', -1), '2026-09');
+    assert.equal(shiftYearMonth('2026-12', 1), '2027-01', 'Dec-to-Jan rollover increments year');
+    assert.equal(shiftYearMonth('2027-01', -1), '2026-12', 'Jan-to-Dec rollover decrements year');
+
+    // 2. Dynamic test triad relative to simulated current clock
+    const triadNov = getRelativeTestMonths('2026-11-05T12:00:00+08:00');
+    assert.equal(triadNov.currentMonth, '2026-11', 'November is current (AMEND)');
+    assert.equal(triadNov.nextMonth, '2026-12', 'December is next (DRAFT)');
+    assert.equal(triadNov.prevMonth, '2026-10', 'October is previous (Historical AMEND)');
+
+    // 3. Year boundary rollover routing
+    const triadDec = getRelativeTestMonths('2026-12-31T23:59:59+08:00');
+    assert.equal(triadDec.currentMonth, '2026-12');
+    assert.equal(triadDec.nextMonth, '2027-01', 'December rolls over to January next year');
+    assert.equal(triadDec.prevMonth, '2026-11');
+
+    // 4. Resolve roster mode across year rollover
+    const decClock = '2026-12-15T12:00:00+08:00';
+    const novMode = resolveSimplifiedRosterMode('2026-11', decClock);
+    assert.equal(novMode.mode, 'AMEND', 'Past month is AMEND');
+    assert.equal(novMode.targetSheet, 'AmendRoster');
+
+    const decMode = resolveSimplifiedRosterMode('2026-12', decClock);
+    assert.equal(decMode.mode, 'AMEND', 'Current month is AMEND');
+    assert.equal(decMode.targetSheet, 'AmendRoster');
+
+    const janMode = resolveSimplifiedRosterMode('2027-01', decClock);
+    assert.equal(janMode.mode, 'DRAFT', 'Next month (new year) is DRAFT');
+    assert.equal(janMode.targetSheet, 'MasterRoster');
+    assert.equal(janMode.isFutureMonth, true);
+  });
+
+  await t.test('Scenario 34 — Staging identity verification gate rejects production URLs and unverified backends fail-closed', async () => {
+    // 1. Rejects invalid URL
+    const invalidRes = await verifyStagingBackendIdentity('https://not-google.com');
+    assert.equal(invalidRes.verified, false);
+    assert.equal(invalidRes.reason, 'INVALID_URL');
+
+    // 2. Rejects production URL matching VITE_APPS_SCRIPT_URL
+    const mockProdUrl = 'https://script.google.com/macros/s/prod-deployment-id/exec';
+    const origProd = process.env.VITE_APPS_SCRIPT_URL;
+    process.env.VITE_APPS_SCRIPT_URL = mockProdUrl;
+    try {
+      const prodCheckRes = await verifyStagingBackendIdentity(mockProdUrl);
+      assert.equal(prodCheckRes.verified, false);
+      assert.equal(prodCheckRes.reason, 'PRODUCTION_URL_BLOCKED');
+    } finally {
+      if (origProd !== undefined) process.env.VITE_APPS_SCRIPT_URL = origProd;
+      else delete process.env.VITE_APPS_SCRIPT_URL;
+    }
+
+    // 3. Verifies staging identity when server confirms APP_ENVIRONMENT=staging and spreadsheet ID
+    const validFetch = async () => ({
+      ok: true,
+      json: async () => ({
+        result: 'success',
+        isStaging: true,
+        appEnvironment: 'staging',
+        spreadsheetId: 'sheet-disposable-12345',
+        spreadsheetName: 'REQUEST-APP Staging Test',
+      }),
+    });
+    const verifiedRes = await verifyStagingBackendIdentity('https://script.google.com/macros/s/staging-dep/exec', { fetchFn: validFetch });
+    assert.equal(verifiedRes.verified, true);
+    assert.equal(verifiedRes.spreadsheetId, 'sheet-disposable-12345');
+    assert.equal(verifiedRes.spreadsheetName, 'REQUEST-APP Staging Test');
+
+    // 4. Rejects unverified backend (e.g. production backend returning default request array or unverified)
+    const unverifiedFetch = async () => ({
+      ok: true,
+      json: async () => ({
+        result: 'unverified',
+        isStaging: false,
+        appEnvironment: 'production',
+        message: 'Backend is not an authorized staging environment.',
+      }),
+    });
+    const rejectedRes = await verifyStagingBackendIdentity('https://script.google.com/macros/s/unverified-dep/exec', { fetchFn: unverifiedFetch });
+    assert.equal(rejectedRes.verified, false);
+    assert.equal(rejectedRes.reason, 'UNVERIFIED_BACKEND');
+
+    // 5. Backend Apps Script harness stagingidentity action handling
+    const hStaging = harness(currentSource, {
+      adminEmail: 'admin@hospital.gov.my',
+      scriptProperties: {
+        APP_ENVIRONMENT: 'staging',
+        STAGING_SPREADSHEET_ID: 'mock-spreadsheet-id',
+      },
+    });
+    const harnessIdentity = hStaging.get('stagingidentity');
+    assert.equal(harnessIdentity.result, 'success');
+    assert.equal(harnessIdentity.isStaging, true);
+    assert.equal(harnessIdentity.appEnvironment, 'staging');
+
+    // Spreadsheet mismatch fails closed
+    const hMismatch = harness(currentSource, {
+      adminEmail: 'admin@hospital.gov.my',
+      scriptProperties: {
+        APP_ENVIRONMENT: 'staging',
+        STAGING_SPREADSHEET_ID: 'different-spreadsheet-id',
+      },
+    });
+    const mismatchIdentity = hMismatch.get('stagingidentity');
+    assert.equal(mismatchIdentity.result, 'unverified');
+    assert.equal(mismatchIdentity.isStaging, false);
+
+    // Production without APP_ENVIRONMENT property fails closed
+    const hProd = harness(currentSource, {
+      adminEmail: 'admin@hospital.gov.my',
+      scriptProperties: {},
+    });
+    const prodIdentity = hProd.get('stagingidentity');
+    assert.equal(prodIdentity.result, 'unverified');
+    assert.equal(prodIdentity.isStaging, false);
+  });
+
+  await t.test('Scenario 35 — MasterRoster draft save data preservation (394 November rows intact after 3 edits)', () => {
+    // 1. Generate realistic baseline: 394 September rows, 407 October rows, 394 November rows (1,195 total)
+    const tmList = [
+      ['Adi', 'Dr Adi', '0123456789', true, 'A05157', 'adi@hospital.gov.my'],
+      ['Azrul', 'Dr Azrul', '0123456788', true, 'A05156', 'azrul@hospital.gov.my'],
+      ['Faiz', 'Dr Faiz', '0123456787', true, 'A05154', 'faiz@hospital.gov.my'],
+      ['Faris', 'Dr Faris', '0123456786', true, 'A05153', 'faris@hospital.gov.my'],
+      ['Hafiz', 'Dr Hafiz', '0123456785', true, 'A05152', 'hafiz@hospital.gov.my'],
+      ['Haziq', 'Dr Haziq', '0123456784', true, 'A05151', 'haziq@hospital.gov.my'],
+      ['Muaz', 'Dr Muaz', '0123456783', true, 'A05150', 'muaz@hospital.gov.my'],
+      ['Nabil', 'Dr Nabil', '0123456782', true, 'A05149', 'nabil@hospital.gov.my'],
+      ['Najmi', 'Dr Najmi', '0123456781', true, 'A05148', 'najmi@hospital.gov.my'],
+      ['Syuhada', 'Dr Syuhada', '0123456780', true, 'A05147', 'syuhada@hospital.gov.my'],
+      ['Wafiy', 'Dr Wafiy', '0123456779', true, 'A05146', 'wafiy@hospital.gov.my'],
+      ['Yusof', 'Dr Yusof', '0123456778', true, 'A05145', 'yusof@hospital.gov.my'],
+      ['Zul', 'Dr Zul', '0123456777', true, 'A05144', 'zul@hospital.gov.my'],
+    ];
+
+    const epList = [
+      ['Dr Alpha', 'Specialist Alpha', 'EP1', true],
+      ['Dr Beta', 'Specialist Beta', 'EP2', true],
+      ['Dr Gamma', 'Specialist Gamma', 'EP3', true],
+      ['Dr Delta', 'Specialist Delta', 'EP4', true],
+      ['Dr Epsilon', 'Specialist Epsilon', 'EP5', true],
+      ['Dr Zeta', 'Specialist Zeta', 'EP6', true],
+    ];
+
+    const shifts = ['AM', 'PM', 'NIGHT', 'STANDBY1', 'STANDBY2', 'OFF', 'GOFF'];
+    const months = [
+      { ym: '2026-09', days: 30 },
+      { ym: '2026-10', days: 31 },
+      { ym: '2026-11', days: 30 },
+    ];
+
+    const masterRosterRows = [['Name', 'Date', 'Shift']];
+    for (const m of months) {
+      for (let d = 1; d <= m.days; d++) {
+        const dStr = (d < 10 ? '0' : '') + d;
+        const dateStr = `${m.ym}-${dStr}`;
+        for (let tIdx = 0; tIdx < tmList.length; tIdx++) {
+          const s = shifts[(d + tIdx) % shifts.length];
+          if (s !== 'OFF') {
+            masterRosterRows.push([tmList[tIdx][0], dateStr, s]);
+          }
+        }
+        masterRosterRows.push([epList[d % epList.length][0], dateStr, 'EP_OFFICE_HOUR']);
+        masterRosterRows.push([epList[(d + 1) % epList.length][0], dateStr, 'EP_ONCALL']);
+      }
+    }
+
+    const initialSepCount = masterRosterRows.filter((r) => String(r[1]).startsWith('2026-09')).length;
+    const initialOctCount = masterRosterRows.filter((r) => String(r[1]).startsWith('2026-10')).length;
+    const initialNovCount = masterRosterRows.filter((r) => String(r[1]).startsWith('2026-11')).length;
+    assert.equal(initialSepCount, 394, 'September baseline has exactly 394 rows');
+    assert.equal(initialOctCount, 407, 'October baseline has exactly 407 rows');
+    assert.equal(initialNovCount, 394, 'November baseline has exactly 394 rows');
+    assert.equal(masterRosterRows.length - 1, 1195, 'Total baseline has exactly 1,195 rows');
+
+    const testTables = structuredClone(fixture.tables);
+    testTables.TeamMembers = [
+      ['MemberName', 'FullName', 'Phone', 'Active', 'StaffId', 'Email'],
+      ...tmList,
+    ];
+    testTables.EmergencyPhysicians = [
+      ['Name', 'FullName', 'StaffId', 'Active'],
+      ...epList,
+    ];
+    testTables.MasterRoster = masterRosterRows;
+
+    const h = harness(currentSource, {
+      tables: testTables,
+      adminPin: '5707',
+      sessionSecret: 'test-secret-12345678901234567890123456789012',
+      clockIso: '2026-10-29T12:00:00.000Z',
+    });
+
+    const authRes = h.post({ action: 'verifyadminpin', pin: '5707' });
+    const token = authRes.adminSessionToken;
+    assert.ok(token, 'Session token acquired');
+
+    // 2. Submit only 3 intentional November updates via changes payload
+    const op1 = 'op_save_patch_01';
+    const patchRes = h.post({
+      action: 'savemasterrosterdraft',
+      adminSessionToken: token,
+      targetMonth: '2026-11',
+      operationId: op1,
+      changes: [
+        {
+          date: '2026-11-01',
+          targetType: 'MO',
+          field: 'MO_SHIFT',
+          staffName: 'Adi',
+          staffKey: 'A05157',
+          previousValue: 'STANDBY1',
+          newValue: 'PM',
+          isCleared: false,
+        },
+        {
+          date: '2026-11-02',
+          targetType: 'MO',
+          field: 'MO_SHIFT',
+          staffName: 'Azrul',
+          staffKey: 'A05156',
+          previousValue: 'STANDBY1',
+          newValue: 'NIGHT',
+          isCleared: false,
+        },
+        {
+          date: '2026-11-03',
+          targetType: 'EP',
+          field: 'EP_OFFICE_HOUR',
+          previousValue: 'Dr Delta',
+          newValue: 'Dr Zeta',
+          isCleared: false,
+        },
+      ],
+    });
+
+    assert.equal(patchRes.result, 'success');
+    assert.equal(patchRes.mode, 'DRAFT');
+    assert.equal(patchRes.target, 'MAIN');
+    assert.equal(patchRes.count, 3, 'Reports exact count of 3 affected cells');
+
+    // 3. Inspect MasterRoster state after save
+    const state1 = h.get('masterroster');
+    const sepAfter1 = state1.filter((r) => String(r.Date).startsWith('2026-09'));
+    const octAfter1 = state1.filter((r) => String(r.Date).startsWith('2026-10'));
+    const novAfter1 = state1.filter((r) => String(r.Date).startsWith('2026-11'));
+
+    // Invariant: Non-target months are 100% untouched
+    assert.equal(sepAfter1.length, 394, 'September remains untouched at 394 rows');
+    assert.equal(octAfter1.length, 407, 'October remains untouched at 407 rows');
+
+    // Invariant: November did NOT shrink from 394 to 3!
+    assert.equal(novAfter1.length, 394, 'November remains intact at exactly 394 rows (did NOT shrink to 3!)');
+
+    // Invariant: The 3 intended assignments were updated
+    const adiNov1 = novAfter1.find((r) => (r.Name === 'Adi' || r.name === 'Adi') && String(r.Date).startsWith('2026-11-01'));
+    assert.ok(adiNov1, 'Adi found on 2026-11-01');
+    assert.equal(adiNov1.Shift, 'PM', 'Adi updated to PM');
+
+    const azrulNov2 = novAfter1.find((r) => (r.Name === 'Azrul' || r.name === 'Azrul') && String(r.Date).startsWith('2026-11-02'));
+    assert.ok(azrulNov2, 'Azrul found on 2026-11-02');
+    assert.equal(azrulNov2.Shift, 'NIGHT', 'Azrul updated to NIGHT');
+
+    const epNov3 = novAfter1.find((r) => (r.Shift === 'EP_OFFICE_HOUR' || r.shift === 'EP_OFFICE_HOUR') && String(r.Date).startsWith('2026-11-03'));
+    assert.ok(epNov3, 'EP found on 2026-11-03');
+    assert.equal(epNov3.Name, 'Dr Zeta', 'EP updated to Dr Zeta');
+
+    // Invariant: Untouched rows in November are preserved
+    const faizNov1 = novAfter1.find((r) => (r.Name === 'Faiz' || r.name === 'Faiz') && String(r.Date).startsWith('2026-11-01'));
+    assert.ok(faizNov1, 'Untouched doctor Faiz remains present on 2026-11-01');
+
+    // Invariant: Zero duplicates on (Name, Date, Shift)
+    const rowKeys = novAfter1.map((r) => `${r.Name || r.name}_${String(r.Date).slice(0, 10)}_${r.Shift || r.shift}`);
+    const uniqueKeys = new Set(rowKeys);
+    assert.equal(rowKeys.length, uniqueKeys.size, 'Zero duplicate rows in November');
+
+    // 4. Test explicit deletion removes ONLY the intended assignment
+    const delRes = h.post({
+      action: 'savemasterrosterdraft',
+      adminSessionToken: token,
+      targetMonth: '2026-11',
+      operationId: 'op_save_clear_02',
+      changes: [
+        {
+          date: '2026-11-01',
+          targetType: 'MO',
+          field: 'MO_SHIFT',
+          staffName: 'Adi',
+          staffKey: 'A05157',
+          isCleared: true,
+        },
+      ],
+    });
+    assert.equal(delRes.result, 'success');
+    assert.equal(delRes.count, 1);
+
+    const state2 = h.get('masterroster');
+    const novAfter2 = state2.filter((r) => String(r.Date).startsWith('2026-11'));
+    assert.equal(novAfter2.length, 393, 'November row count reduced by exactly 1 (from 394 to 393) on explicit delete');
+    const adiNov1AfterDel = novAfter2.find((r) => (r.Name === 'Adi' || r.name === 'Adi') && String(r.Date).startsWith('2026-11-01'));
+    assert.equal(adiNov1AfterDel, undefined, 'Adi assignment on 2026-11-01 was removed');
+    assert.equal(state2.filter((r) => String(r.Date).startsWith('2026-09')).length, 394, 'September untouched');
+    assert.equal(state2.filter((r) => String(r.Date).startsWith('2026-10')).length, 407, 'October untouched');
+
+    // 5. Test stale baseline rejection fail-closed
+    const conflictRes = h.post({
+      action: 'savemasterrosterdraft',
+      adminSessionToken: token,
+      targetMonth: '2026-11',
+      operationId: 'op_save_conflict_03',
+      expectedCellBaselines: [
+        {
+          date: '2026-11-02',
+          field: 'MO_SHIFT',
+          staffName: 'Azrul',
+          staffKey: 'A05156',
+          expectedValue: 'AM', // Stale! Server value is NIGHT
+          newValue: 'STANDBY1',
+        },
+      ],
+      changes: [
+        {
+          date: '2026-11-02',
+          targetType: 'MO',
+          field: 'MO_SHIFT',
+          staffName: 'Azrul',
+          staffKey: 'A05156',
+          newValue: 'STANDBY1',
+        },
+      ],
+    });
+    assert.equal(conflictRes.result, 'error');
+    assert.match(conflictRes.message, /CONFLICT: Concurrent edit detected/);
+
+    // Verify MasterRoster completely untouched on conflict
+    const stateAfterConflict = h.get('masterroster');
+    assert.equal(stateAfterConflict.filter((r) => String(r.Date).startsWith('2026-11')).length, 393, 'No rows altered on conflict rejection');
+
+    // 6. Test retry idempotency
+    const opIdem = 'op_idem_test_35';
+    const saveIdem1 = h.post({
+      action: 'savemasterrosterdraft',
+      adminSessionToken: token,
+      targetMonth: '2026-11',
+      operationId: opIdem,
+      changes: [
+        {
+          date: '2026-11-05',
+          targetType: 'MO',
+          field: 'MO_SHIFT',
+          staffName: 'Faiz',
+          staffKey: 'A05154',
+          newValue: 'NIGHT',
+        },
+      ],
+    });
+    assert.equal(saveIdem1.result, 'success');
+    const writesBeforeRetry = h.writes.length;
+
+    const retryRes = h.post({
+      action: 'savemasterrosterdraft',
+      adminSessionToken: token,
+      targetMonth: '2026-11',
+      operationId: opIdem,
+      changes: [
+        {
+          date: '2026-11-05',
+          targetType: 'MO',
+          field: 'MO_SHIFT',
+          staffName: 'Faiz',
+          staffKey: 'A05154',
+          newValue: 'NIGHT',
+        },
+      ],
+    });
+    assert.equal(retryRes.result, 'success');
+    assert.equal(retryRes.idempotentReplay, true, 'Idempotent replay detected');
+    assert.equal(h.writes.length, writesBeforeRetry, 'Zero extra sheet writes performed on retry');
+
+    // 7. Test failure safety preserves data
+    const invalidMonthRes = h.post({
+      action: 'savemasterrosterdraft',
+      adminSessionToken: token,
+      targetMonth: '2026-10', // past/current month disallowed for draft
+      changes: [{ date: '2026-10-01', newValue: 'AM' }],
+    });
+    assert.equal(invalidMonthRes.result, 'error');
+    assert.match(invalidMonthRes.message, /future months/i);
   });
 });

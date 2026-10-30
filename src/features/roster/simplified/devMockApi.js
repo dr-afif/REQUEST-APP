@@ -142,6 +142,13 @@ export function isDevMockActive() {
 
   try {
     const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('stagingUrl') || urlParams.get('staging_url')) {
+      return false; // Staging URL explicitly takes precedence over mock
+    }
+    const storedStaging = window.localStorage?.getItem('resq_staging_api_url');
+    if (storedStaging && storedStaging.startsWith('https://script.google.com/')) {
+      return false; // Stored staging URL takes precedence over mock
+    }
     if (urlParams.get('mock') === '1' || urlParams.get('mock') === 'true') {
       return true;
     }
@@ -239,11 +246,24 @@ export async function handleDevMockRequest({ method = 'GET', body, query = {} } 
   const db = getMockStore();
   const simState = getMockSimulationState();
 
+  // 0. GET STAGINGIDENTITY
+  if (action === 'stagingidentity') {
+    return {
+      result: 'success',
+      isStaging: true,
+      appEnvironment: 'staging',
+      spreadsheetId: 'disposable-mock-staging-id',
+      spreadsheetName: 'Mock REQUEST-APP Staging Test',
+      stagingInitializedAt: '2026-10-30T00:00:00.000Z',
+    };
+  }
+
   // 1. GET ALLDATA
   if (action === 'alldata' || (method === 'GET' && !action)) {
     return {
       result: 'success',
       ...db,
+      amendRoster: db.rosterAmendments,
     };
   }
 
@@ -255,8 +275,8 @@ export async function handleDevMockRequest({ method = 'GET', body, query = {} } 
     };
   }
 
-  // 3. GET ROSTERAMENDMENTS
-  if (action === 'rosteramendments' && method === 'GET') {
+  // 3. GET AMENDROSTER / ROSTERAMENDMENTS
+  if ((action === 'amendroster' || action === 'rosteramendments') && method === 'GET') {
     const targetMonth = query?.targetMonth;
     let filtered = db.rosterAmendments;
     if (targetMonth) {
@@ -326,15 +346,103 @@ export async function handleDevMockRequest({ method = 'GET', body, query = {} } 
       throw new Error('Invalid targetMonth for draft save.');
     }
 
-    const incomingRows = Array.isArray(body?.rows) ? body.rows : [];
-    // Filter existing master roster: preserve other months, replace target month
+    const normKey = (str) => String(str || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const incomingChanges = [];
+    if (Array.isArray(body?.changes) && body.changes.length > 0) {
+      for (const ch of body.changes) {
+        if (!ch || typeof ch !== 'object') continue;
+        const chDate = String(ch.date || ch.Date || '').trim();
+        const chField = String(ch.field || ch.Field || 'MO_SHIFT').trim().toUpperCase();
+        const isEp = chField === 'EP_OFFICE_HOUR' || chField === 'EP_ONCALL';
+        const chNewVal = ch.newValue !== undefined ? ch.newValue : (ch.NewValue !== undefined ? ch.NewValue : '');
+        const isCleared = Boolean(ch.isCleared === true || ch.IsCleared === true || String(chNewVal).trim() === '__CLEAR__' || !String(chNewVal).trim());
+        incomingChanges.push({
+          date: chDate,
+          field: chField,
+          isEp,
+          staffName: String(ch.staffName || ch.StaffName || ch.name || ch.Name || '').trim(),
+          staffKey: String(ch.staffKey || ch.StaffKey || ch.staffName || '').trim(),
+          newValue: isCleared ? '' : String(chNewVal).trim(),
+          isCleared,
+        });
+      }
+    } else if (Array.isArray(body?.rows) && body.rows.length > 0) {
+      for (const r of body.rows) {
+        if (!r || typeof r !== 'object') continue;
+        const rDate = String(r.date || r.Date || '').trim();
+        const rName = String(r.name || r.Name || '').trim();
+        const rShift = String(r.shift || r.Shift || '').trim();
+        const upShift = rShift.toUpperCase();
+        const isEp = upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL';
+        const isCleared = Boolean(r.isCleared || (isEp ? !rName || rName === '__CLEAR__' : !rShift || rShift === '__CLEAR__'));
+        incomingChanges.push({
+          date: rDate,
+          field: isEp ? upShift : 'MO_SHIFT',
+          isEp,
+          staffName: rName,
+          staffKey: String(r.staffKey || r.staffId || rName).trim(),
+          newValue: isCleared ? '' : (isEp ? rName : rShift),
+          isCleared,
+        });
+      }
+    }
+
+    const changesByKey = new Map();
+    for (const ch of incomingChanges) {
+      const k = ch.isEp ? `EP|${ch.date}|${ch.field}` : `MO|${ch.date}|${normKey(ch.staffKey || ch.staffName)}`;
+      changesByKey.set(k, ch);
+    }
+
     const preserved = db.masterRoster.filter((r) => !String(r.Date || r.date || '').startsWith(targetMonth));
-    const normalizedIncoming = incomingRows.map((r) => ({
-      Name: r.name || r.Name,
-      Date: r.date || r.Date,
-      Shift: r.shift || r.Shift,
-    }));
-    db.masterRoster = [...preserved, ...normalizedIncoming];
+    const targetRows = db.masterRoster.filter((r) => String(r.Date || r.date || '').startsWith(targetMonth));
+
+    const updatedTargetRows = [];
+    const appliedKeys = new Set();
+    let affectedCount = 0;
+
+    for (const row of targetRows) {
+      const rDate = String(row.Date || row.date || '').trim();
+      const rName = String(row.Name || row.name || '').trim();
+      const rShift = String(row.Shift || row.shift || '').trim();
+      const upShift = rShift.toUpperCase();
+      const isEp = upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL';
+      const k = isEp ? `EP|${rDate}|${upShift}` : `MO|${rDate}|${normKey(rName)}`;
+
+      if (changesByKey.has(k)) {
+        if (!appliedKeys.has(k)) {
+          appliedKeys.add(k);
+          const ch = changesByKey.get(k);
+          if (ch.isCleared) {
+            affectedCount++;
+          } else {
+            updatedTargetRows.push(isEp
+              ? { Name: ch.newValue, Date: rDate, Shift: ch.field }
+              : { Name: ch.staffName || rName, Date: rDate, Shift: ch.newValue }
+            );
+            affectedCount++;
+          }
+        }
+      } else {
+        updatedTargetRows.push({
+          Name: rName,
+          Date: rDate,
+          Shift: rShift,
+        });
+      }
+    }
+
+    for (const [k, ch] of changesByKey.entries()) {
+      if (!appliedKeys.has(k) && !ch.isCleared && ch.newValue) {
+        updatedTargetRows.push(ch.isEp
+          ? { Name: ch.newValue, Date: ch.date, Shift: ch.field }
+          : { Name: ch.staffName || ch.staffKey, Date: ch.date, Shift: ch.newValue }
+        );
+        affectedCount++;
+      }
+    }
+
+    db.masterRoster = [...preserved, ...updatedTargetRows];
     saveMockStore(db);
 
     return {
@@ -342,14 +450,14 @@ export async function handleDevMockRequest({ method = 'GET', body, query = {} } 
       mode: 'DRAFT',
       target: 'MAIN',
       targetMonth,
-      count: normalizedIncoming.length,
+      count: affectedCount,
       operationId: body?.operationId || `op_${Date.now()}`,
       savedAt: new Date().toISOString(),
     };
   }
 
-  // 6. POST APPENDROSTERAMENDMENTS (Target: RosterAmendments, Current/Past Months Only)
-  if (action === 'appendrosteramendments' || (action === 'rosteramendments' && method === 'POST')) {
+  // 6. POST APPENDROSTERAMENDMENTS / APPENDAMENDROSTER (Target: AmendRoster, Current/Past Months Only)
+  if (action === 'appendrosteramendments' || action === 'appendamendroster' || ((action === 'rosteramendments' || action === 'amendroster') && method === 'POST')) {
     if (simState.failure) {
       throw new Error('Simulated network save failure (500 Server Error).');
     }

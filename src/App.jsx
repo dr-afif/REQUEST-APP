@@ -66,6 +66,8 @@ import {
   appendRosterAmendments,
   verifyAdminPinRemote,
   registerDevMock,
+  getActiveBackendUrl,
+  verifyStagingBackendIdentity,
 } from './api';
 
 // Register development mock API handler (zero production network calls when active)
@@ -224,6 +226,49 @@ export default function App() {
 
   // Administrator identity is strictly backed by an active in-memory session token
   const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
+
+  // Staging Backend Identity Verification (server-side persistent marker validation)
+  const [stagingIdentity, setStagingIdentity] = useState({
+    status: 'idle', // 'idle' | 'checking' | 'verified' | 'rejected'
+    spreadsheetName: '',
+    spreadsheetId: '',
+    errorMessage: '',
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const activeUrl = getActiveBackendUrl();
+    const prodUrl = (import.meta.env?.VITE_APPS_SCRIPT_URL || '').trim().replace(/\/$/, '');
+    if (activeUrl && activeUrl.startsWith('https://script.google.com/') && activeUrl !== prodUrl) {
+      setStagingIdentity({ status: 'checking', spreadsheetName: '', spreadsheetId: '', errorMessage: '' });
+      verifyStagingBackendIdentity(activeUrl).then((res) => {
+        if (res.verified) {
+          setStagingIdentity({
+            status: 'verified',
+            spreadsheetName: res.spreadsheetName || 'Disposable Staging Workbook',
+            spreadsheetId: res.spreadsheetId,
+            errorMessage: '',
+          });
+        } else {
+          setStagingIdentity({
+            status: 'rejected',
+            spreadsheetName: '',
+            spreadsheetId: '',
+            errorMessage: res.message || 'Target backend failed server-side staging verification.',
+          });
+        }
+      }).catch((err) => {
+        setStagingIdentity({
+          status: 'rejected',
+          spreadsheetName: '',
+          spreadsheetId: '',
+          errorMessage: err.message || 'Failed to reach staging identity endpoint.',
+        });
+      });
+    } else {
+      setStagingIdentity({ status: 'idle', spreadsheetName: '', spreadsheetId: '', errorMessage: '' });
+    }
+  }, []);
 
   // Subscribe to administrator session changes across the app
   useEffect(() => {
@@ -487,8 +532,10 @@ export default function App() {
       const validLeaveApplications = normalizeLeaveApplications(rawLeaveApplications);
       setLeaveApplications(validLeaveApplications);
 
-      // Update RosterAmendments when backend returns amendment history (safe empty fallback if un-deployed)
-      const nextAmendments = Array.isArray(response?.rosterAmendments)
+      // Update AmendRoster when backend returns amendment history (safe empty fallback if un-deployed)
+      const nextAmendments = Array.isArray(response?.amendRoster)
+        ? response.amendRoster
+        : Array.isArray(response?.rosterAmendments)
         ? response.rosterAmendments
         : Array.isArray(fetchedAmendments)
           ? fetchedAmendments
@@ -1429,6 +1476,7 @@ export default function App() {
 
   // Explicit Save Changes for Future Months (DRAFT -> MAIN / MasterRoster)
   const handleSaveSimplifiedDraft = async ({
+    changes,
     rows,
     targetMonth,
     operationId,
@@ -1448,6 +1496,7 @@ export default function App() {
     inFlightMutationsRef.current++;
     try {
       const res = await saveMasterRosterDraft({
+        changes,
         rows: monthScopedRows,
         targetMonth: canonicalMonth,
         operationId,
@@ -1469,6 +1518,64 @@ export default function App() {
           const iso = toIsoDate(r.date || r.Date);
           return iso ? iso.startsWith(canonicalMonth) : String(r.date || r.Date || '').startsWith(canonicalMonth);
         };
+
+        if (Array.isArray(changes) && changes.length > 0) {
+          const otherMonthRows = prev.filter((r) => !isMonthMatch(r));
+          const targetRows = prev.filter(isMonthMatch);
+          const changesMap = new Map();
+          for (const ch of changes) {
+            const chDate = toIsoDate(ch.date) || String(ch.date || '').trim();
+            const chField = String(ch.field || 'MO_SHIFT').trim().toUpperCase();
+            const isEp = chField === 'EP_OFFICE_HOUR' || chField === 'EP_ONCALL';
+            const k = isEp
+              ? `EP|${chDate}|${chField}`
+              : `MO|${chDate}|${normalizeForComparison(ch.staffName || ch.staffKey || '')}`;
+            changesMap.set(k, { ...ch, isEp, dateStr: chDate, fieldUp: chField });
+          }
+
+          const updatedTargetRows = [];
+          const appliedKeys = new Set();
+          for (const row of targetRows) {
+            const rDate = toIsoDate(row?.date || row?.Date) || String(row?.date || row?.Date || '').trim();
+            const rShift = String(row?.shift || row?.Shift || '').trim();
+            const rName = String(row?.name || row?.Name || '').trim();
+            const isEp = rShift.toUpperCase() === 'EP_OFFICE_HOUR' || rShift.toUpperCase() === 'EP_ONCALL';
+            const k = isEp
+              ? `EP|${rDate}|${rShift.toUpperCase()}`
+              : `MO|${rDate}|${normalizeForComparison(rName)}`;
+
+            if (changesMap.has(k)) {
+              if (!appliedKeys.has(k)) {
+                appliedKeys.add(k);
+                const ch = changesMap.get(k);
+                if (!ch.isCleared && ch.newValue && ch.newValue !== '__CLEAR__') {
+                  updatedTargetRows.push(isEp
+                    ? { Name: ch.newValue, name: ch.newValue, Date: rDate, date: rDate, Shift: ch.fieldUp, shift: ch.fieldUp }
+                    : { Name: ch.staffName || rName, name: ch.staffName || rName, Date: rDate, date: rDate, Shift: ch.newValue, shift: ch.newValue }
+                  );
+                }
+              }
+            } else {
+              updatedTargetRows.push(row);
+            }
+          }
+
+          for (const [k, ch] of changesMap.entries()) {
+            if (!appliedKeys.has(k) && !ch.isCleared && ch.newValue && ch.newValue !== '__CLEAR__') {
+              updatedTargetRows.push(ch.isEp
+                ? { Name: ch.newValue, name: ch.newValue, Date: ch.dateStr, date: ch.dateStr, Shift: ch.fieldUp, shift: ch.fieldUp }
+                : { Name: ch.staffName || ch.staffKey, name: ch.staffName || ch.staffKey, Date: ch.dateStr, date: ch.dateStr, Shift: ch.newValue, shift: ch.newValue }
+              );
+            }
+          }
+
+          const nextRoster = [...otherMonthRows, ...updatedTargetRows];
+          try {
+            writeCacheEntries([['resq_cache_masterRoster', nextRoster]]);
+          } catch (_) {}
+          return nextRoster;
+        }
+
         const otherMonths = prev.filter((r) => !isMonthMatch(r));
         const nextRoster = [...otherMonths, ...confirmedMonthRows];
         try {
@@ -1485,7 +1592,7 @@ export default function App() {
     }
   };
 
-  // Explicit Save Changes for Current & Past Months (AMEND -> RosterAmendments, MAIN untouched)
+  // Explicit Save Changes for Current & Past Months (AMEND -> AmendRoster, MAIN untouched)
   const handleAppendSimplifiedAmendments = async ({
     targetMonth,
     operationId,
@@ -1629,6 +1736,73 @@ export default function App() {
                 Exit Mock
               </button>
             </div>
+          </div>
+        )}
+
+        {/* 🚀 Verified Staging Banner / Safety Lockout */}
+        {!isDevMockActive() && typeof window !== 'undefined' && stagingIdentity.status === 'verified' && (
+          <div className="bg-sky-950/90 text-sky-200 text-xs px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 border-b border-sky-700/60 shadow-xs z-40">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold flex items-center gap-1 text-sky-100">
+                🚀 Verified Staging Backend Active
+              </span>
+              <span className="text-sky-300/80 hidden sm:inline">
+                ({stagingIdentity.spreadsheetName || 'Disposable Staging Workbook'} · ID: {stagingIdentity.spreadsheetId ? `${stagingIdentity.spreadsheetId.slice(0, 10)}...` : 'confirmed'})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('stagingUrl');
+                  url.searchParams.delete('staging_url');
+                  window.localStorage?.removeItem('resq_staging_api_url');
+                  window.location.href = url.pathname;
+                } catch (_) {
+                  window.location.reload();
+                }
+              }}
+              className="px-2 py-0.5 rounded bg-sky-900/90 hover:bg-sky-800 text-sky-100 font-medium border border-sky-600/40 cursor-pointer"
+            >
+              Exit Staging
+            </button>
+          </div>
+        )}
+
+        {!isDevMockActive() && typeof window !== 'undefined' && stagingIdentity.status === 'checking' && (
+          <div className="bg-slate-900/90 text-slate-300 text-xs px-3 py-1.5 flex items-center justify-between gap-2 border-b border-slate-700/60 shadow-xs z-40">
+            <span>⏳ Verifying Staging Backend Identity...</span>
+          </div>
+        )}
+
+        {!isDevMockActive() && typeof window !== 'undefined' && stagingIdentity.status === 'rejected' && (
+          <div className="bg-rose-950/90 text-rose-200 text-xs px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 border-b border-rose-700/60 shadow-xs z-40">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold flex items-center gap-1 text-rose-100">
+                ⚠️ Staging Connection Blocked: Unverified Backend
+              </span>
+              <span className="text-rose-300/90 hidden sm:inline">
+                ({stagingIdentity.errorMessage || 'Target did not pass server-side staging identity verification.'})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('stagingUrl');
+                  url.searchParams.delete('staging_url');
+                  window.localStorage?.removeItem('resq_staging_api_url');
+                  window.location.href = url.pathname;
+                } catch (_) {
+                  window.location.reload();
+                }
+              }}
+              className="px-2 py-0.5 rounded bg-rose-900/90 hover:bg-rose-800 text-rose-100 font-medium border border-rose-600/40 cursor-pointer"
+            >
+              Exit Staging
+            </button>
           </div>
         )}
 
