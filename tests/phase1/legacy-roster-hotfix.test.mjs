@@ -185,9 +185,9 @@ test('6. Blank/unparseable historical rows are preserved', () => {
   assert.ok(foundBlank, 'Blank row should be preserved');
 });
 
-test('7. Empty replacement rows remove only target month, not other months', () => {
+test('7. Empty replacement rows are rejected without data mutation', () => {
   const h = setupHarnessWithRoster();
-  const janSepBefore = structuredClone(h.grids.MasterRoster.slice(1, 10));
+  const stateBefore = JSON.stringify(h.grids.MasterRoster);
 
   const res = h.post({
     action: 'uploadmasterroster',
@@ -195,17 +195,11 @@ test('7. Empty replacement rows remove only target month, not other months', () 
     rows: [] // Empty replacement for October
   });
 
-  assert.equal(res.result, 'success');
-  assert.equal(res.count, 0);
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /rows must be a non-empty array of assignments/i);
 
-  const populated = getPopulatedRows(h.grids.MasterRoster);
-
-  // Jan–Sep preserved completely
-  assert.deepEqual(populated.slice(1, 10), janSepBefore);
-
-  // Total populated rows is now 1 (header) + 9 (Jan–Sep) = 10 rows. October rows are gone.
-  assert.equal(populated.length, 10);
-  assert.ok(!populated.some(r => r[1].startsWith('2026-10')));
+  // MasterRoster remains 100% untouched
+  assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
 });
 
 test('8. Missing targetMonth rejects without modifying sheet', () => {
@@ -558,3 +552,100 @@ test('19. Missing MasterRoster sheet fails closed and does not auto-create repla
   assert.equal(Object.hasOwn(h.grids, 'MasterRoster'), false);
   assert.equal(h.writes.filter(w => w.name === 'MasterRoster').length, 0);
 });
+
+test('20. Missing or invalid rows payload is rejected without data mutation', () => {
+  const h = setupHarnessWithRoster();
+  const stateBefore = JSON.stringify(h.grids.MasterRoster);
+
+  // Missing rows
+  const res1 = h.post({ action: 'uploadmasterroster', targetMonth: '2026-10' });
+  assert.equal(res1.result, 'error');
+  assert.match(res1.message, /rows must be a non-empty array of assignments/i);
+
+  // Non-array rows
+  const res2 = h.post({ action: 'uploadmasterroster', targetMonth: '2026-10', rows: 'invalid' });
+  assert.equal(res2.result, 'error');
+  assert.match(res2.message, /rows must be a non-empty array of assignments/i);
+
+  assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
+});
+
+test('21. Empty rows with allowEmptyTargetMonth: true is rejected without data mutation', () => {
+  const h = setupHarnessWithRoster();
+  const stateBefore = JSON.stringify(h.grids.MasterRoster);
+
+  const res = h.post({
+    action: 'uploadmasterroster',
+    targetMonth: '2026-10',
+    rows: [],
+    allowEmptyTargetMonth: true
+  });
+
+  assert.equal(res.result, 'error');
+  assert.match(res.message, /rows must be a non-empty array of assignments/i);
+  assert.equal(JSON.stringify(h.grids.MasterRoster), stateBefore);
+});
+
+test('22. Simplified Draft and Amend saving remain unaffected', () => {
+  const tables = structuredClone(fixture.tables);
+  tables.MasterRoster = [['Name', 'Date', 'Shift']];
+  tables.RosterPeriods = [['PeriodId', 'State', 'Status', 'SchemaVersion']];
+  const h = harness(currentSource, { tables, clockIso: '2026-10-01T00:00:00.000Z', adminEmail: 'owner@example.invalid', activeEmail: 'owner@example.invalid' });
+
+  // Test savemasterrosterdraft
+  const resDraft = h.post({
+    action: 'savemasterrosterdraft',
+    targetMonth: '2026-11',
+    rows: [{ name: 'Dr Test', date: '2026-11-01', shift: 'AM' }]
+  });
+  assert.equal(resDraft.result, 'success');
+  assert.equal(resDraft.mode, 'DRAFT');
+
+  // Test appendrosteramendments
+  const resAmend = h.post({
+    action: 'appendrosteramendments',
+    operationId: 'op-test-1',
+    targetMonth: '2026-10',
+    amendments: [
+      { date: '2026-10-01', targetType: 'MO', staffKey: 'dr_test', shift: 'PM' }
+    ]
+  });
+  assert.equal(resAmend.result, 'success');
+  assert.equal(resAmend.mode, 'AMEND');
+});
+
+test('23. Doctor request workflows (submit, update, delete) remain unaffected', () => {
+  const h = setupHarnessWithRoster();
+  
+  // Test submit
+  const resSubmit = h.post({
+    action: 'submit',
+    name: 'Dr Alice',
+    date: '2026-12-01',
+    shift: 'AM',
+    category: 'Shift',
+    request: 'Requesting morning shift'
+  });
+  assert.equal(resSubmit.result, 'success');
+  const reqId = resSubmit.id;
+
+  // Test update
+  const resUpdate = h.post({
+    action: 'update',
+    id: reqId,
+    name: 'Dr Alice',
+    date: '2026-12-01',
+    shift: 'PM',
+    category: 'Shift',
+    request: 'Updated to evening shift'
+  });
+  assert.equal(resUpdate.result, 'success');
+
+  // Test delete
+  const resDelete = h.post({
+    action: 'delete',
+    id: reqId
+  });
+  assert.equal(resDelete.result, 'success');
+});
+

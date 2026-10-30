@@ -672,7 +672,11 @@ function handleLegacyMasterRosterUpload_(data) {
   }
 
   // Validate incoming rows: every row must have a valid date matching targetMonth
-  var rows = Array.isArray(data && data.rows) ? data.rows : [];
+  if (!data || !Array.isArray(data.rows) || data.rows.length === 0) {
+    throw new Error('Refusing to execute roster upload for targetMonth "' + targetMonth + '": rows must be a non-empty array of assignments. Empty or missing uploads cannot be used to clear monthly rosters.');
+  }
+
+  var rows = data.rows;
   var newValues = [];
   for (var j = 0; j < rows.length; j++) {
     var r = rows[j];
@@ -698,6 +702,10 @@ function handleLegacyMasterRosterUpload_(data) {
       dateStr,
       String(rawShift || '').trim()
     ]);
+  }
+
+  if (newValues.length === 0) {
+    throw new Error('Refusing to execute roster upload for targetMonth "' + targetMonth + '": zero valid assignment rows found.');
   }
 
   var lastRow = sheet.getLastRow();
