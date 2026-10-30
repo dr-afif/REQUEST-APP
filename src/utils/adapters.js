@@ -73,15 +73,24 @@ export function validateMasterRoster(rawMasterRoster) {
   return rawMasterRoster
     .filter((row) => row && (hasOwn(row, 'Shift') || hasOwn(row, 'shift')))
     .map((row) => {
+      let updated = row;
       if (hasOwn(row, 'Name') || hasOwn(row, 'name')) {
         const name = mapName(row.Name || row.name || '');
-        return {
-          ...row,
+        updated = {
+          ...updated,
           Name: name,
           name: name,
         };
       }
-      return row;
+      if (hasOwn(row, 'Date') || hasOwn(row, 'date')) {
+        const d = row.Date !== undefined ? row.Date : row.date;
+        updated = {
+          ...updated,
+          Date: d,
+          date: d,
+        };
+      }
+      return updated;
     });
 }
 

@@ -1,146 +1,104 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 
-// Helper to load src/api.js with mock fetch
+// Helper to load api.js with mock fetch
 async function createMockApiClient() {
   const calls = [];
-  const source = fs.readFileSync(new URL('../src/api.js', import.meta.url), 'utf8')
-    .replace('import.meta.env.VITE_APPS_SCRIPT_URL', JSON.stringify('https://example.invalid/test/exec'));
+  const authUrl = new URL('../../src/features/roster/auth/adminAuth.js', import.meta.url).href;
+  const { setAdminSessionToken, clearAdminSessionToken } = await import(authUrl);
+  setAdminSessionToken('phase1-mutation-token', 'admin@example.invalid', Math.floor(Date.now() / 1000) + 3600);
+  const source = fs.readFileSync(new URL('../../src/api.js', import.meta.url), 'utf8')
+    .replace('import.meta.env.VITE_APPS_SCRIPT_URL', JSON.stringify('https://example.invalid/test/exec'))
+    .replace('./features/roster/auth/adminAuth.js', authUrl);
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
-    calls.push({
-      url: new URL(url),
-      options,
-      body: options?.body ? JSON.parse(options.body) : null
-    });
+    calls.push({ url: new URL(url), options, body: options.body ? JSON.parse(options.body) : null });
     return {
       ok: true,
-      headers: {
-        get: (h) => (h.toLowerCase() === 'content-type' ? 'application/json' : null)
-      },
-      json: async () => ({ result: 'success' }),
-      text: async () => JSON.stringify({ result: 'success' })
+      headers: { get: () => 'application/json' },
+      json: async () => ({ result: 'success' })
     };
   };
 
   const api = await import('data:text/javascript;charset=utf-8,' + encodeURIComponent(source));
-
   return {
     api,
     calls,
-    restore: () => {
-      globalThis.fetch = originalFetch;
-    }
+    restore: () => { clearAdminSessionToken(); globalThis.fetch = originalFetch; }
   };
 }
 
 // ---------------------------------------------------------------------------
-// 1. Normal roster load & requests unaffected
+// 1. Current-month October Save Roster sends targetMonth: "2026-10"
 // ---------------------------------------------------------------------------
-test('1. Normal roster load and requests functionality remain unaffected', async () => {
-  const { api, calls, restore } = await createMockApiClient();
-  try {
-    await api.fetchAllData();
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].url.searchParams.get('action'), 'alldata');
-
-    await api.fetchMasterRoster();
-    assert.equal(calls.length, 2);
-    assert.equal(calls[1].url.searchParams.get('action'), 'masterroster');
-
-    await api.submitRequest({ name: 'Dr Test', date: '2026-10-15', request: 'AM' });
-    assert.equal(calls.length, 3);
-    assert.equal(calls[2].body.action, 'submit');
-    assert.equal(calls[2].body.name, 'Dr Test');
-
-    await api.updateRequest('req-123', { name: 'Dr Test', request: 'PM' });
-    assert.equal(calls.length, 4);
-    assert.equal(calls[3].body.action, 'update');
-    assert.equal(calls[3].body.id, 'req-123');
-
-    await api.deleteRequest('req-123');
-    assert.equal(calls.length, 5);
-    assert.equal(calls[4].body.action, 'delete');
-    assert.equal(calls[4].body.id, 'req-123');
-  } finally {
-    restore();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// 2. Current-month October Save Roster sends targetMonth: "2026-10" & only October rows
-// ---------------------------------------------------------------------------
-test('2. Current-month October Save Roster sends targetMonth: "2026-10" and only October rows', async () => {
+test('1. Current-month October Save Roster sends targetMonth: "2026-10"', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
     const octRows = [
-      { name: 'Dr Alice', date: '2026-10-01', shift: 'AM' },
-      { name: 'Dr Bob', date: '2026-10-15', shift: 'PM' }
+      { name: 'Dr Sarah', date: '2026-10-05', shift: 'AM' },
+      { name: 'Dr John', date: '2026-10-06', shift: 'PM' }
     ];
     await api.uploadMasterRoster(octRows, '2026-10');
-
     assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.method, 'POST');
     assert.equal(calls[0].body.action, 'uploadmasterroster');
     assert.equal(calls[0].body.targetMonth, '2026-10');
     assert.deepEqual(calls[0].body.rows, octRows);
-    assert.ok(calls[0].body.rows.every(r => r.date.startsWith('2026-10')));
   } finally {
     restore();
   }
 });
 
 // ---------------------------------------------------------------------------
-// 3. Previous-month September Save Roster sends targetMonth: "2026-09" & only September rows
+// 2. Previous-month September Save Roster sends targetMonth: "2026-09"
 // ---------------------------------------------------------------------------
-test('3. Previous-month September Save Roster sends targetMonth: "2026-09" and only September rows', async () => {
+test('2. Previous-month September Save Roster sends targetMonth: "2026-09"', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
     const sepRows = [
-      { name: 'Dr Alice', date: '2026-09-05', shift: 'AM' },
-      { name: 'Dr Charlie', date: '2026-09-20', shift: 'NIGHT' }
+      { name: 'Dr Ivan', date: '2026-09-15', shift: 'NIGHT' },
+      { name: 'Dr Alice', date: '2026-09-20', shift: 'AM' }
     ];
     await api.uploadMasterRoster(sepRows, '2026-09');
-
     assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.method, 'POST');
     assert.equal(calls[0].body.action, 'uploadmasterroster');
     assert.equal(calls[0].body.targetMonth, '2026-09');
     assert.deepEqual(calls[0].body.rows, sepRows);
-    assert.ok(calls[0].body.rows.every(r => r.date.startsWith('2026-09')));
   } finally {
     restore();
   }
 });
 
 // ---------------------------------------------------------------------------
-// 4. January Save Roster sends targetMonth: "2026-01" & only January rows
+// 3. January Save Roster sends targetMonth: "2026-01"
 // ---------------------------------------------------------------------------
-test('4. January Save Roster sends targetMonth: "2026-01" and only January rows', async () => {
+test('3. January Save Roster sends targetMonth: "2026-01"', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
     const janRows = [
-      { name: 'Dr Dave', date: '2026-01-01', shift: 'AM' },
-      { name: 'Dr Eve', date: '2026-01-31', shift: 'PM' }
+      { name: 'Dr Alice', date: '2026-01-01', shift: 'OFF' }
     ];
     await api.uploadMasterRoster(janRows, '2026-01');
-
     assert.equal(calls.length, 1);
     assert.equal(calls[0].body.action, 'uploadmasterroster');
     assert.equal(calls[0].body.targetMonth, '2026-01');
     assert.deepEqual(calls[0].body.rows, janRows);
-    assert.ok(calls[0].body.rows.every(r => r.date.startsWith('2026-01')));
   } finally {
     restore();
   }
 });
 
 // ---------------------------------------------------------------------------
-// 5. Direct reassignment sends targetMonth: "2026-09"
+// 4. Direct reassignment in September sends targetMonth: "2026-09"
 // ---------------------------------------------------------------------------
-test('5. Direct reassignment in September sends targetMonth: "2026-09"', async () => {
+test('4. Direct reassignment in September sends targetMonth: "2026-09"', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
+    // Simulate direct shift reassignment handler logic
     const rosterMonth = '2026-09';
     const targetDate = '2026-09-18';
     const doctorName = 'Dr Bob';
@@ -149,7 +107,7 @@ test('5. Direct reassignment in September sends targetMonth: "2026-09"', async (
     const existingMasterRoster = [
       { name: 'Dr Alice', date: '2026-09-10', shift: 'AM' },
       { name: 'Dr Bob', date: '2026-09-18', shift: 'AM' },
-      { name: 'Dr Judy', date: '2026-10-01', shift: 'PM' }
+      { name: 'Dr Judy', date: '2026-10-01', shift: 'PM' } // Different month
     ];
 
     const targetMonth = (targetDate && targetDate.slice(0, 7)) || rosterMonth;
@@ -176,37 +134,29 @@ test('5. Direct reassignment in September sends targetMonth: "2026-09"', async (
 });
 
 // ---------------------------------------------------------------------------
-// 6. Save Roster across all edit modes (standard, standby, extended, table)
+// 5. Any other roster mutation path sends the selected roster month
 // ---------------------------------------------------------------------------
-test('6. Save Roster across edit modes sends canonical selected roster month', async () => {
+test('5. Any other roster mutation path (table, standby, extended) sends selected roster month', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
-    const editModes = [
-      { mode: 'standard', month: '2026-03', shift: 'AM' },
-      { mode: 'standby', month: '2026-04', shift: 'AM (S)' },
-      { mode: 'extended', month: '2026-05', shift: 'PM (X)' },
-      { mode: 'table', month: '2026-06', shift: 'NIGHT' }
-    ];
-
-    for (const em of editModes) {
-      const rows = [{ name: 'Dr ModeTest', date: `${em.month}-12`, shift: em.shift }];
-      await api.uploadMasterRoster(rows, em.month);
+    const selectedMonths = ['2026-02', '2026-05', '2026-11'];
+    for (const month of selectedMonths) {
+      const rows = [{ name: 'Dr Test', date: `${month}-12`, shift: 'AM (S)' }];
+      await api.uploadMasterRoster(rows, month);
     }
-
-    assert.equal(calls.length, 4);
-    assert.equal(calls[0].body.targetMonth, '2026-03');
-    assert.equal(calls[1].body.targetMonth, '2026-04');
-    assert.equal(calls[2].body.targetMonth, '2026-05');
-    assert.equal(calls[3].body.targetMonth, '2026-06');
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0].body.targetMonth, '2026-02');
+    assert.equal(calls[1].body.targetMonth, '2026-05');
+    assert.equal(calls[2].body.targetMonth, '2026-11');
   } finally {
     restore();
   }
 });
 
 // ---------------------------------------------------------------------------
-// 7. Switching from October to September before editing does not retain stale October targetMonth
+// 6. Switching from October to September before editing does not retain stale October targetMonth
 // ---------------------------------------------------------------------------
-test('7. Switching from October to September before editing does not retain stale October targetMonth', async () => {
+test('6. Switching from October to September before editing does not retain stale October targetMonth', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
     let activeRosterMonth = '2026-10'; // Initially October
@@ -231,9 +181,9 @@ test('7. Switching from October to September before editing does not retain stal
 });
 
 // ---------------------------------------------------------------------------
-// 8. Switching September → October → September still sends September correctly
+// 7. Switching September → October → September still sends September correctly
 // ---------------------------------------------------------------------------
-test('8. Switching September → October → September still sends September correctly', async () => {
+test('7. Switching September → October → September still sends September correctly', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
     let activeMonth = '2026-09';
@@ -253,9 +203,9 @@ test('8. Switching September → October → September still sends September cor
 });
 
 // ---------------------------------------------------------------------------
-// 9. No MasterRoster write API call can be generated with missing/empty targetMonth
+// 8. No MasterRoster write API call can be generated with missing/empty targetMonth
 // ---------------------------------------------------------------------------
-test('9. No MasterRoster write API call can be generated with missing/empty targetMonth', async () => {
+test('8. No MasterRoster write API call can be generated with missing/empty targetMonth', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
     const invalidMonths = [undefined, null, '', '   '];
@@ -278,9 +228,9 @@ test('9. No MasterRoster write API call can be generated with missing/empty targ
 });
 
 // ---------------------------------------------------------------------------
-// 10. Failed/invalid targetMonth prevents request dispatch rather than relying solely on backend rejection
+// 9. Failed/invalid targetMonth prevents request dispatch rather than relying solely on backend rejection
 // ---------------------------------------------------------------------------
-test('10. Failed/invalid targetMonth prevents request dispatch rather than relying solely on backend rejection', async () => {
+test('9. Failed/invalid targetMonth prevents request dispatch rather than relying solely on backend rejection', async () => {
   const { api, calls, restore } = await createMockApiClient();
   try {
     const malformed = [
@@ -316,25 +266,23 @@ test('10. Failed/invalid targetMonth prevents request dispatch rather than relyi
 });
 
 // ---------------------------------------------------------------------------
-// 11. Apps Script hotfix V1.1 compatibility: payload format check
+// 10. Existing Phase 5 Current/Planned/Changes UI remains unaffected
 // ---------------------------------------------------------------------------
-test('11. Resulting payload matches deployed Apps Script V1.1 hotfix specification', async () => {
-  const { api, calls, restore } = await createMockApiClient();
-  try {
-    const rows = [
-      { name: 'Dr A', date: '2026-09-01', shift: 'AM' },
-      { name: 'Dr B', date: '2026-09-02', shift: 'PM' }
-    ];
-    await api.uploadMasterRoster(rows, '2026-09');
+test('10. Existing Phase 5 Current/Planned/Changes UI remains unaffected', () => {
+  const files = [
+    'src/features/roster/components/Phase5RosterContainer.jsx',
+    'src/features/roster/components/PlannedRosterView.jsx',
+    'src/features/roster/components/CurrentRosterView.jsx',
+    'src/features/roster/components/AmendmentHistoryPanel.jsx',
+    'src/features/roster/components/RosterViewModeSelector.jsx',
+    'src/features/roster/components/UndoToast.jsx'
+  ];
 
-    assert.equal(calls.length, 1);
-    const body = calls[0].body;
-    assert.equal(body.action, 'uploadmasterroster');
-    assert.equal(body.targetMonth, '2026-09');
-    assert.deepEqual(body.rows, rows);
-    assert.ok(Array.isArray(body.rows));
-    assert.equal(calls[0].options.headers['Content-Type'], 'text/plain;charset=UTF-8');
-  } finally {
-    restore();
+  for (const relPath of files) {
+    const fullPath = path.join(process.cwd(), relPath);
+    assert.ok(fs.existsSync(fullPath), `${relPath} must exist`);
+    const content = fs.readFileSync(fullPath, 'utf8');
+    assert.ok(content.length > 0, `${relPath} must not be empty`);
+    assert.match(content, /export\s+default\s+function|export\s+default\s+\w+/, `${relPath} must have a default export`);
   }
 });

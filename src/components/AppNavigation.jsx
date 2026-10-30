@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { normalizeForComparison } from '../utils/normalise';
 import { APP_ICONS } from '../constants/icons';
+import { isSessionTokenActive } from '../features/roster/auth/adminAuth.js';
 
 export default function AppNavigation({
   currentPage,
@@ -10,9 +11,14 @@ export default function AppNavigation({
   names = [],
   syncStatus = 'connected',
   onRefresh,
+  isAdmin: propIsAdmin,
 }) {
-  const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
   const isGuest = selectedName?.trim().toLowerCase() === 'guest';
+  const isAdmin = Boolean(
+    propIsAdmin !== undefined
+      ? propIsAdmin
+      : (selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive())
+  );
 
   const statusColor = useMemo(() => {
     switch (syncStatus) {

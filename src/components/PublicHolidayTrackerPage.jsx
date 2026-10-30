@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { isSessionTokenActive } from '../features/roster/auth/adminAuth.js';
 import { createPortal } from 'react-dom';
 import {
   getPublicHolidayCredits,
@@ -22,7 +23,7 @@ export default function PublicHolidayTrackerPage({
   onUpdateSetting = () => {},
   teamMembers = []
 }) {
-  const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
+  const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
 
   const [activeMonth, setActiveMonth] = useState(rosterMonth);
   const [sortConfig, setSortConfig] = useState({ key: 'outstanding', direction: 'desc' });

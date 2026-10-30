@@ -1,0 +1,410 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Phase 9 Reference Data Seed Manifest",
+  "description": "Authoritative non-production specification of reference tables, canonical shift semantics, weekly-off policies, and feature switch transition matrix for production cutover.",
+  "version": "1.0.0",
+  "generatedFor": "feature/phase-9-cutover",
+  "shiftSemantics": {
+    "ruleVersion": 1,
+    "columns": [
+      "ShiftCode",
+      "RuleVersion",
+      "DirectoryType",
+      "CountsAsWorked",
+      "ConsecutiveBehavior",
+      "StaffingBucket",
+      "PolicyBQualifier",
+      "NormalOff",
+      "CanDisplaceOffEarnGoff",
+      "ExpectedPredecessorsJson",
+      "ExpectedFollowersJson"
+    ],
+    "canonicalRows": [
+      {
+        "shiftCode": "AM",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "AM",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "PM",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "PM",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "OH",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "OH",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "COURT",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "ON1",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "NIGHT",
+        "policyBQualifier": true,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": ["ON2", "PN"]
+      },
+      {
+        "shiftCode": "ON2",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "NIGHT",
+        "policyBQualifier": true,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": ["ON1"],
+        "expectedFollowers": ["PN"]
+      },
+      {
+        "shiftCode": "ON",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "NIGHT",
+        "policyBQualifier": true,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": ["PN"]
+      },
+      {
+        "shiftCode": "N",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "NIGHT",
+        "policyBQualifier": true,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": ["PN"]
+      },
+      {
+        "shiftCode": "NIGHT",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": true,
+        "consecutiveBehavior": "INCREMENT",
+        "staffingBucket": "NIGHT",
+        "policyBQualifier": true,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": [],
+        "expectedFollowers": ["PN"]
+      },
+      {
+        "shiftCode": "PN",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "TRANSPARENT",
+        "staffingBucket": "",
+        "policyBQualifier": true,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": true,
+        "expectedPredecessors": ["ON1", "ON2", "ON", "N", "NIGHT"],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "OFF",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": true,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "GOFF",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "HKA",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "GHKA",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "AL",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "MC",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "EL",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "COURSE",
+        "ruleVersion": 1,
+        "directoryType": "MO",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "RESET",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "EP_OFFICE_HOUR",
+        "ruleVersion": 1,
+        "directoryType": "EP",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "EXCLUDED",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      },
+      {
+        "shiftCode": "EP_ONCALL",
+        "ruleVersion": 1,
+        "directoryType": "EP",
+        "countsAsWorked": false,
+        "consecutiveBehavior": "EXCLUDED",
+        "staffingBucket": "",
+        "policyBQualifier": false,
+        "normalOff": false,
+        "canDisplaceOffEarnGoff": false,
+        "expectedPredecessors": [],
+        "expectedFollowers": []
+      }
+    ]
+  },
+  "offPolicies": {
+    "canonicalSchema": [
+      "PolicyId",
+      "PolicyCode",
+      "EffectiveMonday",
+      "RuleVersion",
+      "RuleJson",
+      "Active",
+      "Reason",
+      "Revision",
+      "OperationId",
+      "CreatedAt",
+      "CreatedBy"
+    ],
+    "requiredInput": {
+      "policyCode": "Policy identifier, standard 'A' (1 off/week, max 2 nights) or 'B' (Policy B night qualification)",
+      "effectiveMonday": "Date in YYYY-MM-DD format representing the Monday from which policy applies (must cover cutover month weeks)",
+      "ruleVersion": "Integer rule version, standard 1",
+      "ruleJson": "JSON string containing { minOffPerWeek, maxNightPerWeek, ... }",
+      "active": "Boolean true to activate"
+    },
+    "productionConfirmationRequired": true,
+    "operatorConfirmationNotice": "The live production OffPolicy must NOT be automatically generated from test fixtures without hospital scheduling leadership confirmation. The operator must supply an approved production policy with effective Monday covering the cutover period.",
+    "productionRequiredInput": {
+      "approvedForProduction": true,
+      "operatorConfirmationRequired": true,
+      "policyCode": "Operator must confirm: 'A' or hospital-specific code",
+      "effectiveMonday": "Operator must specify YYYY-MM-DD Monday date covering cutover period",
+      "ruleVersion": 1,
+      "ruleJson": "Operator must provide verified rules JSON (e.g. minOffPerWeek, maxNightPerWeek)",
+      "approvalEvidence": "Sign-off reference from clinical scheduling leadership"
+    },
+    "testExample": {
+      "exampleOnly": true,
+      "doNotUseInProduction": true,
+      "policyId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "policyCode": "A",
+      "effectiveMonday": "2026-10-26",
+      "ruleVersion": 1,
+      "ruleJson": "{\"policyCode\":\"A\",\"minOffPerWeek\":1,\"maxNightPerWeek\":2,\"targetOffPerWeek\":1,\"minConsecutiveRestHours\":24}",
+      "active": true,
+      "reason": "Test fixture example for weekly off policy A (not for production)",
+      "revision": 0,
+      "operationId": "00000000-0000-0000-0000-000000000001",
+      "createdAt": "2026-10-26T00:00:00.000Z",
+      "createdBy": "test-admin@example.invalid"
+    }
+  },
+  "settings": {
+    "description": "Definitive Phase 9 feature switch transition matrix across cutover stages.",
+    "flags": {
+      "roster_workspace_v2_enabled": {
+        "description": "Frontend UI gate: controls rendering of Phase 4-8 unified roster workspace vs legacy calendar/table views.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "false",
+        "stageH_frontend_deploy": "false",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "roster_v2_read_enabled": {
+        "description": "Backend read gate: controls access to rosterv2current, rosterv2planned, rosterv2amendmenthistory, rosterv2entitlementbalances.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "true",
+        "stageH_frontend_deploy": "true",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "roster_v2_write_enabled": {
+        "description": "Backend mutation gate: controls publish, close, reopen, amend, absence, replacement, credit_manual endpoints.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "true",
+        "stageH_frontend_deploy": "true",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "shift_semantics_v2_enabled": {
+        "description": "Controls whether shift semantics v2 evaluation rules are enforced by backend.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "true",
+        "stageH_frontend_deploy": "true",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "weekly_off_guidance_enabled": {
+        "description": "Enables weekly off guidance and snapshot evaluations during publish and amendments.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "true",
+        "stageH_frontend_deploy": "true",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "night_safety_guidance_enabled": {
+        "description": "Enables night shift rest and consecutive safety checks.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "true",
+        "stageH_frontend_deploy": "true",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "goff_ledger_enabled": {
+        "description": "Enables replacement off (GOFF) and holiday off (GHKA) ledger accounting and transaction validation.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "true",
+        "stageH_frontend_deploy": "true",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "write_queue_v2_enabled": {
+        "description": "Enables client write-queue draft patch protocol in web frontend.",
+        "stageB_initial": "false",
+        "stageE_hidden_init": "false",
+        "stageH_frontend_deploy": "false",
+        "stageI_activation": "true",
+        "tier1_rollback": "false"
+      },
+      "legacy_upload_enabled": {
+        "description": "Controls whether legacy bulk spreadsheet upload to MasterRoster is permitted. Disabled at final cutover.",
+        "stageB_initial": "true",
+        "stageE_hidden_init": "true",
+        "stageH_frontend_deploy": "true",
+        "stageI_activation": "false",
+        "tier1_rollback": "true"
+      }
+    }
+  }
+}

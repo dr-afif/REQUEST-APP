@@ -1,0 +1,1829 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { draftRuntime } from '../queue/runtime.js';
+import { draftCellsToCurrentAssignments, getCachedStaffDirectory, setCachedStaffDirectory } from '../data/draftRepository.js';
+import { getAdminSessionToken, clearAdminSessionToken, getAdminEmail, startGoogleCodeAuth, handleUrlAuthHandoff, subscribeAdminAuth, formatAdminAuthError, isSessionTokenActive } from '../auth/adminAuth.js';
+import RosterViewModeSelector from './RosterViewModeSelector.jsx';
+import CurrentRosterView from './CurrentRosterView.jsx';
+import PlannedRosterView from './PlannedRosterView.jsx';
+import AmendmentHistoryPanel from './AmendmentHistoryPanel.jsx';
+import AmendmentModal from './AmendmentModal.jsx';
+import AbsenceModal from './AbsenceModal.jsx';
+import ReplacementModal from './ReplacementModal.jsx';
+import EntitlementPanel from './EntitlementPanel.jsx';
+import EntitlementCreditModal from './EntitlementCreditModal.jsx';
+import EntitlementConsumeModal from './EntitlementConsumeModal.jsx';
+import UndoToast from './UndoToast.jsx';
+
+/**
+ * Phase 5/6 Roster Container:
+ * Exposes Current, Planned, and Changes UI modes.
+ * Orchestrates authoritative mutations:
+ *   - Phase 5 Amendments (Correction & Swap), 10-second Undo, Reversals
+ *   - Phase 6 Operational Absences (MC, EL, AL, COURSE) & Shortage Workflow
+ *   - Phase 6 Replacement Coverage & Candidate Guidance
+ *   - Dedicated Absence & Replacement Recovery
+ * Rejects stale async responses across period switching.
+ */
+export default function Phase5RosterContainer({
+  period,
+  settings = {},
+  isAdmin = false,
+  queue: externalQueue = null,
+  runtimeFactory = draftRuntime,
+  onLifecycleStateChange = null,
+  onLiveSnapshotChange = null,
+  onRevalidationComplete = null,
+  undoDurationMs = 10000,
+  people = [],
+  allowDraft = false,
+  teamMembers = [],
+  legacyNames = [],
+  isActiveView = true,
+  verifiedLifecycle = null,
+  initialSnapshot = null,
+  isRevalidating = false
+}) {
+  const hasAuthorizedDraft = Boolean(isAdmin && isSessionTokenActive());
+  const hasInitialValid = Boolean(
+    initialSnapshot?.isLoaded &&
+    initialSnapshot?.period === period &&
+    Array.isArray(initialSnapshot?.assignments) &&
+    initialSnapshot?.assignments.length > 0 &&
+    (initialSnapshot?.state !== 'DRAFT' || hasAuthorizedDraft)
+  );
+
+  const [queue, setQueue] = useState(externalQueue);
+  const [viewMode, setViewMode] = useState('CURRENT');
+  const [loading, setLoading] = useState(() => !hasInitialValid);
+  const [lifecycle, setLifecycle] = useState(() => {
+    if (hasInitialValid && initialSnapshot.state) {
+      return {
+        state: initialSnapshot.state,
+        revision: initialSnapshot.revision,
+        draftRevision: initialSnapshot.revision
+      };
+    }
+    return null;
+  });
+  const [currentRoster, setCurrentRoster] = useState(() => {
+    if (hasInitialValid) {
+      return {
+        ok: true,
+        period: initialSnapshot.period,
+        state: initialSnapshot.state || 'DRAFT',
+        revision: initialSnapshot.revision,
+        assignments: initialSnapshot.assignments
+      };
+    }
+    return null;
+  });
+  const [plannedRoster, setPlannedRoster] = useState(null);
+  const [amendmentHistory, setAmendmentHistory] = useState(null);
+  const [absences, setAbsences] = useState([]);
+  const [replacements, setReplacements] = useState([]);
+  const [internalPeople, setInternalPeople] = useState(() => {
+    if (Array.isArray(people) && people.length > 0) return people;
+    const cached = getCachedStaffDirectory?.() || (externalQueue?.getCachedPeople?.() ?? null);
+    if (Array.isArray(cached) && cached.length > 0 && isSessionTokenActive() && isAdmin) {
+      return cached;
+    }
+    return [];
+  });
+  const [draftReadError, setDraftReadError] = useState(null);
+
+  // Error and conflict banners
+  const [actionError, setActionError] = useState(null);
+  const [revisionConflictMsg, setRevisionConflictMsg] = useState(null);
+
+  // Recovery required state
+  const [recoveryOp, setRecoveryOp] = useState(null);
+  const [isRecovering, setIsRecovering] = useState(false);
+
+  // Phase 5 Amendment modal
+  const [selectedCellForAmend, setSelectedCellForAmend] = useState(null);
+  const [isSubmittingAmend, setIsSubmittingAmend] = useState(false);
+
+  // Phase 6 Absence modal
+  const [isAbsenceModalOpen, setIsAbsenceModalOpen] = useState(false);
+  const [selectedDutyForAbsence, setSelectedDutyForAbsence] = useState(null);
+  const [isSubmittingAbsence, setIsSubmittingAbsence] = useState(false);
+
+  // Phase 6 Replacement modal
+  const [selectedDutyForReplacement, setSelectedDutyForReplacement] = useState(null);
+  const [isSubmittingReplacement, setIsSubmittingReplacement] = useState(false);
+
+  // Phase 6 Reversals
+  const [isReversingPhase6, setIsReversingPhase6] = useState(false);
+
+  // Phase 7 Entitlements state
+  const [selectedPersonForEntitlement, setSelectedPersonForEntitlement] = useState(
+    people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId || null
+  );
+  const [entitlementBalances, setEntitlementBalances] = useState({ GOFF: 0, GHKA: 0 });
+  const [entitlementTransactions, setEntitlementTransactions] = useState([]);
+  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
+  const [creditModalConfig, setCreditModalConfig] = useState(null);
+  const [selectedDutyForEntitlement, setSelectedDutyForEntitlement] = useState(null);
+  const [consumeEntitlementType, setConsumeEntitlementType] = useState('GOFF');
+  const [isSubmittingCredit, setIsSubmittingCredit] = useState(false);
+  const [isSubmittingConsume, setIsSubmittingConsume] = useState(false);
+  const [isReversingEntitlement, setIsReversingEntitlement] = useState(false);
+
+  // 10-second Undo for amendments
+  const [undoEvent, setUndoEvent] = useState(null);
+
+  // Desktop lightweight focus mode
+  const [isFocusMode, setIsFocusMode] = useState(false);
+
+  // Phase 8 Slice 2: DRAFT Fast Editing State
+  const [draftUndoStack, setDraftUndoStack] = useState([]);
+  const [draftRedoStack, setDraftRedoStack] = useState([]);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [draftSaveStatus, setDraftSaveStatus] = useState('saved');
+
+  // Monotonic generation counter to prevent stale async responses across month switching
+  const requestGenRef = useRef(0);
+
+  const mutationsEnabled = Boolean(
+    settings?.roster_v2_write_enabled && settings?.write_queue_v2_enabled && !isRevalidating
+  );
+  const readEnabled = Boolean(settings?.roster_v2_read_enabled !== false);
+
+  const [, setAdminAuthTriggerTick] = useState(0);
+  const isVerifiedAdmin = Boolean(isAdmin && getAdminSessionToken());
+  const adminEmail = getAdminEmail();
+
+  const currentRosterRef = useRef(currentRoster);
+  currentRosterRef.current = currentRoster;
+
+  const internalPeopleRef = useRef(internalPeople);
+  internalPeopleRef.current = internalPeople;
+
+  const onLiveSnapshotChangeRef = useRef(onLiveSnapshotChange);
+  onLiveSnapshotChangeRef.current = onLiveSnapshotChange;
+  const onRevalidationCompleteRef = useRef(onRevalidationComplete);
+  onRevalidationCompleteRef.current = onRevalidationComplete;
+  const lastEmittedSnapshotRef = useRef(initialSnapshot || null);
+
+  const verifiedLifecycleRef = useRef(verifiedLifecycle);
+  verifiedLifecycleRef.current = verifiedLifecycle;
+  const consumedVerifiedLifecycleRef = useRef(null);
+
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
+
+  const lastAuthTokenRef = useRef(getAdminSessionToken());
+
+  // Check for any unresolved operations needing recovery
+  const syncRecoveryState = useCallback((q, p) => {
+    if (!q || !p) return;
+    try {
+      const qView = q.view?.();
+      const ops = qView?.operations || [];
+      const rec = ops.find(o => o.status === 'RECOVERY_REQUIRED' && !o.everConfirmed);
+      setRecoveryOp(rec || null);
+    } catch (_) {}
+  }, []);
+
+  // Unified reload function
+  const loadAuthoritativeData = useCallback(async (targetQueue, targetPeriod, gen, options = {}) => {
+    if (!targetQueue || !targetPeriod) return;
+    try {
+      const currentToken = getAdminSessionToken();
+      if (currentToken) {
+        setDraftReadError((prev) => (prev === 'AUTHORIZATION_REQUIRED' ? null : prev));
+      }
+
+      // 1. Fetch or resolve lifecycle state
+      const forceLifecycleRefresh = Boolean(options?.forceLifecycleRefresh);
+      const candidateVerified = verifiedLifecycleRef.current;
+      const canReuseVerified = Boolean(
+        !forceLifecycleRefresh &&
+        !candidateVerified?.isRevalidating &&
+        consumedVerifiedLifecycleRef.current !== targetPeriod &&
+        candidateVerified &&
+        candidateVerified.period === targetPeriod &&
+        candidateVerified.isEnrolled === true &&
+        candidateVerified.state &&
+        ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(String(candidateVerified.state).toUpperCase()) &&
+        candidateVerified.revision !== null &&
+        candidateVerified.revision !== undefined &&
+        candidateVerified.revision !== '' &&
+        Number.isFinite(Number(candidateVerified.revision))
+      );
+
+      let state;
+      let revision;
+      let draftRevision;
+
+      if (canReuseVerified) {
+        consumedVerifiedLifecycleRef.current = targetPeriod;
+        state = String(candidateVerified.state).toUpperCase();
+        revision = Number(candidateVerified.revision);
+        draftRevision = Number.isFinite(Number(candidateVerified.draftRevision))
+          ? Number(candidateVerified.draftRevision)
+          : (revision || 0);
+        setLifecycle({ state, revision, draftRevision });
+      } else {
+        const lcRes = await targetQueue.getPeriodLifecycle(targetPeriod).catch(() => ({ ok: false }));
+        if (gen !== requestGenRef.current) return;
+
+        if (!lcRes?.ok || !lcRes?.period) {
+          const key = `draft:${targetPeriod}`;
+          const cachedView = targetQueue.view?.(key);
+          const hasVerifiedBaseline = (cachedView?.baseline?.checksum != null) ||
+            (currentRosterRef.current && currentRosterRef.current.period === targetPeriod && currentRosterRef.current.ok);
+
+          if (hasVerifiedBaseline) {
+            setActionError('Unable to revalidate period lifecycle');
+            return;
+          }
+
+          setLifecycle(null);
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setAmendmentHistory(null);
+          setAbsences([]);
+          setReplacements([]);
+          const isPostCutover = Boolean(targetPeriod && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(targetPeriod) && targetPeriod >= '2026-11');
+          if (!isPostCutover) {
+            onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: false, state: null, revision: null, draftRevision: null, error: null, checked: true });
+          } else {
+            setDraftReadError('LIFECYCLE_READ_FAILED');
+            setActionError('Unable to verify period lifecycle');
+            onLifecycleStateChange?.({
+              period: targetPeriod,
+              isEnrolled: false,
+              state: null,
+              revision: null,
+              draftRevision: null,
+              error: 'LIFECYCLE_READ_FAILED',
+              checked: true
+            });
+          }
+          return;
+        }
+
+        const periodRecord = lcRes.period;
+        state = String(periodRecord.State || 'DRAFT').toUpperCase();
+        revision = Number.isFinite(Number(periodRecord.Revision)) ? Number(periodRecord.Revision) : 0;
+        draftRevision = Number.isFinite(Number(periodRecord.DraftRevision)) ? Number(periodRecord.DraftRevision) : (revision || 0);
+        setLifecycle({ state, revision, draftRevision });
+        onLifecycleStateChange?.({ period: targetPeriod, isEnrolled: true, state, revision, draftRevision, error: null, checked: true });
+      }
+
+      // If DRAFT, load authoritative draft state from draft protocol
+      if (state === 'DRAFT') {
+        if (!allowDraft) {
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setAmendmentHistory(null);
+          setAbsences([]);
+          setReplacements([]);
+          return;
+        }
+
+        const key = `draft:${targetPeriod}`;
+        let draftLoadError = null;
+        let view = null;
+
+        try {
+          if (typeof targetQueue.refresh === 'function') {
+            await targetQueue.refresh(key);
+          } else if (typeof targetQueue.repository?.read === 'function') {
+            const res = await targetQueue.repository.read(key);
+            if (!res?.ok) throw new Error(res?.error?.code || 'DRAFT_READ_FAILED');
+          }
+          view = targetQueue.view?.(key);
+        } catch (err) {
+          draftLoadError = err.code || err.message || 'DRAFT_READ_FAILED';
+        }
+
+        if (gen !== requestGenRef.current) return;
+
+        if (draftLoadError) {
+          const isRetryable = draftLoadError === 'LOCK_BUSY' || draftLoadError === 'TRANSIENT_BACKEND' || draftLoadError === 'DRAFT_READ_FAILED' || draftLoadError === 'NETWORK_ERROR';
+          const cachedView = targetQueue.view?.(key);
+          const hasVerifiedBaseline = (cachedView?.baseline?.checksum != null) ||
+            (currentRosterRef.current && currentRosterRef.current.period === targetPeriod && currentRosterRef.current.ok);
+
+          if (isRetryable && hasVerifiedBaseline) {
+            // Part D: Preserve last verified snapshot during retryable refresh failure
+            setDraftReadError(null);
+            setDraftSaveStatus('saved');
+            setActionError(`Failed to revalidate draft: ${draftLoadError}`);
+            if (!currentRosterRef.current || currentRosterRef.current.period !== targetPeriod) {
+              const activePeople = (people && people.length > 0) ? people : internalPeopleRef.current;
+              const assignments = draftCellsToCurrentAssignments({
+                cells: cachedView?.cells || {},
+                people: activePeople
+              });
+              setCurrentRoster({
+                ok: true,
+                period: targetPeriod,
+                state: 'DRAFT',
+                revision: cachedView?.baseline?.revision ?? draftRevision,
+                assignments
+              });
+            }
+            syncRecoveryState(targetQueue, targetPeriod);
+            // Mutations stay blocked while revalidation failed
+            return;
+          }
+
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setAmendmentHistory(null);
+          setAbsences([]);
+          setReplacements([]);
+          setDraftReadError(draftLoadError);
+          if (draftLoadError === 'AUTHORIZATION_REQUIRED') {
+            clearAdminSessionToken();
+            setDraftSaveStatus(null);
+            setActionError(null);
+          } else {
+            setDraftSaveStatus('error');
+            setActionError(`Failed to load draft: ${draftLoadError}`);
+          }
+          syncRecoveryState(targetQueue, targetPeriod);
+          onRevalidationCompleteRef.current?.(targetPeriod);
+          return;
+        }
+
+        setDraftReadError(null);
+        let activePeople = (people && people.length > 0) ? people : internalPeopleRef.current;
+        if (!activePeople || activePeople.length === 0) {
+          const cached = getCachedStaffDirectory?.() || targetQueue?.getCachedPeople?.();
+          if (Array.isArray(cached) && cached.length > 0) {
+            activePeople = cached;
+            internalPeopleRef.current = cached;
+            setInternalPeople(cached);
+          }
+        }
+        if ((!activePeople || activePeople.length === 0) && targetQueue?.repository?.schema) {
+          try {
+            const schema = await targetQueue.repository.schema();
+            if (gen !== requestGenRef.current) return;
+            if (schema?.ok && Array.isArray(schema.people)) {
+              activePeople = schema.people;
+              internalPeopleRef.current = schema.people;
+              setInternalPeople(schema.people);
+              if (typeof setCachedStaffDirectory === 'function') {
+                setCachedStaffDirectory(schema.people);
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (gen !== requestGenRef.current) return;
+
+        const assignments = draftCellsToCurrentAssignments({
+          cells: view?.cells || {},
+          people: activePeople
+        });
+
+        setCurrentRoster({
+          ok: true,
+          period: targetPeriod,
+          state: 'DRAFT',
+          revision: view?.baseline?.revision ?? draftRevision,
+          assignments
+        });
+        setPlannedRoster(null);
+        setAmendmentHistory(null);
+        setAbsences([]);
+        setReplacements([]);
+        setDraftSaveStatus('saved');
+        syncRecoveryState(targetQueue, targetPeriod);
+        onRevalidationCompleteRef.current?.(targetPeriod);
+        return;
+      }
+
+      // 2. Concurrently fetch Current, Planned, Changes, Absences, Replacements, and Entitlements
+      const personForEntitlements = selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId;
+      const shouldFetchEntitlements = isVerifiedAdmin && Boolean(personForEntitlements);
+      const [currRes, planRes, histRes, absRes, replRes, balRes, txRes] = await Promise.all([
+        targetQueue.getCurrentRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
+        targetQueue.getPlannedRoster(targetPeriod).catch((e) => ({ ok: false, error: e })),
+        targetQueue.getAmendmentHistory(targetPeriod).catch((e) => ({ ok: false, error: e })),
+        targetQueue.getAbsences?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, absences: [] }),
+        targetQueue.getReplacements?.(targetPeriod).catch((e) => ({ ok: false, error: e })) || Promise.resolve({ ok: true, replacements: [] }),
+        shouldFetchEntitlements && targetQueue.getEntitlementBalances
+          ? targetQueue.getEntitlementBalances({ personId: personForEntitlements }).catch((e) => ({ ok: false, error: e }))
+          : Promise.resolve({ ok: true, balances: { GOFF: 0, GHKA: 0 } }),
+        shouldFetchEntitlements && targetQueue.getEntitlementTransactions
+          ? targetQueue.getEntitlementTransactions({ periodId: targetPeriod, ...(personForEntitlements ? { personId: personForEntitlements } : {}) }).catch((e) => ({ ok: false, error: e }))
+          : Promise.resolve({ ok: true, transactions: [] })
+      ]);
+
+      if (gen !== requestGenRef.current) return;
+
+      if (currRes?.ok) {
+        setCurrentRoster(currRes);
+      }
+      if (planRes?.ok) {
+        setPlannedRoster(planRes);
+      }
+      if (histRes?.ok) {
+        setAmendmentHistory(histRes);
+      }
+      if (absRes?.ok) {
+        setAbsences(absRes.absences || []);
+      }
+      if (replRes?.ok) {
+        setReplacements(replRes.replacements || []);
+      }
+      if (balRes?.ok && balRes.balances) {
+        setEntitlementBalances(balRes.balances);
+      }
+      if (txRes?.ok && txRes.transactions) {
+        setEntitlementTransactions(txRes.transactions);
+      }
+
+      syncRecoveryState(targetQueue, targetPeriod);
+      onRevalidationCompleteRef.current?.(targetPeriod);
+    } catch (err) {
+      if (gen === requestGenRef.current) {
+        setActionError(err.message || 'Failed to load authoritative roster data');
+        onRevalidationCompleteRef.current?.(targetPeriod);
+      }
+    }
+  }, [onLifecycleStateChange, syncRecoveryState]);
+
+  const handleGoogleVerify = useCallback(async () => {
+    setActionError(null);
+    try {
+      await startGoogleCodeAuth({
+        onSuccess: async () => {
+          setAdminAuthTriggerTick(t => t + 1);
+          setDraftReadError((prev) => (prev === 'AUTHORIZATION_REQUIRED' ? null : prev));
+          const activeQueue = queueRef.current || queue;
+          if (activeQueue) {
+            requestGenRef.current += 1;
+            const currentGen = requestGenRef.current;
+            setLoading(true);
+            try {
+              await loadAuthoritativeData(activeQueue, period, currentGen, { forceLifecycleRefresh: true });
+            } finally {
+              if (currentGen === requestGenRef.current) {
+                setLoading(false);
+              }
+            }
+          }
+        },
+        onError: (err) => {
+          setActionError(formatAdminAuthError(err));
+        }
+      });
+    } catch (err) {
+      setActionError(formatAdminAuthError(err));
+    }
+  }, [queue, period, loadAuthoritativeData]);
+
+  // Initial and period change effect
+  useEffect(() => {
+    let live = true;
+    requestGenRef.current += 1;
+    const currentGen = requestGenRef.current;
+    consumedVerifiedLifecycleRef.current = null;
+
+    // Reset month-scoped state immediately on month switch
+    const hasInitial = Boolean(
+      initialSnapshot?.isLoaded &&
+      initialSnapshot?.period === period &&
+      Array.isArray(initialSnapshot?.assignments) &&
+      initialSnapshot?.assignments.length > 0
+    );
+
+    if (!hasInitial) {
+      setLoading(true);
+      setCurrentRoster(null);
+      setPlannedRoster(null);
+      setAmendmentHistory(null);
+      setAbsences([]);
+      setReplacements([]);
+      setLifecycle(null);
+      setDraftSaveStatus(null);
+    } else {
+      setLoading(false);
+      setCurrentRoster((prev) => {
+        if (prev?.period === period && prev?.assignments?.length > 0) return prev;
+        return {
+          ok: true,
+          period: initialSnapshot.period,
+          state: initialSnapshot.state || 'DRAFT',
+          revision: initialSnapshot.revision,
+          assignments: initialSnapshot.assignments
+        };
+      });
+      if (initialSnapshot.state) {
+        setLifecycle((prev) => prev || {
+          state: initialSnapshot.state,
+          revision: initialSnapshot.revision,
+          draftRevision: initialSnapshot.revision
+        });
+      }
+      setDraftSaveStatus('saved');
+    }
+
+    setActionError(null);
+    setRevisionConflictMsg(null);
+    setSelectedCellForAmend(null);
+    setIsAbsenceModalOpen(false);
+    setSelectedDutyForAbsence(null);
+    setSelectedDutyForReplacement(null);
+    setSelectedDutyForEntitlement(null);
+    setIsCreditModalOpen(false);
+    setCreditModalConfig(null);
+    setUndoEvent(null);
+    setViewMode((prev) => (prev === 'ENTITLEMENTS' ? 'ENTITLEMENTS' : 'CURRENT'));
+    setRecoveryOp(null);
+    setDraftUndoStack([]);
+    setDraftRedoStack([]);
+    setIsSavingDraft(false);
+    setDraftReadError(null);
+
+    (async () => {
+      try {
+        // Automatically redeem any one-time OAuth handoff code in URL if present
+        try {
+          const redeemed = await handleUrlAuthHandoff({
+            baseUrl: settings?.apps_script_url || import.meta.env?.VITE_APPS_SCRIPT_URL
+          });
+          if (redeemed?.ok && live) {
+            setAdminAuthTriggerTick((t) => t + 1);
+          }
+        } catch (authErr) {
+          if (live) {
+            setActionError(`Administrator verification failed: ${authErr.message || authErr}`);
+          }
+        }
+
+        const q = externalQueue || await runtimeFactory(settings);
+        if (!live || currentGen !== requestGenRef.current) return;
+        queueRef.current = q;
+        setQueue(q);
+        await q.start?.();
+        if (!live || currentGen !== requestGenRef.current) return;
+
+        await loadAuthoritativeData(q, period, currentGen);
+      } catch (err) {
+        if (live && currentGen === requestGenRef.current) {
+          setActionError(err.message || 'Queue initialization failed');
+        }
+      } finally {
+        if (live && currentGen === requestGenRef.current) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      live = false;
+      requestGenRef.current += 1;
+    };
+  }, [period, settings, externalQueue, runtimeFactory, loadAuthoritativeData]);
+
+  // Subscribe to in-memory administrator authentication changes
+  useEffect(() => {
+    return subscribeAdminAuth(async () => {
+      setAdminAuthTriggerTick((t) => t + 1);
+      const activeToken = getAdminSessionToken();
+
+      if (activeToken === lastAuthTokenRef.current) {
+        return;
+      }
+      lastAuthTokenRef.current = activeToken;
+
+      if (!activeToken || !isAdmin) {
+        // Session expired, logged out, or non-admin context: fail closed immediately for DRAFT mode
+        if (lifecycle?.state === 'DRAFT' || (!lifecycle && period >= '2026-11')) {
+          setCurrentRoster(null);
+          setPlannedRoster(null);
+          setInternalPeople([]);
+          setDraftReadError('AUTHORIZATION_REQUIRED');
+          setDraftSaveStatus(null);
+          setEntitlementBalances(null);
+          setEntitlementTransactions([]);
+        }
+        return;
+      }
+
+      // Valid session established / redeemed!
+      // Immediately clear stale authorization error
+      setDraftReadError((prev) => (prev === 'AUTHORIZATION_REQUIRED' ? null : prev));
+
+      const activeQueue = queueRef.current || queue;
+      if (activeQueue) {
+        setLoading(true);
+        requestGenRef.current += 1;
+        const gen = requestGenRef.current;
+        try {
+          await loadAuthoritativeData(activeQueue, period, gen, { forceLifecycleRefresh: true });
+        } finally {
+          if (gen === requestGenRef.current) {
+            setLoading(false);
+          }
+        }
+      }
+    });
+  }, [queue, period, lifecycle?.state, loadAuthoritativeData, isAdmin]);
+
+  // Immediately fail closed if role switches away from Admin while mounted
+  useEffect(() => {
+    if (!isAdmin) {
+      if (lifecycle?.state === 'DRAFT' || (!lifecycle && period >= '2026-11')) {
+        setCurrentRoster(null);
+        setPlannedRoster(null);
+        setInternalPeople([]);
+        setDraftReadError('AUTHORIZATION_REQUIRED');
+        setDraftSaveStatus(null);
+        setEntitlementBalances(null);
+        setEntitlementTransactions([]);
+      }
+    }
+  }, [isAdmin, lifecycle?.state, period]);
+
+  // Synchronize lifecycle state when parent provides a verifiedLifecycle
+  const prevVerifiedPeriodRef = useRef(period);
+  const prevVerifiedStateRef = useRef(verifiedLifecycle?.state);
+
+  useEffect(() => {
+    if (prevVerifiedPeriodRef.current !== period) {
+      prevVerifiedPeriodRef.current = period;
+      prevVerifiedStateRef.current = verifiedLifecycle?.state;
+    }
+
+    if (
+      verifiedLifecycle &&
+      verifiedLifecycle.period === period &&
+      verifiedLifecycle.isEnrolled === true &&
+      verifiedLifecycle.state &&
+      ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(String(verifiedLifecycle.state).toUpperCase()) &&
+      verifiedLifecycle.revision !== null &&
+      verifiedLifecycle.revision !== undefined &&
+      verifiedLifecycle.revision !== '' &&
+      Number.isFinite(Number(verifiedLifecycle.revision))
+    ) {
+      const state = String(verifiedLifecycle.state).toUpperCase();
+      const revision = Number(verifiedLifecycle.revision);
+      const draftRevision = Number.isFinite(Number(verifiedLifecycle.draftRevision))
+        ? Number(verifiedLifecycle.draftRevision)
+        : (revision || 0);
+
+      const stateChanged = Boolean(
+        prevVerifiedStateRef.current &&
+        prevVerifiedStateRef.current !== state
+      );
+      prevVerifiedStateRef.current = state;
+
+      setLifecycle((prev) => {
+        if (prev?.state === state && prev?.revision === revision && prev?.draftRevision === draftRevision) {
+          return prev;
+        }
+        return { state, revision, draftRevision };
+      });
+
+      if (stateChanged && queue) {
+        loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      }
+    }
+  }, [verifiedLifecycle, period, queue, loadAuthoritativeData]);
+
+  // Read-only live snapshot bridge effect
+  useEffect(() => {
+    if (!onLiveSnapshotChangeRef.current) return;
+
+    const isCurrentPeriod = Boolean(currentRoster && currentRoster.period === period);
+    const isStateLoaded = !loading && !draftReadError && Boolean(isCurrentPeriod && currentRoster?.ok);
+
+    const snapshot = {
+      period,
+      state: isStateLoaded
+        ? String(lifecycle?.state || currentRoster?.state || 'DRAFT').toUpperCase()
+        : (lifecycle?.state ? String(lifecycle.state).toUpperCase() : null),
+      revision: isStateLoaded
+        ? (currentRoster?.revision ?? lifecycle?.revision ?? 0)
+        : (lifecycle?.revision ?? null),
+      assignments: isStateLoaded ? (currentRoster?.assignments || []) : [],
+      isLoaded: isStateLoaded,
+      isSaving: Boolean(isSavingDraft),
+      draftSaveStatus: draftSaveStatus || (isStateLoaded ? 'saved' : null)
+    };
+
+    const prev = lastEmittedSnapshotRef.current;
+    let isSame = false;
+    if (prev) {
+      if (
+        prev.period === snapshot.period &&
+        prev.state === snapshot.state &&
+        prev.revision === snapshot.revision &&
+        prev.isLoaded === snapshot.isLoaded &&
+        prev.isSaving === snapshot.isSaving &&
+        prev.draftSaveStatus === snapshot.draftSaveStatus
+      ) {
+        if (prev.assignments === snapshot.assignments) {
+          isSame = true;
+        } else if (
+          Array.isArray(prev.assignments) &&
+          Array.isArray(snapshot.assignments) &&
+          prev.assignments.length === snapshot.assignments.length
+        ) {
+          isSame = prev.assignments.every((a, i) => {
+            const b = snapshot.assignments[i];
+            return (
+              a === b ||
+              (a?.assignmentId === b?.assignmentId &&
+                a?.personId === b?.personId &&
+                a?.date === b?.date &&
+                a?.shiftCode === b?.shiftCode &&
+                a?.dutyDomain === b?.dutyDomain &&
+                a?.rawShift === b?.rawShift)
+            );
+          });
+        }
+      }
+    }
+
+    if (!isSame) {
+      lastEmittedSnapshotRef.current = snapshot;
+      onLiveSnapshotChangeRef.current(snapshot);
+    }
+  }, [
+    period,
+    loading,
+    draftReadError,
+    lifecycle,
+    currentRoster,
+    isSavingDraft,
+    draftSaveStatus,
+    onLiveSnapshotChange
+  ]);
+
+  // Handle Phase 5 amendment submission (ADMIN_CORRECTION or SWAP)
+  const handleAmendmentSubmit = useCallback(async (payload) => {
+    if (!queue || isSubmittingAmend || isRevalidating) return;
+    setIsSubmittingAmend(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      const res = await queue.amend(period, payload);
+      setSelectedCellForAmend(null);
+
+      const confirmedEventId = res?.eventId || res?.EventId;
+      if (confirmedEventId) {
+        const desc = payload.eventType === 'SWAP'
+          ? 'Change confirmed: atomic shift swap'
+          : `Change confirmed: assignment changed to ${payload.afterAssignments?.[0]?.shiftCode || 'OFF'}`;
+
+        setUndoEvent({
+          eventId: confirmedEventId,
+          periodId: period,
+          description: desc
+        });
+      }
+
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSubmittingAmend(false);
+    }
+  }, [queue, isSubmittingAmend, isRevalidating, period, loadAuthoritativeData]);
+
+  // Handle Phase 5 event reversal
+  const handleReverseEvent = useCallback(async (eventId, adminNote = '') => {
+    if (!queue || !eventId || isRevalidating) return;
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.reverseAmendment(period, eventId, { adminNote });
+      if (undoEvent && undoEvent.eventId === eventId) {
+        setUndoEvent(null);
+      }
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      }
+      throw err;
+    }
+  }, [queue, period, undoEvent, isRevalidating, loadAuthoritativeData]);
+
+  // Handle Phase 6 Absence Submission
+  const handleAbsenceSubmit = useCallback(async (payload) => {
+    if (!queue || isSubmittingAbsence || isRevalidating) return;
+    setIsSubmittingAbsence(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.createAbsence(period, payload);
+      setIsAbsenceModalOpen(false);
+      setSelectedDutyForAbsence(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSubmittingAbsence(false);
+    }
+  }, [queue, isSubmittingAbsence, isRevalidating, period, loadAuthoritativeData]);
+
+  // Handle Phase 6 Replacement Submission
+  const handleReplacementSubmit = useCallback(async (payload) => {
+    if (!queue || isSubmittingReplacement || isRevalidating) return;
+    setIsSubmittingReplacement(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.createReplacement(period, payload);
+      setSelectedDutyForReplacement(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSubmittingReplacement(false);
+    }
+  }, [queue, isSubmittingReplacement, isRevalidating, period, loadAuthoritativeData]);
+
+  // Handle Phase 6 Absence Reversal
+  const handleReverseAbsence = useCallback(async (absenceId, adminNote = '') => {
+    if (!queue || !absenceId || isReversingPhase6 || isRevalidating) return;
+    setIsReversingPhase6(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.reverseAbsence(period, absenceId, { adminNote });
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+      throw err;
+    } finally {
+      setIsReversingPhase6(false);
+    }
+  }, [queue, period, isReversingPhase6, isRevalidating, loadAuthoritativeData]);
+
+  // Handle Phase 6 Replacement Reversal
+  const handleReverseReplacement = useCallback(async (replacementId, options = {}) => {
+    if (!queue || !replacementId || isReversingPhase6 || isRevalidating) return;
+    setIsReversingPhase6(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+
+    try {
+      await queue.reverseReplacement(period, replacementId, options);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+      throw err;
+    } finally {
+      setIsReversingPhase6(false);
+    }
+  }, [queue, period, isReversingPhase6, isRevalidating, loadAuthoritativeData]);
+
+  // Handle Dedicated Recovery
+  const handleRetryRecovery = useCallback(async (opId, opType) => {
+    if (!queue || !opId || isRecovering) return;
+    setIsRecovering(true);
+    setActionError(null);
+    try {
+      if (opType === 'ABSENCE_CREATE' || opType === 'ABSENCE_REVERSE') {
+        await queue.recoverAbsence(opId);
+      } else if (opType === 'REPLACEMENT_CREATE' || opType === 'REPLACEMENT_REVERSE') {
+        await queue.recoverReplacement(opId);
+      } else if (['ENTITLEMENT_EARN_GOFF', 'ENTITLEMENT_EARN_GHKA', 'ENTITLEMENT_CREDIT_MANUAL', 'ENTITLEMENT_CONSUME', 'ENTITLEMENT_CREDIT_REVERSAL', 'ENTITLEMENT_CONSUMPTION_REVERSAL'].includes(opType)) {
+        await queue.recoverEntitlement(opId);
+      } else {
+        await queue.retry(`draft:${period}`, opId);
+      }
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+      setRecoveryOp(null);
+    } catch (err) {
+      setActionError(err.message || 'Recovery attempt failed');
+    } finally {
+      setIsRecovering(false);
+    }
+  }, [queue, period, isRecovering, loadAuthoritativeData]);
+
+  // Handle selecting another person in EntitlementPanel
+  const handleSelectPersonForEntitlement = useCallback(async (pId) => {
+    setSelectedPersonForEntitlement(pId);
+    if (!isVerifiedAdmin || !queue || !pId) return;
+    try {
+      const [bRes, tRes] = await Promise.all([
+        queue.getEntitlementBalances?.({ personId: pId }).catch(() => null),
+        queue.getEntitlementTransactions?.({ personId: pId, periodId: period }).catch(() => null)
+      ]);
+      if (bRes?.ok && bRes.balances) setEntitlementBalances(bRes.balances);
+      if (tRes?.ok && tRes.transactions) setEntitlementTransactions(tRes.transactions);
+    } catch (_) {}
+  }, [isVerifiedAdmin, queue, period]);
+
+  // Handle opening consume modal from Current duty cell
+  const handleOpenConsumeModal = useCallback(async (cellData, type) => {
+    setConsumeEntitlementType(type);
+    setSelectedDutyForEntitlement(cellData);
+    if (cellData.personId) {
+      setSelectedPersonForEntitlement(cellData.personId);
+      if (queue && queue.getEntitlementBalances) {
+        try {
+          const balRes = await queue.getEntitlementBalances({ personId: cellData.personId });
+          if (balRes?.ok && balRes.balances) {
+            setEntitlementBalances(balRes.balances);
+          }
+        } catch (_) {}
+      }
+    }
+  }, [queue]);
+
+  // Handle Phase 7 Earn GOFF Submission
+  const handleEarnGoff = useCallback(async ({ personId: targetPId, date, adminNote }) => {
+    if (!queue || isSubmittingCredit) return;
+    setIsSubmittingCredit(true);
+    setActionError(null);
+    try {
+      await queue.earnGoff(period, { personId: targetPId, date, adminNote });
+      setIsCreditModalOpen(false);
+      setCreditModalConfig(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      setActionError(err.message || err.code);
+    } finally {
+      setIsSubmittingCredit(false);
+    }
+  }, [queue, isSubmittingCredit, period, loadAuthoritativeData]);
+
+  // Handle Phase 7 Earn GHKA Submission
+  const handleEarnGhka = useCallback(async ({ personId: targetPId, date, adminNote }) => {
+    if (!queue || isSubmittingCredit) return;
+    setIsSubmittingCredit(true);
+    setActionError(null);
+    try {
+      await queue.earnGhka(period, { personId: targetPId, date, adminNote });
+      setIsCreditModalOpen(false);
+      setCreditModalConfig(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      setActionError(err.message || err.code);
+    } finally {
+      setIsSubmittingCredit(false);
+    }
+  }, [queue, isSubmittingCredit, period, loadAuthoritativeData]);
+
+  // Handle Phase 7 Manual Credit Submission
+  const handleCreditManual = useCallback(async ({ personId: targetPId, entitlementType, amount, effectiveDate, reasonCode, adminNote }) => {
+    if (!queue || isSubmittingCredit) return;
+    setIsSubmittingCredit(true);
+    setActionError(null);
+    try {
+      await queue.creditManual(period, { personId: targetPId, entitlementType, amount: 1, effectiveDate, reasonCode, adminNote });
+      setIsCreditModalOpen(false);
+      setCreditModalConfig(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      setActionError(err.message || err.code);
+    } finally {
+      setIsSubmittingCredit(false);
+    }
+  }, [queue, isSubmittingCredit, period, loadAuthoritativeData]);
+
+  // Handle Phase 7 Entitlement Consumption
+  const handleConsumeEntitlement = useCallback(async ({ personId: targetPId, entitlementType, date, expectedRevision: expRev, adminNote }) => {
+    if (!queue || isSubmittingConsume) return;
+    const currentState = String(lifecycle?.state || '').toUpperCase();
+    if (currentState === 'CLOSED') {
+      setActionError('Period is CLOSED and read-only');
+      return;
+    }
+    setIsSubmittingConsume(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+    try {
+      await queue.consumeEntitlement(period, { personId: targetPId, entitlementType, date, expectedRevision: expRev, adminNote });
+      setSelectedDutyForEntitlement(null);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsSubmittingConsume(false);
+    }
+  }, [queue, isSubmittingConsume, period, lifecycle, loadAuthoritativeData]);
+
+  // Handle Phase 7 Consumption Reversal
+  const handleReverseConsumption = useCallback(async (tx) => {
+    if (!queue || isReversingEntitlement) return;
+    setIsReversingEntitlement(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+    try {
+      const txId = tx.TransactionId || tx.transactionId;
+      await queue.reverseConsumption(period, txId, { expectedRevision: lifecycle?.revision });
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsReversingEntitlement(false);
+    }
+  }, [queue, period, lifecycle, isReversingEntitlement, loadAuthoritativeData]);
+
+  // Handle Phase 7 Credit Reversal
+  const handleReverseCredit = useCallback(async (tx) => {
+    if (!queue || isReversingEntitlement) return;
+    setIsReversingEntitlement(true);
+    setActionError(null);
+    setRevisionConflictMsg(null);
+    try {
+      const txId = tx.TransactionId || tx.transactionId;
+      await queue.reverseCredit(period, txId);
+      await loadAuthoritativeData(queue, period, requestGenRef.current);
+    } catch (err) {
+      const code = err.code || err.message;
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        await loadAuthoritativeData(queue, period, requestGenRef.current);
+      } else {
+        setActionError(err.message || code);
+      }
+    } finally {
+      setIsReversingEntitlement(false);
+    }
+  }, [queue, period, isReversingEntitlement, loadAuthoritativeData]);
+
+  // Phase 8 Slice 2: Handle single cell edit in DRAFT
+  const handleDraftCellChange = useCallback(async (personId, date, dutyDomain, newShiftCode) => {
+    if (!queue || lifecycle?.state !== 'DRAFT' || isRevalidating) return;
+    setIsSavingDraft(true);
+    setDraftSaveStatus('saving');
+    setActionError(null);
+
+    const existing = (currentRoster?.assignments || []).find(
+      a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+    );
+    const oldShift = existing?.shiftCode || '';
+
+    // Optimistic local update
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      const idx = assignments.findIndex(
+        a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+      );
+      if (idx !== -1) {
+        assignments[idx] = { ...assignments[idx], shiftCode: newShiftCode };
+      } else {
+        assignments.push({
+          assignmentId: `draft-asg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          personId,
+          date,
+          dutyDomain: dutyDomain || 'MO',
+          shiftCode: newShiftCode
+        });
+      }
+      return { ...prev, assignments };
+    });
+
+    setDraftUndoStack(prev => [...prev, {
+      type: 'SINGLE',
+      previous: [{ personId, date, dutyDomain, shiftCode: oldShift }],
+      next: [{ personId, date, dutyDomain, shiftCode: newShiftCode }]
+    }]);
+    setDraftRedoStack([]);
+
+    try {
+      if (typeof queue.enqueue === 'function') {
+        const patch = {
+          personId,
+          date,
+          assignments: newShiftCode ? [{ rawShift: newShiftCode, shiftCode: newShiftCode, dutyDomain }] : []
+        };
+        await queue.enqueue(`draft:${period}`, [patch]);
+      } else if (typeof queue.amend === 'function') {
+        await queue.amend(period, { personId, date, dutyDomain, targetShiftCode: newShiftCode });
+      }
+      setDraftSaveStatus('saved');
+    } catch (err) {
+      const code = err.code || err.message;
+      setDraftUndoStack(prev => prev.slice(0, -1));
+
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+      } else {
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to save roster change');
+      }
+
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      syncRecoveryState(queue, period);
+    } finally {
+      setIsSavingDraft(false);
+    }
+  }, [queue, lifecycle, currentRoster, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
+
+  // Phase 8 Slice 2: Handle bulk shift edit in DRAFT
+  const handleBulkDraftChange = useCallback(async (cellsWithShift) => {
+    if (!queue || lifecycle?.state !== 'DRAFT' || !cellsWithShift.length || isRevalidating) return;
+    setIsSavingDraft(true);
+    setDraftSaveStatus('saving');
+    setActionError(null);
+
+    const previous = [];
+    const next = [];
+
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      cellsWithShift.forEach(({ personId, date, dutyDomain, shiftCode }) => {
+        const idx = assignments.findIndex(
+          a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+        );
+        const old = idx !== -1 ? assignments[idx].shiftCode : '';
+        previous.push({ personId, date, dutyDomain, shiftCode: old });
+        next.push({ personId, date, dutyDomain, shiftCode });
+
+        if (idx !== -1) {
+          assignments[idx] = { ...assignments[idx], shiftCode };
+        } else {
+          assignments.push({
+            assignmentId: `draft-asg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            personId,
+            date,
+            dutyDomain: dutyDomain || 'MO',
+            shiftCode
+          });
+        }
+      });
+      return { ...prev, assignments };
+    });
+
+    setDraftUndoStack(prev => [...prev, { type: 'BULK', previous, next }]);
+    setDraftRedoStack([]);
+
+    try {
+      if (typeof queue.enqueue === 'function') {
+        const patches = cellsWithShift.map(({ personId, date, dutyDomain, shiftCode }) => ({
+          personId,
+          date,
+          assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
+        }));
+        await queue.enqueue(`draft:${period}`, patches);
+      } else if (typeof queue.amend === 'function') {
+        for (const c of cellsWithShift) {
+          await queue.amend(period, { personId: c.personId, date: c.date, dutyDomain: c.dutyDomain, targetShiftCode: c.shiftCode });
+        }
+      }
+      setDraftSaveStatus('saved');
+    } catch (err) {
+      const code = err.code || err.message;
+      setDraftUndoStack(prev => prev.slice(0, -1));
+
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+      } else {
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to apply bulk roster change');
+      }
+
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      syncRecoveryState(queue, period);
+    } finally {
+      setIsSavingDraft(false);
+    }
+  }, [queue, lifecycle, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
+
+  // Phase 8 Slice 2: Handle undo in DRAFT
+  const handleUndoDraft = useCallback(async () => {
+    if (draftUndoStack.length === 0 || lifecycle?.state !== 'DRAFT' || isRevalidating) return;
+    const lastOp = draftUndoStack[draftUndoStack.length - 1];
+
+    // Concurrency check: Ensure current state matches what this operation produced (lastOp.next)
+    let hasConflict = lastOp.next.some(item => {
+      const cur = (currentRoster?.assignments || []).find(
+        a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+      );
+      return cur && cur.shiftCode !== item.shiftCode;
+    });
+
+    if (!hasConflict && queue?.getCurrentRoster) {
+      try {
+        const authRes = await queue.getCurrentRoster(period);
+        if (authRes?.ok && authRes.assignments) {
+          hasConflict = lastOp.next.some(item => {
+            const auth = authRes.assignments.find(
+              a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+            );
+            return auth && auth.shiftCode !== item.shiftCode;
+          });
+        }
+      } catch (_) {}
+    }
+
+    if (hasConflict) {
+      setRevisionConflictMsg('Cannot undo: roster was modified by another change. Refreshing latest version.');
+      if (typeof loadAuthoritativeData === 'function') {
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      }
+      return;
+    }
+
+    setDraftUndoStack(prev => prev.slice(0, -1));
+    setDraftRedoStack(prev => [...prev, lastOp]);
+
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      lastOp.previous.forEach(({ personId, date, dutyDomain, shiftCode }) => {
+        const idx = assignments.findIndex(
+          a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+        );
+        if (idx !== -1) {
+          assignments[idx] = { ...assignments[idx], shiftCode };
+        }
+      });
+      return { ...prev, assignments };
+    });
+
+    try {
+      if (typeof queue?.enqueue === 'function') {
+        const patches = lastOp.previous.map(({ personId, date, dutyDomain, shiftCode }) => ({
+          personId,
+          date,
+          assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
+        }));
+        await queue.enqueue(`draft:${period}`, patches);
+        setDraftSaveStatus('saved');
+      }
+    } catch (err) {
+      const code = err.code || err.message;
+      setDraftUndoStack(prev => [...prev, lastOp]);
+      setDraftRedoStack(prev => prev.slice(0, -1));
+
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+      } else {
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to persist undo');
+      }
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      syncRecoveryState(queue, period);
+    }
+  }, [draftUndoStack, lifecycle, currentRoster, queue, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
+
+  // Phase 8 Slice 2: Handle redo in DRAFT
+  const handleRedoDraft = useCallback(async () => {
+    if (draftRedoStack.length === 0 || lifecycle?.state !== 'DRAFT' || isRevalidating) return;
+    const lastOp = draftRedoStack[draftRedoStack.length - 1];
+
+    // Concurrency check: Ensure current state matches what was undone (lastOp.previous)
+    let hasConflict = lastOp.previous.some(item => {
+      const cur = (currentRoster?.assignments || []).find(
+        a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+      );
+      return cur && cur.shiftCode !== item.shiftCode;
+    });
+
+    if (!hasConflict && queue?.getCurrentRoster) {
+      try {
+        const authRes = await queue.getCurrentRoster(period);
+        if (authRes?.ok && authRes.assignments) {
+          hasConflict = lastOp.previous.some(item => {
+            const auth = authRes.assignments.find(
+              a => a.personId === item.personId && a.date === item.date && (a.dutyDomain || 'MO') === (item.dutyDomain || 'MO')
+            );
+            return auth && auth.shiftCode !== item.shiftCode;
+          });
+        }
+      } catch (_) {}
+    }
+
+    if (hasConflict) {
+      setRevisionConflictMsg('Cannot redo: roster was modified by another change. Refreshing latest version.');
+      setDraftRedoStack([]);
+      if (typeof loadAuthoritativeData === 'function') {
+        await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      }
+      return;
+    }
+
+    setDraftRedoStack(prev => prev.slice(0, -1));
+    setDraftUndoStack(prev => [...prev, lastOp]);
+
+    setCurrentRoster(prev => {
+      if (!prev) return prev;
+      const assignments = [...(prev.assignments || [])];
+      lastOp.next.forEach(({ personId, date, dutyDomain, shiftCode }) => {
+        const idx = assignments.findIndex(
+          a => a.personId === personId && a.date === date && (a.dutyDomain || 'MO') === (dutyDomain || 'MO')
+        );
+        if (idx !== -1) {
+          assignments[idx] = { ...assignments[idx], shiftCode };
+        }
+      });
+      return { ...prev, assignments };
+    });
+
+    try {
+      if (typeof queue?.enqueue === 'function') {
+        const patches = lastOp.next.map(({ personId, date, dutyDomain, shiftCode }) => ({
+          personId,
+          date,
+          assignments: shiftCode ? [{ rawShift: shiftCode, shiftCode, dutyDomain }] : []
+        }));
+        await queue.enqueue(`draft:${period}`, patches);
+        setDraftSaveStatus('saved');
+      }
+    } catch (err) {
+      const code = err.code || err.message;
+      setDraftRedoStack(prev => [...prev, lastOp]);
+      setDraftUndoStack(prev => prev.slice(0, -1));
+
+      if (code === 'REVISION_CONFLICT') {
+        setRevisionConflictMsg('Roster changed since you opened it. Refreshing the latest version.');
+        setDraftSaveStatus('conflict');
+      } else {
+        setDraftSaveStatus('error');
+        setActionError(err.message || code || 'Failed to persist redo');
+      }
+      await loadAuthoritativeData(queue, period, requestGenRef.current, { forceLifecycleRefresh: true });
+      syncRecoveryState(queue, period);
+    }
+  }, [draftRedoStack, lifecycle, currentRoster, queue, period, isRevalidating, loadAuthoritativeData, syncRecoveryState]);
+
+  // If not enrolled or V2 read is disabled: container does not render
+  const state = lifecycle?.state;
+  const isEnrolledAndActive = Boolean(
+    readEnabled &&
+    lifecycle &&
+    (allowDraft
+      ? ['DRAFT', 'PUBLISHED', 'AMENDED', 'CLOSED'].includes(state)
+      : ['PUBLISHED', 'AMENDED', 'CLOSED'].includes(state))
+  );
+
+  if (loading) {
+    return (
+      <div className="p-6 rounded-2xl bg-white border border-slate-200 text-center text-xs text-slate-500 animate-pulse">
+        Checking authoritative roster…
+      </div>
+    );
+  }
+
+  if (!isEnrolledAndActive) {
+    return null;
+  }
+
+  const activeAmendmentCount = (currentRoster?.activeAmendmentCount || amendmentHistory?.count || 0) +
+    (absences.filter(a => a.Status === 'ACTIVE').length);
+
+  return (
+    <div className="space-y-4" id="phase-5-roster-container" data-testid="phase-5-roster-container">
+      {/* Revision Conflict Warning Banner */}
+      {revisionConflictMsg && (
+        <div
+          id="revision-conflict-banner"
+          className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-800 flex items-center justify-between gap-3 shadow-xs"
+          role="alert"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-amber-600 font-bold text-sm">⚠️</span>
+            <span>{revisionConflictMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRevisionConflictMsg(null)}
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Recovery Required Banner */}
+      {recoveryOp && (
+        <div
+          id="recovery-required-banner"
+          data-testid="recovery-required-banner"
+          className="p-3.5 rounded-xl bg-rose-50 border border-rose-300 text-xs text-rose-900 flex flex-wrap items-center justify-between gap-3 shadow-xs"
+          role="alert"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-rose-600 font-bold text-sm">🚨</span>
+            <div>
+              <p className="font-bold flex items-center gap-2">
+                <span>Recovery Required:</span>
+                <span className="px-2 py-0.2 rounded-full bg-rose-200 text-rose-900 text-[10px] font-mono">
+                  {recoveryOp.operationType}
+                </span>
+                <span className="font-mono text-[10px] text-rose-700">
+                  (ID: {recoveryOp.operationId})
+                </span>
+              </p>
+              <p className="text-[11px] text-rose-800 mt-0.5">
+                The last operation encountered an ambiguous backend outcome and requires reconciliation.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            id="btn-retry-recovery"
+            data-testid="btn-retry-recovery"
+            disabled={isRecovering}
+            onClick={() => handleRetryRecovery(recoveryOp.operationId, recoveryOp.operationType)}
+            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold transition shadow-2xs disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+          >
+            {isRecovering ? 'Reconciling…' : 'Retry / Reconcile'}
+          </button>
+        </div>
+      )}
+
+      {/* Action Error Banner */}
+      {actionError && actionError !== 'AUTHORIZATION_REQUIRED' && (
+        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium" role="alert">
+          <p className="font-bold">Notice</p>
+          <p>{actionError}</p>
+        </div>
+      )}
+
+      {/* Header Bar: View Mode Selector & Desktop Toolbar */}
+      <div
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-2 border-b border-slate-200 roster-toolbar-header"
+        id="roster-toolbar-header"
+        data-testid="roster-toolbar-header"
+      >
+        <div className="flex items-center gap-2 flex-wrap">
+          <RosterViewModeSelector
+            mode={viewMode}
+            onChange={setViewMode}
+            amendmentCount={activeAmendmentCount}
+          />
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-slate-500 font-medium self-end sm:self-auto flex-wrap">
+          {state === 'DRAFT' && (
+            <span
+              id="draft-save-status"
+              data-testid="draft-save-status"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                recoveryOp
+                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                  : revisionConflictMsg
+                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                  : (draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
+                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                  : draftReadError === 'AUTHORIZATION_REQUIRED' || !isVerifiedAdmin
+                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                  : isRevalidating
+                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
+                  : isSavingDraft
+                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
+                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+              }`}
+            >
+              {recoveryOp
+                ? '🚨 Recovery required'
+                : revisionConflictMsg
+                ? '⚠️ Conflict — review required'
+                : (draftSaveStatus === 'error' || draftSaveStatus === 'conflict')
+                ? '⚠️ Save failed'
+                : draftReadError === 'AUTHORIZATION_REQUIRED' || !isVerifiedAdmin
+                ? '🔒 Verification required'
+                : isRevalidating
+                ? '⏳ Verifying with server…'
+                : isSavingDraft
+                ? '⏳ Saving…'
+                : '✓ All changes saved'}
+            </span>
+          )}
+
+          <button
+            type="button"
+            id="btn-toggle-focus-mode"
+            data-testid="btn-toggle-focus-mode"
+            onClick={() => setIsFocusMode(prev => !prev)}
+            className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition shadow-2xs cursor-pointer"
+            title={isFocusMode ? 'Exit high-density focus mode' : 'Expand roster workspace focus'}
+          >
+            <span>{isFocusMode ? '🗗 Exit Focus' : '🗖 Focus Mode'}</span>
+          </button>
+
+          {isAdmin && (
+            isVerifiedAdmin ? (
+              <div className="inline-flex items-center gap-2">
+                <span
+                  id="admin-auth-verified-badge"
+                  data-testid="admin-auth-verified-badge"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  title={adminEmail || 'Verified administrator'}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  Verified administrator{adminEmail ? ` (${adminEmail})` : ''}
+                </span>
+                <button
+                  type="button"
+                  id="btn-admin-auth-sign-out"
+                  data-testid="btn-admin-auth-sign-out"
+                  onClick={() => clearAdminSessionToken()}
+                  className="px-2 py-0.5 rounded text-[11px] font-semibold text-slate-500 hover:text-rose-600 bg-slate-100 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 transition cursor-pointer"
+                  title="Sign out of administrator session"
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-2">
+                <span
+                  id="admin-auth-required-badge"
+                  data-testid="admin-auth-required-badge"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                >
+                  <span>⚠️</span> Administrator verification required
+                </span>
+                <button
+                  type="button"
+                  id="btn-verify-admin-google"
+                  data-testid="btn-verify-admin-google"
+                  onClick={handleGoogleVerify}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition shadow-2xs cursor-pointer"
+                >
+                  Verify with Google
+                </button>
+              </div>
+            )
+          )}
+
+          <div>
+            Period: <strong className="text-slate-700">{period}</strong>
+            {state && (
+              <span className="ml-2 font-mono text-[11px] text-slate-400">
+                {state === 'DRAFT'
+                  ? `(rev ${lifecycle?.revision ?? 0} · draft ${lifecycle?.draftRevision ?? 1})`
+                  : `(rev ${lifecycle?.revision ?? 0})`}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* If DRAFT read failed due to authorization or error, render explicit fail-closed message */}
+      {viewMode === 'CURRENT' && draftReadError && (
+        <div className="p-8 rounded-2xl border border-dashed border-amber-300 bg-amber-50/50 text-center space-y-3" role="alert">
+          <div className="text-3xl">🔒</div>
+          <h3 className="text-base font-bold text-slate-800">
+            {draftReadError === 'AUTHORIZATION_REQUIRED'
+              ? 'Administrator Authorization Required'
+              : 'Draft Workspace Unavailable'}
+          </h3>
+          <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+            {draftReadError === 'AUTHORIZATION_REQUIRED'
+              ? `The working draft for ${period} is private and requires verified administrator identity. Sign in with the authorized administrator Google account to access draft assignments.`
+              : `Unable to load authoritative draft assignments for ${period}: ${draftReadError}.`}
+          </p>
+          {draftReadError === 'AUTHORIZATION_REQUIRED' && (
+            <div className="pt-2">
+              <button
+                type="button"
+                id="btn-auth-required-verify"
+                data-testid="btn-auth-required-verify"
+                onClick={handleGoogleVerify}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition shadow-sm cursor-pointer"
+              >
+                Verify with Google
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Main View Mode Rendering */}
+      {viewMode === 'CURRENT' && !draftReadError && (
+        <CurrentRosterView
+          currentAssignments={currentRoster?.assignments || []}
+          plannedAssignments={plannedRoster?.assignments || []}
+          people={(people && people.length > 0) ? people : internalPeople}
+          teamMembers={teamMembers}
+          legacyNames={legacyNames}
+          period={period}
+          isAdmin={isVerifiedAdmin}
+          lifecycleState={state}
+          mutationsEnabled={mutationsEnabled}
+          onSelectCellForAmend={(cell) => setSelectedCellForAmend(cell)}
+          onSelectDutyForAbsence={(duty) => {
+            setSelectedDutyForAbsence(duty);
+            setIsAbsenceModalOpen(true);
+          }}
+          onSelectDutyForReplacement={(duty) => setSelectedDutyForReplacement(duty)}
+          onOpenAbsenceModal={() => {
+            setSelectedDutyForAbsence(null);
+            setIsAbsenceModalOpen(true);
+          }}
+          onSelectDutyForEntitlement={handleOpenConsumeModal}
+          onSelectPersonForEntitlement={isVerifiedAdmin ? (pId) => {
+            handleSelectPersonForEntitlement(pId);
+            setViewMode('ENTITLEMENTS');
+          } : undefined}
+          onOpenEntitlementsPanel={isVerifiedAdmin ? () => setViewMode('ENTITLEMENTS') : undefined}
+          onDraftCellChange={handleDraftCellChange}
+          onBulkDraftChange={handleBulkDraftChange}
+          onUndoDraft={handleUndoDraft}
+          onRedoDraft={handleRedoDraft}
+          canUndoDraft={draftUndoStack.length > 0}
+          canRedoDraft={draftRedoStack.length > 0}
+          isSavingDraft={isSavingDraft}
+          draftSaveStatus={draftSaveStatus}
+          isAnyModalOpen={Boolean(
+            selectedCellForAmend ||
+            isAbsenceModalOpen ||
+            selectedDutyForReplacement ||
+            selectedDutyForEntitlement ||
+            isCreditModalOpen
+          )}
+          isActiveView={isActiveView}
+        />
+      )}
+
+      {viewMode === 'PLANNED' && (
+        <PlannedRosterView
+          assignments={plannedRoster?.assignments || []}
+          period={period}
+          people={(people && people.length > 0) ? people : internalPeople}
+          teamMembers={teamMembers}
+          legacyNames={legacyNames}
+        />
+      )}
+
+      {viewMode === 'CHANGES' && (
+        <AmendmentHistoryPanel
+          events={amendmentHistory?.events || []}
+          absences={absences}
+          replacements={replacements}
+          currentAssignments={currentRoster?.assignments || []}
+          people={people}
+          isAdmin={isVerifiedAdmin}
+          onReverse={(eventId, adminNote) => handleReverseEvent(eventId, adminNote)}
+          onReverseAbsence={(absenceId, adminNote) => handleReverseAbsence(absenceId, adminNote)}
+          onReverseReplacement={(replacementId, options) => handleReverseReplacement(replacementId, options)}
+          isReversing={isReversingPhase6}
+          reversalError={actionError}
+        />
+      )}
+
+      {viewMode === 'ENTITLEMENTS' && (
+        <EntitlementPanel
+          people={people}
+          selectedPersonId={selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId}
+          onSelectPersonId={handleSelectPersonForEntitlement}
+          balances={entitlementBalances}
+          transactions={entitlementTransactions}
+          isAdmin={isVerifiedAdmin}
+          period={period}
+          onOpenCreditModal={(cfg) => {
+            setCreditModalConfig(cfg);
+            setIsCreditModalOpen(true);
+          }}
+          onReverseConsumption={handleReverseConsumption}
+          onReverseCredit={handleReverseCredit}
+          isReversing={isReversingEntitlement}
+          error={actionError}
+        />
+      )}
+
+      {/* Phase 5 Amendment Modal (Correction & Swap) */}
+      <AmendmentModal
+        isOpen={Boolean(selectedCellForAmend)}
+        onClose={() => setSelectedCellForAmend(null)}
+        onSubmit={handleAmendmentSubmit}
+        targetCell={selectedCellForAmend}
+        availableParticipants={currentRoster?.assignments || []}
+        isSubmitting={isSubmittingAmend}
+        error={actionError}
+      />
+
+      {/* Phase 6 Absence Modal */}
+      <AbsenceModal
+        isOpen={isAbsenceModalOpen}
+        onClose={() => {
+          setIsAbsenceModalOpen(false);
+          setSelectedDutyForAbsence(null);
+        }}
+        onSubmit={handleAbsenceSubmit}
+        currentAssignments={currentRoster?.assignments || []}
+        people={people}
+        preselectedDuty={selectedDutyForAbsence}
+        isSubmitting={isSubmittingAbsence}
+        error={actionError}
+        period={period}
+      />
+
+      {/* Phase 6 Replacement Modal */}
+      <ReplacementModal
+        isOpen={Boolean(selectedDutyForReplacement)}
+        onClose={() => setSelectedDutyForReplacement(null)}
+        onSubmit={handleReplacementSubmit}
+        targetDuty={selectedDutyForReplacement}
+        currentAssignments={currentRoster?.assignments || []}
+        people={people}
+        absences={absences}
+        isSubmitting={isSubmittingReplacement}
+        error={actionError}
+      />
+
+      {/* Phase 7 Entitlement Credit Modal */}
+      <EntitlementCreditModal
+        key={`credit-${creditModalConfig?.mode}-${creditModalConfig?.personId || selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId}-${isCreditModalOpen}`}
+        isOpen={isCreditModalOpen}
+        onClose={() => {
+          setIsCreditModalOpen(false);
+          setCreditModalConfig(null);
+        }}
+        initialMode={creditModalConfig?.mode || 'EARN_GOFF'}
+        personId={creditModalConfig?.personId || selectedPersonForEntitlement || people.find(p => p.dutyDomain !== 'EP' && p.role !== 'EP')?.personId || people[0]?.personId}
+        period={period}
+        people={people}
+        currentAssignments={currentRoster?.assignments || []}
+        plannedAssignments={plannedRoster?.assignments || []}
+        existingTransactions={entitlementTransactions}
+        onEarnGoff={handleEarnGoff}
+        onEarnGhka={handleEarnGhka}
+        onCreditManual={handleCreditManual}
+        isSubmitting={isSubmittingCredit}
+        error={actionError}
+      />
+
+      {/* Phase 7 Entitlement Consume Modal */}
+      <EntitlementConsumeModal
+        key={`consume-${selectedDutyForEntitlement?.personId}-${selectedDutyForEntitlement?.date}-${consumeEntitlementType}-${Boolean(selectedDutyForEntitlement)}`}
+        isOpen={Boolean(selectedDutyForEntitlement)}
+        onClose={() => setSelectedDutyForEntitlement(null)}
+        targetDuty={selectedDutyForEntitlement}
+        balances={entitlementBalances}
+        initialType={consumeEntitlementType}
+        absences={absences}
+        expectedRevision={lifecycle?.revision || 0}
+        onConsume={handleConsumeEntitlement}
+        isSubmitting={isSubmittingConsume}
+        error={actionError}
+      />
+
+      {/* 10-Second Undo Toast */}
+      {undoEvent && (
+        <UndoToast
+          undoEvent={undoEvent}
+          durationMs={undoDurationMs}
+          onUndo={async (ue) => {
+            await handleReverseEvent(ue.eventId);
+          }}
+          onExpire={() => setUndoEvent(null)}
+        />
+      )}
+    </div>
+  );
+}

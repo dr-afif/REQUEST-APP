@@ -1,18 +1,57 @@
 import { useState, useEffect } from 'react';
+import { isDevMockActive, setDevMockActive } from '../features/roster/simplified/devMockApi.js';
 
-export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
+export default function AdminPinModal({ isOpen, onClose, onSuccess, onVerifyPin }) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const [shake, setShake] = useState(false);
   const [showPin, setShowPin] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
-  const CORRECT_PIN = import.meta.env.VITE_ADMIN_PIN || '1234';
+  const CORRECT_PIN = import.meta?.env?.VITE_ADMIN_PIN || '1234';
+
+  const triggerFailure = (msg = 'Incorrect Security PIN. Try again.') => {
+    setError(true);
+    setErrorMessage(msg);
+    setShake(true);
+    setPin('');
+    setTimeout(() => setShake(false), 500);
+  };
+
+  const attemptUnlock = async (enteredPin) => {
+    if (isVerifying || !enteredPin || enteredPin.length < 4) return;
+    if (typeof onVerifyPin === 'function') {
+      setIsVerifying(true);
+      try {
+        const res = await onVerifyPin(enteredPin);
+        if (res === true || (res && typeof res === 'object' && res.ok !== false)) {
+          onSuccess?.(enteredPin);
+        } else {
+          triggerFailure((res && res.message) || 'Incorrect Security PIN. Try again.');
+        }
+      } catch (err) {
+        triggerFailure(err?.message || 'Incorrect Security PIN. Try again.');
+      } finally {
+        setIsVerifying(false);
+      }
+      return;
+    }
+
+    if (enteredPin === CORRECT_PIN) {
+      onSuccess?.(enteredPin);
+    } else {
+      triggerFailure('Incorrect Security PIN. Try again.');
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
       setPin('');
       setError(false);
+      setErrorMessage('');
       setShake(false);
+      setIsVerifying(false);
     }
   }, [isOpen]);
 
@@ -20,6 +59,7 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
     if (!isOpen) return;
 
     const handleKeyDown = (e) => {
+      if (isVerifying) return;
       if (/^[0-9]$/.test(e.key)) {
         e.preventDefault();
         handleKeyPress(e.key);
@@ -32,14 +72,7 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
       } else if (e.key === 'Enter') {
         e.preventDefault();
         if (pin.length === 4) {
-          if (pin === CORRECT_PIN) {
-            onSuccess();
-          } else {
-            setError(true);
-            setShake(true);
-            setPin('');
-            setTimeout(() => setShake(false), 500);
-          }
+          attemptUnlock(pin);
         }
       }
     };
@@ -48,41 +81,42 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, pin, onSuccess, onClose]);
+  }, [isOpen, pin, isVerifying, onSuccess, onClose, onVerifyPin]);
 
   if (!isOpen) return null;
 
   const handleKeyPress = (num) => {
+    if (isVerifying) return;
     setError(false);
+    setErrorMessage('');
     if (pin.length < 4) {
       setPin((prev) => prev + num);
     }
   };
 
   const handleBackspace = () => {
+    if (isVerifying) return;
     setError(false);
+    setErrorMessage('');
     setPin((prev) => prev.slice(0, -1));
   };
 
   const handleClear = () => {
+    if (isVerifying) return;
     setError(false);
+    setErrorMessage('');
     setPin('');
   };
 
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
-    if (pin === CORRECT_PIN) {
-      onSuccess();
-    } else {
-      setError(true);
-      setShake(true);
-      setPin('');
-      setTimeout(() => setShake(false), 500);
+    if (pin.length === 4) {
+      attemptUnlock(pin);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn">
+    <div data-testid="admin-pin-modal" className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-4 backdrop-blur-sm animate-fadeIn">
       {/* Scope Keyframe Animations */}
       <style>{`
         @keyframes shake {
@@ -151,7 +185,7 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
 
             {error && (
               <div className="mt-2 sm:mt-3 text-center text-xs font-bold text-rose-500 animate-fadeIn">
-                ❌ Incorrect Security PIN. Try again.
+                ❌ {errorMessage || 'Incorrect Security PIN. Try again.'}
               </div>
             )}
 
@@ -203,6 +237,22 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
               </div>
             )}
 
+            {!import.meta.env?.PROD && (
+              <div className="mt-2 text-center text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isDevMockActive();
+                    setDevMockActive(next);
+                    window.location.reload();
+                  }}
+                  className="text-amber-600 hover:text-amber-700 underline font-medium cursor-pointer"
+                >
+                  {isDevMockActive() ? '🧪 Dev Mock Mode: Active (Click to Switch to Live)' : '🧪 Enable Safe Dev Mock Mode (Zero Live Mutations)'}
+                </button>
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="mt-4 sm:mt-6 flex gap-3">
               <button
@@ -214,10 +264,11 @@ export default function AdminPinModal({ isOpen, onClose, onSuccess }) {
               </button>
               <button
                 type="submit"
-                disabled={pin.length < 4}
+                data-testid="admin-pin-unlock"
+                disabled={pin.length < 4 || isVerifying}
                 className="flex-1 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 py-1.5 sm:py-2 text-sm font-semibold text-white shadow-md shadow-indigo-100 transition hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50 disabled:shadow-none active:scale-95"
               >
-                Unlock
+                {isVerifying ? 'Verifying...' : 'Unlock'}
               </button>
             </div>
           </form>

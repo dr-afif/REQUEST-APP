@@ -1,0 +1,326 @@
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import { getHolidayName } from '../../../utils/holidays.js';
+import { projectMoStaff } from '../staffProjection.js';
+
+/**
+ * Planned Roster View:
+ * Shows the immutable roster as originally published.
+ * Visually and behaviorally read-only.
+ * Supports keyboard roving focus for scannability, but strictly prevents mutations.
+ */
+export default function PlannedRosterView({
+  assignments = [],
+  period,
+  people = [],
+  teamMembers = [],
+  legacyNames = []
+}) {
+  // Group assignments by MO Person only, ordered by authoritative legacy sequence
+  const groupedByPerson = useMemo(() => {
+    const moStaff = projectMoStaff({ people, teamMembers, legacyNames });
+    const map = new Map();
+
+    moStaff.forEach((p, idx) => {
+      map.set(p.personId, {
+        personId: p.personId,
+        personNameSnapshot: p.displayName || p.personNameSnapshot || p.personId,
+        dutyDomain: p.dutyDomain || 'MO',
+        dates: {},
+        orderIndex: idx
+      });
+    });
+
+    assignments.forEach((a) => {
+      if (!a || a.dutyDomain === 'EP') return; // Exclude EP assignments from main MO timetable
+      const targetRow = map.get(a.personId);
+      // STRICT: Only populate existing projected rows; NEVER construct fallback rows from unknown assignments
+      if (targetRow) {
+        targetRow.dates[a.date] = a.shiftCode;
+      }
+    });
+
+    if (moStaff.diagnostics && !moStaff.diagnostics.ok) {
+      console.warn('[PlannedRoster] Strict legacy MO staff projection diagnostics warning:', moStaff.diagnostics);
+    }
+
+    return Array.from(map.values()).sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  }, [assignments, people, teamMembers, legacyNames]);
+
+  // Extract unique sorted dates for header
+  const sortedDates = useMemo(() => {
+    const dates = new Set();
+    assignments.forEach((a) => {
+      if (a.date) dates.add(a.date);
+    });
+    return Array.from(dates).sort();
+  }, [assignments]);
+
+  // Memoized date metadata map (weekday, weekend, holiday, today) for high-density rendering
+  const dateMetaMap = useMemo(() => {
+    const map = new Map();
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const weekdayShorts = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    sortedDates.forEach((d) => {
+      const parts = d.split('-').map(Number);
+      const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+      const dayOfWeek = dateObj.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const holidayName = getHolidayName(d);
+      const isHoliday = Boolean(holidayName);
+      const isToday = d === todayStr;
+      const dayNum = String(parts[2]).padStart(2, '0');
+      const weekday = weekdayShorts[dayOfWeek] || '';
+
+      map.set(d, {
+        date: d,
+        dayNum,
+        weekday,
+        dayOfWeek,
+        isWeekend,
+        isHoliday,
+        holidayName,
+        isToday
+      });
+    });
+    return map;
+  }, [sortedDates]);
+
+  // Keyboard navigation state
+  const [activeCoord, setActiveCoord] = useState({ r: 0, c: 0 });
+
+  const focusPlannedCell = useCallback((r, c) => {
+    const row = groupedByPerson[r];
+    const d = sortedDates[c];
+    if (row && d) {
+      document.getElementById(`cell-planned-${row.personId}-${d}-${row.dutyDomain}`)?.focus();
+    }
+  }, [groupedByPerson, sortedDates]);
+
+  const handleKeyDown = useCallback((e) => {
+    const tag = e.target.tagName?.toLowerCase();
+    if (['input', 'textarea', 'select'].includes(tag)) return;
+
+    const R = groupedByPerson.length;
+    const C = sortedDates.length;
+    if (R === 0 || C === 0) return;
+    const { r, c } = activeCoord;
+
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      const nextC = Math.min(C - 1, c + 1);
+      setActiveCoord({ r, c: nextC });
+      focusPlannedCell(r, nextC);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const nextC = Math.max(0, c - 1);
+      setActiveCoord({ r, c: nextC });
+      focusPlannedCell(r, nextC);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextR = Math.min(R - 1, r + 1);
+      setActiveCoord({ r: nextR, c });
+      focusPlannedCell(nextR, c);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const nextR = Math.max(0, r - 1);
+      setActiveCoord({ r: nextR, c });
+      focusPlannedCell(nextR, c);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        setActiveCoord({ r: 0, c: 0 });
+        focusPlannedCell(0, 0);
+      } else {
+        setActiveCoord({ r, c: 0 });
+        focusPlannedCell(r, 0);
+      }
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        setActiveCoord({ r: R - 1, c: C - 1 });
+        focusPlannedCell(R - 1, C - 1);
+      } else {
+        setActiveCoord({ r, c: C - 1 });
+        focusPlannedCell(r, C - 1);
+      }
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+      // Copy allowed from Planned
+      const row = groupedByPerson[r];
+      const d = sortedDates[c];
+      if (row && d && typeof window !== 'undefined') {
+        window.__rosterClipboard = row.dates[d] || 'OFF';
+      }
+    }
+  }, [activeCoord, groupedByPerson, sortedDates, focusPlannedCell]);
+
+  return (
+    <div
+      id="planned-roster-view"
+      data-testid="planned-roster-view"
+      className="space-y-4"
+      aria-label="Planned Roster Snapshot"
+      onKeyDown={handleKeyDown}
+    >
+      {/* Immutability Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3.5 lg:p-4 rounded-2xl bg-slate-100 border border-slate-300 gap-2">
+        <div className="flex items-center gap-3">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-200 text-slate-700 text-lg font-bold">
+            🔒
+          </span>
+          <div>
+            <h4 className="text-sm font-bold text-slate-800">
+              Planned Snapshot — Originally Published Roster
+            </h4>
+            <p className="text-xs text-slate-500">
+              This snapshot is immutable and locked for historical reference. Modifications are not allowed.
+            </p>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-700 border border-slate-300 self-start sm:self-auto">
+          Read-Only Snapshot
+        </span>
+      </div>
+
+      {assignments.length === 0 ? (
+        <div className="text-center py-12 rounded-2xl border border-dashed border-slate-300 bg-white">
+          <p className="text-sm font-semibold text-slate-700">No planned snapshot available for {period}</p>
+        </div>
+      ) : (
+        <div
+          className="rounded-2xl border border-slate-200 bg-white shadow-2xs overflow-hidden roster-desktop-grid-container"
+          id="planned-roster-grid-container"
+          data-testid="planned-roster-grid-container"
+        >
+          <div
+            className="overflow-auto max-h-[calc(100vh-220px)] lg:max-h-[calc(100vh-190px)] roster-scroll-viewport focus:outline-none"
+            tabIndex={0}
+            aria-label="Planned roster table scroll area"
+          >
+            <table className="w-full text-left text-xs border-collapse border-separate border-spacing-0">
+              <thead className="sticky top-0 z-20 bg-slate-50 shadow-xs">
+                <tr className="bg-slate-50 text-slate-600">
+                  <th
+                    className="p-2 lg:p-2.5 font-bold sticky left-0 top-0 bg-slate-50 min-w-[150px] lg:min-w-[170px] z-30 border-r border-b border-slate-200 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]"
+                    scope="col"
+                  >
+                    <span>Doctor / Staff</span>
+                  </th>
+                  <th
+                    className="p-2 lg:p-2.5 font-bold min-w-[55px] lg:min-w-[65px] text-center border-r border-b border-slate-200 bg-slate-50 sticky top-0 z-20"
+                    scope="col"
+                  >
+                    <span>Domain</span>
+                  </th>
+                  {sortedDates.map((d) => {
+                    const meta = dateMetaMap.get(d) || { dayNum: d.split('-')[2], weekday: '', isWeekend: false, isHoliday: false, isToday: false };
+                    const headerAria = `${d}, ${meta.weekday}${meta.holidayName ? `, Public Holiday: ${meta.holidayName}` : ''}${meta.isToday ? ', Today' : ''}`;
+                    return (
+                      <th
+                        key={d}
+                        scope="col"
+                        aria-label={headerAria}
+                        className={`p-1 lg:p-1.5 font-bold text-center min-w-[48px] lg:min-w-[46px] max-w-[65px] border-r border-b border-slate-200 sticky top-0 z-20 transition-colors ${
+                          meta.isToday
+                            ? 'bg-indigo-50/95 text-indigo-900 ring-2 ring-inset ring-indigo-400'
+                            : meta.isHoliday
+                            ? 'bg-rose-50/90 text-rose-900'
+                            : meta.isWeekend
+                            ? 'bg-slate-100/90 text-slate-700'
+                            : 'bg-slate-50 text-slate-600'
+                        }`}
+                        title={meta.holidayName ? `${d} (${meta.holidayName})` : d}
+                        data-is-weekend={meta.isWeekend ? 'true' : undefined}
+                        data-is-holiday={meta.isHoliday ? 'true' : undefined}
+                        data-is-today={meta.isToday ? 'true' : undefined}
+                      >
+                        <span className={`block text-[9px] font-semibold uppercase tracking-wider ${
+                          meta.isHoliday
+                            ? 'text-rose-600 font-bold'
+                            : meta.isWeekend
+                            ? 'text-slate-600 font-bold'
+                            : 'text-slate-400'
+                        }`}>
+                          {meta.weekday}
+                        </span>
+                        <span className={`block text-xs lg:text-sm font-extrabold leading-tight ${
+                          meta.isToday ? 'text-indigo-600' : 'text-slate-700'
+                        }`}>
+                          {meta.dayNum}
+                        </span>
+                        {meta.isHoliday && (
+                          <span
+                            className="inline-block text-[8px] font-bold text-rose-700 bg-rose-100 px-1 py-0.2 rounded border border-rose-300 leading-none mt-0.5 truncate max-w-[44px]"
+                            title={meta.holidayName}
+                            data-testid={`header-holiday-planned-${d}`}
+                          >
+                            PH
+                          </span>
+                        )}
+                        {meta.isToday && (
+                          <span
+                            className="inline-block text-[8px] font-bold text-indigo-700 bg-indigo-100 px-1 py-0.2 rounded border border-indigo-300 leading-none mt-0.5"
+                            data-testid={`header-today-planned-${d}`}
+                          >
+                            Today
+                          </span>
+                        )}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {groupedByPerson.map((row, rIdx) => (
+                  <tr key={`${row.personId}::${row.dutyDomain}`} className="hover:bg-slate-50/50">
+                    <td className="p-2 lg:p-2.5 font-semibold sticky left-0 bg-white z-10 border-r border-b border-slate-100 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
+                      <div className="truncate max-w-[130px] lg:max-w-[145px]" title={row.personNameSnapshot}>
+                        {row.personNameSnapshot}
+                      </div>
+                    </td>
+                    <td className="p-1.5 lg:p-2 text-center border-r border-b border-slate-100 bg-white">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600">
+                        {row.dutyDomain}
+                      </span>
+                    </td>
+                    {sortedDates.map((d, cIdx) => {
+                      const shift = row.dates[d] || '—';
+                      const meta = dateMetaMap.get(d) || { isWeekend: false, isHoliday: false, isToday: false };
+                      const cellAria = `${row.personNameSnapshot}, ${d}, Planned: ${shift}`;
+                      const cellBg = meta.isHoliday
+                        ? 'bg-rose-50/20'
+                        : meta.isWeekend
+                        ? 'bg-slate-50/40'
+                        : 'bg-white';
+
+                      const isFocused = activeCoord.r === rIdx && activeCoord.c === cIdx;
+
+                      return (
+                        <td
+                          key={d}
+                          id={`cell-planned-${row.personId}-${d}-${row.dutyDomain}`}
+                          data-testid={`cell-planned-${row.personId}-${d}-${row.dutyDomain}`}
+                          aria-label={cellAria}
+                          tabIndex={isFocused ? 0 : -1}
+                          onFocus={() => setActiveCoord({ r: rIdx, c: cIdx })}
+                          className={`p-1.5 lg:p-2 text-center border-r border-b border-slate-100 font-mono text-[11px] lg:text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-1 ${cellBg} ${
+                            meta.isToday ? 'ring-1 ring-inset ring-indigo-300/60' : ''
+                          }`}
+                        >
+                          <div className="min-h-[28px] lg:min-h-[30px] flex items-center justify-center">
+                            {shift}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

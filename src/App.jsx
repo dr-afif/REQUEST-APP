@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import UserSection from './components/UserSection';
 import AppNavigation from './components/AppNavigation';
 import NotificationBanner from './components/NotificationBanner';
@@ -8,10 +8,29 @@ import UpdatesPage from './components/UpdatesPage';
 import AdminPanel from './components/AdminPanel';
 import AnalyticsPage from './components/AnalyticsPage';
 import PublicHolidayTrackerPage from './components/PublicHolidayTrackerPage';
-import AdminPinModal from './components/AdminPinModal';
+
 import OnboardingOverlay from './components/OnboardingOverlay';
+import AdminPinModal from './components/AdminPinModal';
 import ToastNotification from './components/ToastNotification';
 import PwaInstallBanner from './components/PwaInstallBanner';
+import {
+  clearAdminSessionToken,
+  isSessionTokenActive,
+  setAdminPinSession,
+  setAdminSessionToken,
+  subscribeAdminAuth,
+  verifyAdminPin,
+} from './features/roster/auth/adminAuth.js';
+import { composeEffectiveRoster } from './features/roster/simplified/rosterComposition.js';
+import {
+  isDevMockActive,
+  setDevMockActive,
+  resetMockStore,
+  setSimulateSaveConflict,
+  setSimulateSaveFailure,
+  getMockSimulationState,
+  handleDevMockRequest,
+} from './features/roster/simplified/devMockApi.js';
 
 import {
   deleteRequest,
@@ -42,7 +61,17 @@ import {
   deletePublicHoliday,
   upsertLeaveApplication,
   deleteLeaveApplication,
+  fetchRosterAmendments,
+  saveMasterRosterDraft,
+  appendRosterAmendments,
+  verifyAdminPinRemote,
+  registerDevMock,
+  getActiveBackendUrl,
+  verifyStagingBackendIdentity,
 } from './api';
+
+// Register development mock API handler (zero production network calls when active)
+registerDevMock({ isActive: isDevMockActive, handler: handleDevMockRequest });
 import {
   adaptRequestsResponse,
   normalizeActivities,
@@ -52,7 +81,7 @@ import {
   validateShiftTypes,
 } from './utils/adapters';
 import { hasCacheValue, readCache, writeCacheEntries } from './utils/cache';
-import { normalizeForComparison, toIsoDate, toWeekdayName } from './utils/normalise';
+import { normalizeForComparison, settingsEquivalent, toIsoDate, toWeekdayName } from './utils/normalise';
 import { applyCustomPublicHolidays, normalizePublicHolidays } from './utils/holidays';
 import { normalizeLeaveApplications } from './utils/leaveTracking';
 
@@ -114,6 +143,7 @@ export default function App() {
     );
   };
   const [masterRoster, setMasterRoster] = useState(() => validateMasterRoster(readCache('resq_cache_masterRoster', [])));
+  const [rosterAmendments, setRosterAmendments] = useState(() => readCache('resq_cache_rosterAmendments', []));
   const [shiftBlocks, setShiftBlocks] = useState(() => readCache('resq_cache_shiftBlocks', []));
   const [shiftTypes, setShiftTypes] = useState(() => readCache('resq_cache_shiftTypes', []));
   const [limitGroups, setLimitGroups] = useState(() => readCache('resq_cache_limitGroups', []));
@@ -125,14 +155,30 @@ export default function App() {
   const [selectedName, setSelectedName] = useState(() => {
     const stored = localStorage.getItem('resq_member_name') || '';
     if (stored?.trim().toLowerCase() === 'admin') {
-      const isVerified = sessionStorage.getItem('resq_admin_verified') === 'true';
-      return isVerified ? 'Admin' : '';
+      // Never treat localStorage or sessionStorage as proof of administrator identity
+      return isSessionTokenActive() ? 'Admin' : '';
     }
     return stored;
   });
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
-  const [pendingSelectName, setPendingSelectName] = useState('');
+  const [pendingAdminReturnPage, setPendingAdminReturnPage] = useState('');
+  const [adminAuthTick, setAdminAuthTick] = useState(0);
   const [refreshError, setRefreshError] = useState('');
+  const [, forceUpdateMockUi] = useState({});
+  
+  const inFlightMutationsRef = useRef(0);
+  const pendingSyncTimeoutRef = useRef(null);
+
+  const scheduleSafeSync = (delay = 600) => {
+    if (pendingSyncTimeoutRef.current) {
+      clearTimeout(pendingSyncTimeoutRef.current);
+    }
+    pendingSyncTimeoutRef.current = setTimeout(() => {
+      if (inFlightMutationsRef.current === 0) {
+        loadAllData();
+      }
+    }, delay);
+  };
   
   const [teamMembers, setTeamMembers] = useState(() => readCache('resq_cache_teamMembers', []));
   const [emergencyPhysicians, setEmergencyPhysicians] = useState(() => readCache('resq_cache_emergencyPhysicians', []));
@@ -178,9 +224,71 @@ export default function App() {
     setShowInstallBanner(false);
   };
 
+  // Administrator identity is strictly backed by an active in-memory session token
+  const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
+
+  // Staging Backend Identity Verification (server-side persistent marker validation)
+  const [stagingIdentity, setStagingIdentity] = useState({
+    status: 'idle', // 'idle' | 'checking' | 'verified' | 'rejected'
+    spreadsheetName: '',
+    spreadsheetId: '',
+    errorMessage: '',
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const activeUrl = getActiveBackendUrl();
+    const prodUrl = (import.meta.env?.VITE_APPS_SCRIPT_URL || '').trim().replace(/\/$/, '');
+    if (activeUrl && activeUrl.startsWith('https://script.google.com/') && activeUrl !== prodUrl) {
+      setStagingIdentity({ status: 'checking', spreadsheetName: '', spreadsheetId: '', errorMessage: '' });
+      verifyStagingBackendIdentity(activeUrl).then((res) => {
+        if (res.verified) {
+          setStagingIdentity({
+            status: 'verified',
+            spreadsheetName: res.spreadsheetName || 'Disposable Staging Workbook',
+            spreadsheetId: res.spreadsheetId,
+            errorMessage: '',
+          });
+        } else {
+          setStagingIdentity({
+            status: 'rejected',
+            spreadsheetName: '',
+            spreadsheetId: '',
+            errorMessage: res.message || 'Target backend failed server-side staging verification.',
+          });
+        }
+      }).catch((err) => {
+        setStagingIdentity({
+          status: 'rejected',
+          spreadsheetName: '',
+          spreadsheetId: '',
+          errorMessage: err.message || 'Failed to reach staging identity endpoint.',
+        });
+      });
+    } else {
+      setStagingIdentity({ status: 'idle', spreadsheetName: '', spreadsheetId: '', errorMessage: '' });
+    }
+  }, []);
+
+  // Subscribe to administrator session changes across the app
+  useEffect(() => {
+    const unsubscribe = subscribeAdminAuth(() => {
+      setAdminAuthTick((t) => t + 1);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Enforce session expiration / revocation across the app
+  useEffect(() => {
+    if (selectedName?.trim().toLowerCase() === 'admin' && !isSessionTokenActive() && !isPinModalOpen) {
+      setSelectedName('');
+      localStorage.removeItem('resq_member_name');
+      sessionStorage.removeItem('resq_admin_verified');
+    }
+  }, [selectedName, adminAuthTick, isPinModalOpen]);
+
   // Automatic navigation guard for admin page access control
   useEffect(() => {
-    const isAdmin = selectedName?.trim().toLowerCase() === 'admin';
     const isGuest = selectedName?.trim().toLowerCase() === 'guest';
     const isNormalUser = selectedName && !isAdmin && !isGuest;
 
@@ -190,40 +298,89 @@ export default function App() {
     if (currentPage === 'ph-tracker' && !isAdmin && !isNormalUser) {
       setCurrentPage('dashboard');
     }
-  }, [currentPage, selectedName]);
+  }, [currentPage, selectedName, isAdmin]);
 
   const handleSelectName = (name) => {
     if (name === '') {
       // Logout / Exit
       localStorage.removeItem('resq_member_name');
       sessionStorage.removeItem('resq_admin_verified');
+      clearAdminSessionToken();
+      setIsPinModalOpen(false);
+      setPendingAdminReturnPage('');
       setSelectedName('');
       setCurrentPage('dashboard');
     } else if (name?.trim().toLowerCase() === 'admin') {
-      setPendingSelectName('Admin');
-      setIsPinModalOpen(true);
+      if (isSessionTokenActive()) {
+        setSelectedName('Admin');
+        localStorage.setItem('resq_member_name', 'Admin');
+        sessionStorage.setItem('resq_admin_verified', 'true');
+      } else {
+        setPendingAdminReturnPage(currentPage === 'admin' ? 'admin' : (currentPage || 'roster'));
+        setIsPinModalOpen(true);
+      }
     } else {
+      // Normal doctor / Guest: clear administrator token and establish member identity
+      clearAdminSessionToken();
+      sessionStorage.removeItem('resq_admin_verified');
+      setIsPinModalOpen(false);
+      setPendingAdminReturnPage('');
       localStorage.setItem('resq_member_name', name);
       setSelectedName(name);
     }
   };
 
-  const handleAdminInit = () => {
-    setPendingSelectName('Admin');
-    setIsPinModalOpen(true);
+  const handleVerifyPin = async (enteredPin) => {
+    const cleanPin = String(enteredPin || '').trim();
+    if (!cleanPin) return false;
+
+    const isLocalhostOrigin = typeof window === 'undefined' || !window.location || (
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === ''
+    );
+
+    if (!isLocalhostOrigin && import.meta.env?.PROD) {
+      // Production origin: verify server-side against Apps Script ROSTER_ADMIN_PIN (fail-closed)
+      const res = await verifyAdminPinRemote(cleanPin);
+      if (res?.adminSessionToken) {
+        setAdminSessionToken(res.adminSessionToken, res.email || 'admin@pin.server', res.expiresAt || 28800);
+        return true;
+      }
+      if (res && res.authenticated !== false) {
+        setAdminPinSession(cleanPin, 28800);
+        return true;
+      }
+      return false;
+    }
+
+    // Localhost / dev workflow: verify against configured local PIN in memory without Google OAuth
+    return verifyAdminPin(cleanPin);
   };
 
-  const handlePinSuccess = () => {
+  const handlePinSuccess = (enteredPin) => {
+    if (!isSessionTokenActive()) {
+      setAdminPinSession(enteredPin || import.meta.env?.VITE_ADMIN_PIN || '1234');
+    }
     sessionStorage.setItem('resq_admin_verified', 'true');
     localStorage.setItem('resq_member_name', 'Admin');
     setSelectedName('Admin');
     setIsPinModalOpen(false);
-    setPendingSelectName('');
+    const targetPage = pendingAdminReturnPage || (currentPage === 'dashboard' ? 'roster' : currentPage);
+    setPendingAdminReturnPage('');
+    if (targetPage) {
+      setCurrentPage(targetPage);
+    }
+    addToast('Admin mode unlocked', 'success');
   };
 
   const handlePinClose = () => {
     setIsPinModalOpen(false);
-    setPendingSelectName('');
+    setPendingAdminReturnPage('');
+  };
+
+  const handleAdminInit = () => {
+    handleSelectName('Admin');
   };
 
   // 1. Unified Roster Data Synchronization Handler with Resilient Legacy Fallback
@@ -232,7 +389,10 @@ export default function App() {
       setIsSyncing(true);
       setRefreshError('');
       
-      const response = await fetchAllData();
+      const [response, fetchedAmendments] = await Promise.all([
+        fetchAllData(),
+        fetchRosterAmendments().catch(() => null),
+      ]);
       
       let rawRequests = [];
       let rawTeamMembers = [];
@@ -280,8 +440,12 @@ export default function App() {
         if (Array.isArray(response.leaveApplications)) {
           rawLeaveApplications = response.leaveApplications;
         }
-        if (response.settings) {
-          setSettings(response.settings);
+        if (response.settings && typeof response.settings === 'object') {
+          setSettings((currentSettings) => (
+            settingsEquivalent(currentSettings, response.settings)
+              ? currentSettings
+              : response.settings
+          ));
         }
       }
 
@@ -291,13 +455,57 @@ export default function App() {
       setTeamMembers(dedupedMembers);
       setEmergencyPhysicians(dedupedEmergencyPhysicians);
 
-      // Parse & set Requests
+      // Parse & set Requests, preserving any in-flight optimistic operations
       const adapted = adaptRequestsResponse(rawRequests);
-      setRequests(adapted);
+      setRequests((currentRequests) => {
+        const pendingOptimistic = currentRequests.filter((r) => r.isOptimistic);
+        if (!pendingOptimistic.length) {
+          return adapted;
+        }
 
-      // Set Master Baseline Roster with validation (ensure items are not request fallbacks)
+        const stillPending = [];
+        pendingOptimistic.forEach((optReq) => {
+          const isConfirmed = adapted.some((srvReq) => {
+            if (optReq.id && !String(optReq.id).startsWith('opt_') && String(srvReq.id) === String(optReq.id)) {
+              return true;
+            }
+            if (
+              String(optReq.id).startsWith('opt_') &&
+              srvReq.name?.trim().toLowerCase() === optReq.name?.trim().toLowerCase() &&
+              srvReq.date === optReq.date &&
+              srvReq.request === optReq.request &&
+              srvReq.requestType === optReq.requestType
+            ) {
+              return true;
+            }
+            return false;
+          });
+
+          if (!isConfirmed) {
+            stillPending.push(optReq);
+          }
+        });
+
+        return [...adapted, ...stillPending];
+      });
+
+      // Set Master Baseline Roster with validation, preserving in-flight optimistic edits
       const validMasterRoster = validateMasterRoster(rawMasterRoster);
-      setMasterRoster(validMasterRoster);
+      setMasterRoster((currentRoster) => {
+        const pendingOptimistic = currentRoster.filter((r) => r.isOptimistic);
+        if (!pendingOptimistic.length) {
+          return validMasterRoster;
+        }
+        const getRowKey = (r) => {
+          const name = normalizeForComparison(r.name || r.Name || '');
+          const isoDate = toIsoDate(r.date || r.Date) || String(r.date || r.Date || '').trim();
+          const shift = String(r.shift || r.Shift || '').trim().toUpperCase();
+          return `${name}_${isoDate}_${shift}`;
+        };
+        const confirmedKeys = new Set(validMasterRoster.map(getRowKey));
+        const stillPending = pendingOptimistic.filter((r) => !confirmedKeys.has(getRowKey(r)));
+        return [...validMasterRoster, ...stillPending];
+      });
 
       // Set Date caps/limits blocks with validation (ensure items are not request fallbacks)
       const validShiftBlocks = validateShiftBlocks(rawShiftBlocks);
@@ -324,6 +532,16 @@ export default function App() {
       const validLeaveApplications = normalizeLeaveApplications(rawLeaveApplications);
       setLeaveApplications(validLeaveApplications);
 
+      // Update AmendRoster when backend returns amendment history (safe empty fallback if un-deployed)
+      const nextAmendments = Array.isArray(response?.amendRoster)
+        ? response.amendRoster
+        : Array.isArray(response?.rosterAmendments)
+        ? response.rosterAmendments
+        : Array.isArray(fetchedAmendments)
+          ? fetchedAmendments
+          : readCache('resq_cache_rosterAmendments', []);
+      setRosterAmendments(nextAmendments);
+
       // Keep cache keys stable; existing sessions depend on them for startup.
       try {
         writeCacheEntries([
@@ -331,6 +549,7 @@ export default function App() {
           ['resq_cache_emergencyPhysicians', dedupedEmergencyPhysicians],
           ['resq_cache_requests', adapted],
           ['resq_cache_masterRoster', validMasterRoster],
+          ['resq_cache_rosterAmendments', nextAmendments],
           ['resq_cache_shiftBlocks', validShiftBlocks],
           ['resq_cache_shiftTypes', validShiftTypes],
           ['resq_cache_limitGroups', validLimitGroups],
@@ -358,7 +577,9 @@ export default function App() {
     let timeoutId;
 
     const fetchLoop = async () => {
-      await loadAllData();
+      if (inFlightMutationsRef.current === 0) {
+        await loadAllData();
+      }
       timeoutId = window.setTimeout(fetchLoop, REFRESH_INTERVAL);
     };
 
@@ -366,6 +587,9 @@ export default function App() {
 
     return () => {
       window.clearTimeout(timeoutId);
+      if (pendingSyncTimeoutRef.current) {
+        clearTimeout(pendingSyncTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -426,11 +650,12 @@ export default function App() {
       swapPartner: swapPartner || '',
     };
 
-    const previousRequests = [...requests];
     const tempId = id || `opt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    let originalItem = null;
 
     setRequests((prev) => {
       if (id) {
+        originalItem = prev.find((req) => req.id === id);
         return prev.map((req) =>
           req.id === id ? { ...req, ...payload, isOptimistic: true } : req
         );
@@ -450,6 +675,7 @@ export default function App() {
     const actionText = id ? 'Updating' : 'Submitting';
     const toastId = addToast(`🔄 ${actionText} request for ${name}...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         if (id) {
@@ -462,15 +688,23 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Background save failed:', err);
-        setRequests(previousRequests);
+        setRequests((prev) => {
+          if (id) {
+            return originalItem ? prev.map((r) => (r.id === id ? originalItem : r)) : prev;
+          } else {
+            return prev.filter((r) => r.id !== tempId);
+          }
+        });
         updateToast(toastId, {
           message: `❌ Save failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -481,12 +715,15 @@ export default function App() {
       throw new Error('Missing request ID for deletion.');
     }
 
-    const previousRequests = [...requests];
-
-    setRequests((prev) => prev.filter((req) => req.id !== id));
+    let deletedItem = null;
+    setRequests((prev) => {
+      deletedItem = prev.find((req) => req.id === id);
+      return prev.filter((req) => req.id !== id);
+    });
 
     const toastId = addToast(`🔄 Deleting request for ${name || 'member'}...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await deleteRequest(id);
@@ -495,31 +732,40 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Background deletion failed:', err);
-        setRequests(previousRequests);
+        if (deletedItem) {
+          setRequests((prev) => [...prev, deletedItem]);
+        }
         updateToast(toastId, {
           message: `❌ Deletion failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
 
   // Approval changes share the same optimistic refresh/revert pattern.
   const handleUpdateApproval = async (id, approvalStatus) => {
-    const previousRequests = [...requests];
+    let previousStatus = null;
 
     setRequests((prev) =>
-      prev.map((req) =>
-        req.id === id ? { ...req, approvalStatus, isOptimistic: true } : req
-      )
+      prev.map((req) => {
+        if (req.id === id) {
+          previousStatus = req.approvalStatus;
+          return { ...req, approvalStatus, isOptimistic: true };
+        }
+        return req;
+      })
     );
 
     const toastId = addToast(`🔄 Updating approval status...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateRequestApproval(id, approvalStatus);
@@ -528,38 +774,45 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Background approval update failed:', err);
-        setRequests(previousRequests);
+        if (previousStatus !== null) {
+          setRequests((prev) =>
+            prev.map((req) => (req.id === id ? { ...req, approvalStatus: previousStatus, isOptimistic: false } : req))
+          );
+        }
         updateToast(toastId, {
           message: `❌ Approval update failed: ${err.message || 'Network error'}. Reverted.`,
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
 
   // Handle Excel Baseline Uploads
   const handleUploadBaseline = async (rows, targetMonth) => {
-    const trimmedTargetMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
-    let canonicalMonth = trimmedTargetMonth;
+    let canonicalMonth = typeof targetMonth === 'string' ? targetMonth.trim() : '';
+
+    // If targetMonth is not passed, attempt deterministic extraction from rows
     if (!canonicalMonth && Array.isArray(rows) && rows.length > 0) {
-      const monthsInRows = new Set();
+      const uniqueMonths = new Set();
       for (const r of rows) {
-        const iso = toIsoDate(r?.date || r?.Date);
-        if (iso && /^\d{4}-(0[1-9]|1[0-2])$/.test(iso.slice(0, 7))) {
-          monthsInRows.add(iso.slice(0, 7));
+        const d = r?.date || r?.Date;
+        const iso = toIsoDate(d) || (typeof d === 'string' ? d.trim() : '');
+        if (/^\d{4}-(0[1-9]|1[0-2])/.test(iso)) {
+          uniqueMonths.add(iso.slice(0, 7));
         }
       }
-      if (monthsInRows.size === 1) {
-        canonicalMonth = [...monthsInRows][0];
+      if (uniqueMonths.size === 1) {
+        canonicalMonth = [...uniqueMonths][0];
       }
     }
 
     if (!canonicalMonth || !/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
-      console.error('Missing or invalid targetMonth for roster upload:', targetMonth);
       addToast('❌ Upload failed: targetMonth is required in YYYY-MM format for roster upload.. Reverted.', 'error', 5000);
       return;
     }
@@ -581,6 +834,7 @@ export default function App() {
       date: r.date,
       Shift: r.shift,
       shift: r.shift,
+      isOptimistic: true,
     }));
 
     setMasterRoster((prev) => {
@@ -593,8 +847,9 @@ export default function App() {
       return [...otherMonths, ...validatedRows];
     });
 
-    const toastId = addToast('🔄 Uploading roster baseline to Google Sheets...', 'info', Infinity);
+    const toastId = addToast('🔄 Uploading roster baseline...', 'info', Infinity);
     
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await uploadMasterRoster(monthScopedRows, canonicalMonth);
@@ -603,9 +858,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        // Give Google Sheets ~1.5 s to commit the write before reading back
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        await loadAllData();
       } catch (err) {
         console.error('Failed to upload baseline:', err);
         setMasterRoster((prev) => {
@@ -621,6 +873,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 800 : 2000);
       }
     })();
   };
@@ -639,6 +894,7 @@ export default function App() {
     };
     setShiftBlocks((prev) => [...prev, newBlock]);
     const toastId = addToast('🔄 Applying limit block cap...', 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await submitShiftBlock(payload);
       updateToast(toastId, {
@@ -646,7 +902,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftBlocks(previousBlocks);
       updateToast(toastId, {
@@ -654,6 +909,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -662,6 +920,7 @@ export default function App() {
     const previousBlocks = [...shiftBlocks];
     setShiftBlocks((prev) => prev.filter(b => b.ID !== id && b.id !== id));
     const toastId = addToast('🔄 Deleting limit block cap...', 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await deleteShiftBlock(id);
       updateToast(toastId, {
@@ -669,7 +928,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftBlocks(previousBlocks);
       updateToast(toastId, {
@@ -677,6 +935,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -694,6 +955,7 @@ export default function App() {
     };
     setShiftTypes((prev) => [...prev, newShiftType]);
     const toastId = addToast(`🔄 Adding shift type "${payload.name}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await submitShiftType(payload);
       updateToast(toastId, {
@@ -701,7 +963,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -709,6 +970,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -721,6 +985,7 @@ export default function App() {
       )
     );
     const toastId = addToast(`🔄 Updating shift type "${payload.name}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await updateShiftType(id, payload);
       updateToast(toastId, {
@@ -728,7 +993,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -736,6 +1000,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -745,6 +1012,7 @@ export default function App() {
     const label = shiftType ? shiftType.Name : 'shift type';
     setShiftTypes((prev) => prev.filter(s => s.ID !== id && s.id !== id));
     const toastId = addToast(`🔄 Deleting shift type "${label}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await deleteShiftType(id);
       updateToast(toastId, {
@@ -752,7 +1020,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -760,6 +1027,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -768,6 +1038,7 @@ export default function App() {
     const reordered = ids.map(id => shiftTypes.find(s => s.ID === id || s.id === id)).filter(Boolean);
     setShiftTypes(reordered);
     const toastId = addToast('🔄 Reordering shift types configuration...', 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await reorderShiftTypes(ids);
       updateToast(toastId, {
@@ -775,7 +1046,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setShiftTypes(previousShiftTypes);
       updateToast(toastId, {
@@ -783,6 +1053,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -799,6 +1072,7 @@ export default function App() {
     };
     setLimitGroups((prev) => [...prev, newGroup]);
     const toastId = addToast(`🔄 Adding limit group "${payload.groupName}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await submitLimitGroup(payload);
       updateToast(toastId, {
@@ -806,7 +1080,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLimitGroups(previousLimitGroups);
       updateToast(toastId, {
@@ -814,6 +1087,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -826,6 +1102,7 @@ export default function App() {
       )
     );
     const toastId = addToast(`🔄 Updating limit group "${payload.groupName}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await updateLimitGroup(id, payload);
       updateToast(toastId, {
@@ -833,7 +1110,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLimitGroups(previousLimitGroups);
       updateToast(toastId, {
@@ -841,6 +1117,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -850,6 +1129,7 @@ export default function App() {
     const label = group ? group.GroupName : 'limit group';
     setLimitGroups((prev) => prev.filter(g => g.ID !== id && g.id !== id));
     const toastId = addToast(`🔄 Deleting limit group "${label}"...`, 'info', Infinity);
+    inFlightMutationsRef.current++;
     try {
       await deleteLimitGroup(id);
       updateToast(toastId, {
@@ -857,7 +1137,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLimitGroups(previousLimitGroups);
       updateToast(toastId, {
@@ -865,6 +1144,9 @@ export default function App() {
         type: 'error',
         duration: 5000,
       });
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -882,6 +1164,7 @@ export default function App() {
     setActivities((prev) => [newActivity, ...prev]);
     const toastId = addToast(`🔄 Publishing announcement/update...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await submitActivity(payload);
@@ -890,8 +1173,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await new Promise((resolve) => setTimeout(resolve, 800));
-        await loadAllData();
       } catch (err) {
         console.error('Background activity addition failed:', err);
         setActivities(previousActivities);
@@ -900,6 +1181,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -915,6 +1199,7 @@ export default function App() {
     setActivities((prev) => prev.filter((a) => a.ID !== id));
     const toastId = addToast(`🔄 Deleting announcement/update...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await deleteActivity(id);
@@ -923,8 +1208,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await new Promise((resolve) => setTimeout(resolve, 800));
-        await loadAllData();
       } catch (err) {
         console.error('Background activity deletion failed:', err);
         setActivities(previousActivities);
@@ -933,6 +1216,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -943,6 +1229,7 @@ export default function App() {
 
     const toastId = addToast(`🔄 Updating system settings...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateSetting(key, value);
@@ -951,7 +1238,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Failed to update setting:', err);
         setSettings(previousSettings);
@@ -960,6 +1246,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -970,6 +1259,7 @@ export default function App() {
 
     const toastId = addToast(`🔄 Updating team members list...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateTeamMembers(newNames);
@@ -978,7 +1268,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Failed to update team members:', err);
         setTeamMembers(previousTeamMembers);
@@ -987,6 +1276,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -997,6 +1289,7 @@ export default function App() {
 
     const toastId = addToast(`🔄 Updating emergency physicians list...`, 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     (async () => {
       try {
         await updateEmergencyPhysicians(newNames);
@@ -1005,7 +1298,6 @@ export default function App() {
           type: 'success',
           duration: 3000,
         });
-        await loadAllData();
       } catch (err) {
         console.error('Failed to update emergency physicians:', err);
         setEmergencyPhysicians(previousEmergencyPhysicians);
@@ -1014,6 +1306,9 @@ export default function App() {
           type: 'error',
           duration: 5000,
         });
+      } finally {
+        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
       }
     })();
   };
@@ -1031,6 +1326,7 @@ export default function App() {
     setPublicHolidays(nextPublicHolidays);
     const toastId = addToast('Saving public holiday...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await upsertPublicHoliday({ date: normalizedDate, name: cleanName });
       updateToast(toastId, {
@@ -1038,7 +1334,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       applyCustomPublicHolidays(previousPublicHolidays);
       setPublicHolidays(previousPublicHolidays);
@@ -1048,6 +1343,9 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -1059,6 +1357,7 @@ export default function App() {
     setPublicHolidays(nextPublicHolidays);
     const toastId = addToast('Removing public holiday...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await deletePublicHoliday(date);
       updateToast(toastId, {
@@ -1066,7 +1365,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       applyCustomPublicHolidays(previousPublicHolidays);
       setPublicHolidays(previousPublicHolidays);
@@ -1076,6 +1374,9 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -1091,6 +1392,7 @@ export default function App() {
     setLeaveApplications(nextLeaveApplications);
     const toastId = addToast('Saving leave form status...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await upsertLeaveApplication(payload);
       updateToast(toastId, {
@@ -1098,7 +1400,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLeaveApplications(previousLeaveApplications);
       updateToast(toastId, {
@@ -1107,6 +1408,9 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
@@ -1115,6 +1419,7 @@ export default function App() {
     setLeaveApplications((current) => current.filter((record) => record.ID !== id));
     const toastId = addToast('Removing leave tracking record...', 'info', Infinity);
 
+    inFlightMutationsRef.current++;
     try {
       await deleteLeaveApplication(id);
       updateToast(toastId, {
@@ -1122,7 +1427,6 @@ export default function App() {
         type: 'success',
         duration: 3000,
       });
-      await loadAllData();
     } catch (error) {
       setLeaveApplications(previousLeaveApplications);
       updateToast(toastId, {
@@ -1131,12 +1435,225 @@ export default function App() {
         duration: 5000,
       });
       throw error;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
     }
   };
 
   const activeRequests = useMemo(() => {
     return requests.filter((request) => request.status?.toLowerCase() === 'active');
   }, [requests]);
+
+  const allDirectoryMembers = useMemo(
+    () => [...teamMembers, ...emergencyPhysicians],
+    [teamMembers, emergencyPhysicians]
+  );
+
+  // Shared Main + Amend Composition: DISPLAYED ROSTER = MAIN + LATEST APPLICABLE AMENDMENTS
+  const composedRoster = useMemo(
+    () => composeEffectiveRoster({
+      mainRows: masterRoster,
+      amendments: rosterAmendments,
+      teamMembers: allDirectoryMembers,
+    }),
+    [masterRoster, rosterAmendments, allDirectoryMembers]
+  );
+
+  // Revalidate current server state before explicit Save Changes
+  const handleFetchLatestSimplifiedServerState = async () => {
+    const [latestMainRaw, latestAmendmentsRaw] = await Promise.all([
+      fetchMasterRoster(),
+      fetchRosterAmendments().catch(() => []),
+    ]);
+    const validMain = validateMasterRoster(latestMainRaw);
+    const validAmendments = Array.isArray(latestAmendmentsRaw) ? latestAmendmentsRaw : [];
+    return {
+      mainRows: validMain,
+      amendments: validAmendments,
+    };
+  };
+
+  // Explicit Save Changes for Future Months (DRAFT -> MAIN / MasterRoster)
+  const handleSaveSimplifiedDraft = async ({
+    changes,
+    rows,
+    targetMonth,
+    operationId,
+    expectedCellBaselines,
+    expectedMonthCellCount,
+  }) => {
+    const canonicalMonth = String(targetMonth || '').trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      throw new Error('targetMonth is required in YYYY-MM format for draft save.');
+    }
+
+    const monthScopedRows = (Array.isArray(rows) ? rows : []).filter((r) => {
+      const iso = toIsoDate(r?.date || r?.Date);
+      return iso ? iso.startsWith(canonicalMonth) : String(r?.date || r?.Date || '').startsWith(canonicalMonth);
+    });
+
+    inFlightMutationsRef.current++;
+    try {
+      const res = await saveMasterRosterDraft({
+        changes,
+        rows: monthScopedRows,
+        targetMonth: canonicalMonth,
+        operationId,
+        expectedCellBaselines,
+        expectedMonthCellCount,
+      });
+
+      const confirmedMonthRows = monthScopedRows.map((r) => ({
+        Name: r.name ?? r.Name,
+        name: r.name ?? r.Name,
+        Date: r.date ?? r.Date,
+        date: r.date ?? r.Date,
+        Shift: r.shift ?? r.Shift,
+        shift: r.shift ?? r.Shift,
+      }));
+
+      setMasterRoster((prev) => {
+        const isMonthMatch = (r) => {
+          const iso = toIsoDate(r.date || r.Date);
+          return iso ? iso.startsWith(canonicalMonth) : String(r.date || r.Date || '').startsWith(canonicalMonth);
+        };
+
+        if (Array.isArray(changes) && changes.length > 0) {
+          const otherMonthRows = prev.filter((r) => !isMonthMatch(r));
+          const targetRows = prev.filter(isMonthMatch);
+          const changesMap = new Map();
+          for (const ch of changes) {
+            const chDate = toIsoDate(ch.date) || String(ch.date || '').trim();
+            const chField = String(ch.field || 'MO_SHIFT').trim().toUpperCase();
+            const isEp = chField === 'EP_OFFICE_HOUR' || chField === 'EP_ONCALL';
+            const k = isEp
+              ? `EP|${chDate}|${chField}`
+              : `MO|${chDate}|${normalizeForComparison(ch.staffName || ch.staffKey || '')}`;
+            changesMap.set(k, { ...ch, isEp, dateStr: chDate, fieldUp: chField });
+          }
+
+          const updatedTargetRows = [];
+          const appliedKeys = new Set();
+          for (const row of targetRows) {
+            const rDate = toIsoDate(row?.date || row?.Date) || String(row?.date || row?.Date || '').trim();
+            const rShift = String(row?.shift || row?.Shift || '').trim();
+            const rName = String(row?.name || row?.Name || '').trim();
+            const isEp = rShift.toUpperCase() === 'EP_OFFICE_HOUR' || rShift.toUpperCase() === 'EP_ONCALL';
+            const k = isEp
+              ? `EP|${rDate}|${rShift.toUpperCase()}`
+              : `MO|${rDate}|${normalizeForComparison(rName)}`;
+
+            if (changesMap.has(k)) {
+              if (!appliedKeys.has(k)) {
+                appliedKeys.add(k);
+                const ch = changesMap.get(k);
+                if (!ch.isCleared && ch.newValue && ch.newValue !== '__CLEAR__') {
+                  updatedTargetRows.push(isEp
+                    ? { Name: ch.newValue, name: ch.newValue, Date: rDate, date: rDate, Shift: ch.fieldUp, shift: ch.fieldUp }
+                    : { Name: ch.staffName || rName, name: ch.staffName || rName, Date: rDate, date: rDate, Shift: ch.newValue, shift: ch.newValue }
+                  );
+                }
+              }
+            } else {
+              updatedTargetRows.push(row);
+            }
+          }
+
+          for (const [k, ch] of changesMap.entries()) {
+            if (!appliedKeys.has(k) && !ch.isCleared && ch.newValue && ch.newValue !== '__CLEAR__') {
+              updatedTargetRows.push(ch.isEp
+                ? { Name: ch.newValue, name: ch.newValue, Date: ch.dateStr, date: ch.dateStr, Shift: ch.fieldUp, shift: ch.fieldUp }
+                : { Name: ch.staffName || ch.staffKey, name: ch.staffName || ch.staffKey, Date: ch.dateStr, date: ch.dateStr, Shift: ch.newValue, shift: ch.newValue }
+              );
+            }
+          }
+
+          const nextRoster = [...otherMonthRows, ...updatedTargetRows];
+          try {
+            writeCacheEntries([['resq_cache_masterRoster', nextRoster]]);
+          } catch (_) {}
+          return nextRoster;
+        }
+
+        const otherMonths = prev.filter((r) => !isMonthMatch(r));
+        const nextRoster = [...otherMonths, ...confirmedMonthRows];
+        try {
+          writeCacheEntries([['resq_cache_masterRoster', nextRoster]]);
+        } catch (_) {}
+        return nextRoster;
+      });
+
+      addToast('✅ Draft saved to Main Roster!', 'success');
+      scheduleSafeSync(800);
+      return res;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+    }
+  };
+
+  // Explicit Save Changes for Current & Past Months (AMEND -> AmendRoster, MAIN untouched)
+  const handleAppendSimplifiedAmendments = async ({
+    targetMonth,
+    operationId,
+    amendments,
+  }) => {
+    const canonicalMonth = String(targetMonth || '').trim();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(canonicalMonth) || canonicalMonth.startsWith('0000')) {
+      throw new Error('targetMonth is required in YYYY-MM format for amendments.');
+    }
+
+    inFlightMutationsRef.current++;
+    try {
+      const res = await appendRosterAmendments({
+        targetMonth: canonicalMonth,
+        operationId,
+        amendments,
+      });
+
+      const savedAtFallback = new Date().toISOString();
+      const confirmedRecords = Array.isArray(res?.amendments) && res.amendments.length > 0
+        ? res.amendments
+        : (Array.isArray(amendments) ? amendments : []).map((a, idx) => ({
+            AmendmentId: a.amendmentId || `${operationId}_${idx + 1}`,
+            OperationId: operationId,
+            RosterMonth: canonicalMonth,
+            Date: a.date,
+            TargetType: a.targetType || 'MO',
+            Field: a.field || 'MO_SHIFT',
+            StaffKey: a.staffKey || '',
+            StaffName: a.staffName || '',
+            PreviousValue: a.previousValue || '',
+            NewValue: a.isCleared ? '__CLEAR__' : (a.newValue || ''),
+            IsCleared: Boolean(a.isCleared),
+            SavedAt: savedAtFallback,
+            Sequence: Date.now() + idx,
+          }));
+
+      setRosterAmendments((prev) => {
+        const existingOpIds = new Set(
+          prev
+            .map((r) => String(r?.AmendmentId || r?.amendmentId || '').trim())
+            .filter(Boolean)
+        );
+        const dedupedIncoming = confirmedRecords.filter((rec) => {
+          const id = String(rec?.AmendmentId || rec?.amendmentId || '').trim();
+          return !id || !existingOpIds.has(id);
+        });
+        const nextList = [...prev, ...dedupedIncoming];
+        try {
+          writeCacheEntries([['resq_cache_rosterAmendments', nextList]]);
+        } catch (_) {}
+        return nextList;
+      });
+
+      addToast('✅ Amendments saved! Main Roster preserved.', 'success');
+      scheduleSafeSync(800);
+      return res;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans">
@@ -1150,11 +1667,145 @@ export default function App() {
         names={rosterNames}
         syncStatus={isSyncing ? 'loading' : refreshError ? 'error' : 'connected'}
         onRefresh={loadAllData}
+        isAdmin={isAdmin}
       />
 
       {/* Content wrapper which translates right on desktop */}
       <div className="flex-1 flex flex-col min-w-0 lg:pl-64">
         
+        {/* 🧪 Development Mock Banner (Guaranteed Zero Live Sheets Mutations) */}
+        {isDevMockActive() && (
+          <div className="bg-amber-950/90 text-amber-200 text-xs px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 border-b border-amber-700/60 shadow-xs z-40">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold flex items-center gap-1 text-amber-100">
+                🧪 Dev Mock Mode
+              </span>
+              <span className="text-amber-300/80 hidden sm:inline">
+                (Zero network calls to production Google Sheets)
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  resetMockStore();
+                  window.location.reload();
+                }}
+                className="px-2 py-0.5 rounded bg-amber-900/90 hover:bg-amber-800 text-amber-100 font-medium border border-amber-600/40 cursor-pointer"
+              >
+                Reset Mock Data
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const curr = getMockSimulationState().conflict;
+                  setSimulateSaveConflict(!curr);
+                  forceUpdateMockUi({});
+                }}
+                className={`px-2 py-0.5 rounded font-medium border cursor-pointer ${
+                  getMockSimulationState().conflict
+                    ? 'bg-rose-600 text-white border-rose-400'
+                    : 'bg-amber-900/90 hover:bg-amber-800 text-amber-200 border-amber-600/40'
+                }`}
+              >
+                {getMockSimulationState().conflict ? '⚠️ Conflict Armed' : 'Simulate Conflict'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const curr = getMockSimulationState().failure;
+                  setSimulateSaveFailure(!curr);
+                  forceUpdateMockUi({});
+                }}
+                className={`px-2 py-0.5 rounded font-medium border cursor-pointer ${
+                  getMockSimulationState().failure
+                    ? 'bg-rose-600 text-white border-rose-400'
+                    : 'bg-amber-900/90 hover:bg-amber-800 text-amber-200 border-amber-600/40'
+                }`}
+              >
+                {getMockSimulationState().failure ? '❌ 500 Failure Armed' : 'Simulate 500 Failure'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDevMockActive(false);
+                  window.location.reload();
+                }}
+                className="px-2 py-0.5 rounded bg-black/50 hover:bg-black text-amber-300 font-medium border border-amber-700/50 cursor-pointer"
+              >
+                Exit Mock
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 🚀 Verified Staging Banner / Safety Lockout */}
+        {!isDevMockActive() && typeof window !== 'undefined' && stagingIdentity.status === 'verified' && (
+          <div className="bg-sky-950/90 text-sky-200 text-xs px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 border-b border-sky-700/60 shadow-xs z-40">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold flex items-center gap-1 text-sky-100">
+                🚀 Verified Staging Backend Active
+              </span>
+              <span className="text-sky-300/80 hidden sm:inline">
+                ({stagingIdentity.spreadsheetName || 'Disposable Staging Workbook'} · ID: {stagingIdentity.spreadsheetId ? `${stagingIdentity.spreadsheetId.slice(0, 10)}...` : 'confirmed'})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('stagingUrl');
+                  url.searchParams.delete('staging_url');
+                  window.localStorage?.removeItem('resq_staging_api_url');
+                  window.location.href = url.pathname;
+                } catch (_) {
+                  window.location.reload();
+                }
+              }}
+              className="px-2 py-0.5 rounded bg-sky-900/90 hover:bg-sky-800 text-sky-100 font-medium border border-sky-600/40 cursor-pointer"
+            >
+              Exit Staging
+            </button>
+          </div>
+        )}
+
+        {!isDevMockActive() && typeof window !== 'undefined' && stagingIdentity.status === 'checking' && (
+          <div className="bg-slate-900/90 text-slate-300 text-xs px-3 py-1.5 flex items-center justify-between gap-2 border-b border-slate-700/60 shadow-xs z-40">
+            <span>⏳ Verifying Staging Backend Identity...</span>
+          </div>
+        )}
+
+        {!isDevMockActive() && typeof window !== 'undefined' && stagingIdentity.status === 'rejected' && (
+          <div className="bg-rose-950/90 text-rose-200 text-xs px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 border-b border-rose-700/60 shadow-xs z-40">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold flex items-center gap-1 text-rose-100">
+                ⚠️ Staging Connection Blocked: Unverified Backend
+              </span>
+              <span className="text-rose-300/90 hidden sm:inline">
+                ({stagingIdentity.errorMessage || 'Target did not pass server-side staging identity verification.'})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('stagingUrl');
+                  url.searchParams.delete('staging_url');
+                  window.localStorage?.removeItem('resq_staging_api_url');
+                  window.location.href = url.pathname;
+                } catch (_) {
+                  window.location.reload();
+                }
+              }}
+              className="px-2 py-0.5 rounded bg-rose-900/90 hover:bg-rose-800 text-rose-100 font-medium border border-rose-600/40 cursor-pointer"
+            >
+              Exit Staging
+            </button>
+          </div>
+        )}
+
         {/* 📣 Marquee Notifications Banner */}
         <div className="sticky top-14 lg:top-0 z-30 shadow-xs flex flex-col">
           <NotificationBanner
@@ -1174,7 +1825,7 @@ export default function App() {
               selectedName={selectedName}
               names={rosterNames}
               requests={requests}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               shiftBlocks={shiftBlocks}
               onUpdateApproval={handleUpdateApproval}
               onNavigate={setCurrentPage}
@@ -1185,11 +1836,20 @@ export default function App() {
         {currentPage === 'roster' && (
           <div className="animate-fadeIn">
             <RosterPage
+              simplifiedMode={true}
               selectedName={selectedName}
+              isAdmin={isAdmin}
               names={allRosterNames}
               requests={requests}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
+              rawMasterRoster={masterRoster}
+              rosterAmendments={rosterAmendments}
+              amendedCellsMap={composedRoster.amendedCellsMap}
               onUploadMasterRoster={handleUploadBaseline}
+              onSaveSimplifiedDraft={handleSaveSimplifiedDraft}
+              onAppendSimplifiedAmendments={handleAppendSimplifiedAmendments}
+              onFetchLatestSimplifiedServerState={handleFetchLatestSimplifiedServerState}
+              onRequestAdminPin={handleAdminInit}
               onRefresh={loadAllData}
               shiftTypes={shiftTypes}
               limitGroups={limitGroups}
@@ -1217,7 +1877,7 @@ export default function App() {
               onDeleteRequest={handleDeleteRequest}
               isLoadingRequests={isLoading}
               shiftBlocks={shiftBlocks}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               shiftTypes={shiftTypes}
               limitGroups={limitGroups}
               settings={settings}
@@ -1237,13 +1897,13 @@ export default function App() {
           </div>
         )}
 
-        {currentPage === 'summary' && selectedName?.trim().toLowerCase() === 'admin' && (
+        {currentPage === 'summary' && isAdmin && (
           <div className="animate-fadeIn">
             <AnalyticsPage
               selectedName={selectedName}
               names={allRosterNames}
               requests={requests}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               shiftTypes={shiftTypes}
               teamMembers={teamMembers}
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
@@ -1259,16 +1919,16 @@ export default function App() {
             <PublicHolidayTrackerPage
               selectedName={selectedName}
               names={allRosterNames}
-              masterRoster={masterRoster}
+              masterRoster={composedRoster.effectiveRows}
               rosterMonth={settings.current_roster_month || settings.current_month || new Date().toISOString().substring(0, 7)}
               settings={settings}
               onUpdateSetting={handleUpdateSetting}
-              teamMembers={[...teamMembers, ...emergencyPhysicians]}
+              teamMembers={allDirectoryMembers}
             />
           </div>
         )}
 
-        {currentPage === 'admin' && selectedName?.trim().toLowerCase() === 'admin' && (
+        {currentPage === 'admin' && isAdmin && (
           <div className="animate-fadeIn">
             <AdminPanel
               requests={requests}
@@ -1306,7 +1966,7 @@ export default function App() {
       </div>
 
       {/* Onboarding Screen Dialog Overlay */}
-      {selectedName === '' && (
+      {selectedName === '' && !isPinModalOpen && (
         <OnboardingOverlay
           names={rosterNames}
           onSelect={handleSelectName}
@@ -1315,11 +1975,12 @@ export default function App() {
         />
       )}
 
-      {/* Admin security PIN verification dialog */}
+      {/* 4-Digit Admin PIN Modal */}
       <AdminPinModal
         isOpen={isPinModalOpen}
         onClose={handlePinClose}
         onSuccess={handlePinSuccess}
+        onVerifyPin={handleVerifyPin}
       />
 
       {/* PWA Install Banner */}

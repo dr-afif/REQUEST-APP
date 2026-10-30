@@ -1,0 +1,1467 @@
+const REQUEST_SHEET_NAME = 'Requests';
+const TEAM_MEMBERS_SHEET_NAME = 'TeamMembers';
+const EMERGENCY_PHYSICIANS_SHEET_NAME = 'EmergencyPhysicians';
+const MASTER_ROSTER_SHEET_NAME = 'MasterRoster';
+const SHIFT_BLOCKS_SHEET_NAME = 'ShiftBlocks';
+const SHIFT_TYPES_SHEET_NAME = 'ShiftTypes';
+const LIMIT_GROUPS_SHEET_NAME = 'LimitGroups';
+const ACTIVITY_HISTORY_SHEET_NAME = 'ActivityHistory';
+const SETTINGS_SHEET_NAME = 'Settings';
+const PUBLIC_HOLIDAYS_SHEET_NAME = 'PublicHolidays';
+const LEAVE_APPLICATIONS_SHEET_NAME = 'LeaveApplications';
+
+const STATUS_ACTIVE = 'Active';
+const STATUS_OLD = 'Old Request';
+const STATUS_CANCELLED = 'Cancelled';
+
+const APPROVAL_PENDING_PARTNER = 'Pending Partner';
+const APPROVAL_PENDING_ADMIN = 'Pending Admin';
+const APPROVAL_APPROVED = 'Approved';
+const APPROVAL_REJECTED = 'Rejected';
+
+function doGet(e) {
+  try {
+    const action = (e && e.parameter && e.parameter.action ? String(e.parameter.action) : '').toLowerCase();
+    if (action === 'teammembers') {
+      return getTeamMembersResponse();
+    }
+    if (action === 'emergencyphysicians') {
+      return getEmergencyPhysiciansResponse();
+    }
+    if (action === 'alldata') {
+      return getAllDataResponse();
+    }
+    if (action === 'masterroster') {
+      return createJsonResponse(getMasterRosterData());
+    }
+    if (action === 'shiftblocks') {
+      return createJsonResponse(getShiftBlocksData());
+    }
+    if (action === 'shifttypes') {
+      return createJsonResponse(getShiftTypesData());
+    }
+    if (action === 'limitgroups') {
+      return createJsonResponse(getLimitGroupsData());
+    }
+    if (action === 'activityhistory') {
+      return createJsonResponse(getActivityHistoryData());
+    }
+    if (action === 'publicholidays') {
+      return createJsonResponse(getPublicHolidaysData());
+    }
+    if (action === 'leaveapplications') {
+      return createJsonResponse(getLeaveApplicationsData());
+    }
+    return getRequestsResponse();
+  } catch (error) {
+    return createJsonResponse({ result: 'error', message: error.message || error.toString() });
+  }
+}
+
+function doPost(e) {
+  try {
+    const payload = parseRequestBody(e);
+    const action = String(payload.action || '').toLowerCase();
+
+    if (action === 'submit') {
+      return handleSubmit(payload);
+    }
+    if (action === 'update') {
+      return handleUpdate(payload);
+    }
+    if (action === 'delete') {
+      return handleDelete(payload);
+    }
+    if (action === 'uploadmasterroster') {
+      return handleUploadMasterRoster(payload);
+    }
+    if (action === 'updaterequestapproval') {
+      return handleUpdateRequestApproval(payload);
+    }
+    if (action === 'addshiftblock') {
+      return handleAddShiftBlock(payload);
+    }
+    if (action === 'deleteshiftblock') {
+      return handleDeleteShiftBlock(payload);
+    }
+    if (action === 'addshifttype') {
+      return handleAddShiftType(payload);
+    }
+    if (action === 'updateshifttype') {
+      return handleUpdateShiftType(payload);
+    }
+    if (action === 'deleteshifttype') {
+      return handleDeleteShiftType(payload);
+    }
+    if (action === 'reordershifttypes') {
+      return handleReorderShiftTypes(payload);
+    }
+    if (action === 'addlimitgroup') {
+      return handleAddLimitGroup(payload);
+    }
+    if (action === 'updatelimitgroup') {
+      return handleUpdateLimitGroup(payload);
+    }
+    if (action === 'deletelimitgroup') {
+      return handleDeleteLimitGroup(payload);
+    }
+    if (action === 'addactivity') {
+      return handleAddActivity(payload);
+    }
+    if (action === 'deleteactivity') {
+      return handleDeleteActivity(payload);
+    }
+    if (action === 'updatesetting') {
+      return handleUpdateSetting(payload);
+    }
+    if (action === 'updateteammembers') {
+      return handleUpdateTeamMembers(payload);
+    }
+    if (action === 'updateemergencyphysicians') {
+      return handleUpdateEmergencyPhysicians(payload);
+    }
+    if (action === 'upsertpublicholiday') {
+      return handleUpsertPublicHoliday(payload);
+    }
+    if (action === 'deletepublicholiday') {
+      return handleDeletePublicHoliday(payload);
+    }
+    if (action === 'upsertleaveapplication') {
+      return handleUpsertLeaveApplication(payload);
+    }
+    if (action === 'deleteleaveapplication') {
+      return handleDeleteLeaveApplication(payload);
+    }
+
+    throw new Error('Unknown action: ' + action);
+  } catch (error) {
+    return createJsonResponse({ result: 'error', message: error.message || error.toString() });
+  }
+}
+
+function getAllDataResponse() {
+  return createJsonResponse({
+    requests: getRequestsData(),
+    teamMembers: getTeamMembersData(),
+    emergencyPhysicians: getEmergencyPhysiciansData(),
+    masterRoster: getMasterRosterData(),
+    shiftBlocks: getShiftBlocksData(),
+    shiftTypes: getShiftTypesData(),
+    limitGroups: getLimitGroupsData(),
+    activityHistory: getActivityHistoryData(),
+    settings: getSettingsData(),
+    publicHolidays: getPublicHolidaysData(),
+    leaveApplications: getLeaveApplicationsData()
+  });
+}
+
+function getRequestsResponse() {
+  return createJsonResponse(getRequestsData());
+}
+
+function getRequestsData() {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(REQUEST_SHEET_NAME, ['ID', 'Timestamp', 'Name', 'Date', 'Day', 'Request', 'Status', 'Comment', 'ApprovalStatus', 'SwapPartner', 'RequestType']);
+    return [];
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = ensureHeaders(sheet, values[0]);
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function getTeamMembersResponse() {
+  return createJsonResponse(getTeamMembersData());
+}
+
+function getTeamMembersData() {
+  return getDirectoryMembersData(TEAM_MEMBERS_SHEET_NAME);
+}
+
+function getEmergencyPhysiciansResponse() {
+  return createJsonResponse(getEmergencyPhysiciansData());
+}
+
+function getEmergencyPhysiciansData() {
+  return getDirectoryMembersData(EMERGENCY_PHYSICIANS_SHEET_NAME);
+}
+
+function getDirectoryMembersData(sheetName) {
+  const sheet = getSheetByName(sheetName);
+  if (!sheet) {
+    createSheetIfNotExist(sheetName, ['MemberName', 'FullName', 'Phone', 'Active']);
+    return [];
+  }
+
+  const rows = sheet.getDataRange().getValues();
+  if (rows.length <= 0) {
+    return [];
+  }
+
+  const headers = rows[0];
+  let nameIndex = headers.indexOf('MemberName');
+  let fullNameIndex = headers.indexOf('FullName');
+  let phoneIndex = headers.indexOf('Phone');
+  let activeIndex = headers.indexOf('Active');
+  let staffIdIndex = headers.indexOf('StaffId');
+  let emailIndex = headers.indexOf('Email');
+
+  // Automatically migrate/ensure columns exist in sheet if they are missing from headers
+  let changed = false;
+  if (nameIndex === -1) {
+    sheet.getRange(1, 1).setValue('MemberName');
+    nameIndex = 0;
+    changed = true;
+  }
+  if (fullNameIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('FullName');
+    fullNameIndex = colPos - 1;
+    changed = true;
+  }
+  if (phoneIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Phone');
+    phoneIndex = colPos - 1;
+    changed = true;
+  }
+  if (activeIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Active');
+    activeIndex = colPos - 1;
+    changed = true;
+  }
+  if (staffIdIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('StaffId');
+    staffIdIndex = colPos - 1;
+    changed = true;
+  }
+  if (emailIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Email');
+    emailIndex = colPos - 1;
+    changed = true;
+  }
+
+  // Refetch rows if we changed headers so we have updated data dimensions
+  const finalRows = changed ? sheet.getDataRange().getValues() : rows;
+  if (finalRows.length <= 1) {
+    return [];
+  }
+
+  const members = [];
+  const seen = new Set();
+  for (let i = 1; i < finalRows.length; i += 1) {
+    const nameValue = finalRows[i][nameIndex];
+    if (nameValue === undefined || nameValue === null) continue;
+    const name = String(nameValue).trim();
+    if (!name) continue;
+
+    // Deduplicate by lowercase name
+    if (seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+
+    const fullName = fullNameIndex < finalRows[i].length && fullNameIndex !== -1 ? String(finalRows[i][fullNameIndex] || '').trim() : '';
+    const phone = phoneIndex < finalRows[i].length && phoneIndex !== -1 ? String(finalRows[i][phoneIndex] || '').trim() : '';
+    const staffId = staffIdIndex < finalRows[i].length && staffIdIndex !== -1 ? String(finalRows[i][staffIdIndex] || '').trim() : '';
+    const email = emailIndex < finalRows[i].length && emailIndex !== -1 ? String(finalRows[i][emailIndex] || '').trim() : '';
+    const rawActive = activeIndex < finalRows[i].length && activeIndex !== -1 ? finalRows[i][activeIndex] : '';
+    const activeValue = (rawActive !== undefined && rawActive !== null) ? String(rawActive).trim().toLowerCase() : '';
+
+    members.push({
+      name: name,
+      fullName: fullName,
+      phone: phone,
+      staffId: staffId,
+      email: email,
+      active: activeValue === '' ? true : !['false', 'inactive', 'no', '0'].includes(activeValue)
+    });
+  }
+
+  return members;
+}
+
+function getMasterRosterData() {
+  const sheet = getSheetByName(MASTER_ROSTER_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(MASTER_ROSTER_SHEET_NAME, ['Name', 'Date', 'Shift']);
+    return [];
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function getShiftBlocksData() {
+  const sheet = getSheetByName(SHIFT_BLOCKS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SHIFT_BLOCKS_SHEET_NAME, ['ID', 'Date', 'ShiftType', 'MaxSlots']);
+    return [];
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function getShiftTypesData() {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SHIFT_TYPES_SHEET_NAME, ['ID', 'Name', 'IsPublic', 'GroupID']);
+    const defaultSheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+    const defaults = [
+      [Date.now() + 1, 'AM', true, ''],
+      [Date.now() + 2, 'PM', true, ''],
+      [Date.now() + 3, 'ON', true, ''],
+      [Date.now() + 4, 'OFF', true, 'LEAVES'], // placeholder group id
+      [Date.now() + 5, 'AL', true, 'LEAVES'],
+      [Date.now() + 6, 'HKA', true, 'LEAVES'],
+      [Date.now() + 7, 'GHKA', true, 'LEAVES'],
+      [Date.now() + 8, 'COURSE', true, 'LEAVES'],
+      [Date.now() + 9, 'MC', false, ''],
+      [Date.now() + 10, 'EL', false, '']
+    ];
+    defaults.forEach(r => defaultSheet.appendRow(r));
+    return getShiftTypesData();
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function handleSubmit(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureHeaders(sheet, values[0] || []);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const name = String(data.name || '').trim();
+  const date = data.date;
+  const request = String(data.request || '').trim();
+  const comment = data.comment ? String(data.comment).trim() : '';
+  const requestType = data.requestType ? String(data.requestType).trim() : 'Leave';
+  const swapPartner = data.swapPartner ? String(data.swapPartner).trim() : '';
+
+  if (!name || !date || !request) {
+    throw new Error('Missing required fields for submit.');
+  }
+
+  const day = data.day ? String(data.day) : getWeekdayName(date);
+  const timestamp = new Date();
+  const id = Date.now();
+
+  rows.forEach((row, rowIndex) => {
+    const matchesName = normalizeString(row[indexes.Name]) === normalizeString(name);
+    const matchesDate = row[indexes.Date] === date;
+    const isActive = normalizeString(row[indexes.Status]) === normalizeString(STATUS_ACTIVE);
+    if (matchesName && matchesDate && isActive) {
+      sheet.getRange(rowIndex + 2, indexes.Status + 1).setValue(STATUS_OLD);
+    }
+  });
+
+  let approvalStatus = APPROVAL_PENDING_ADMIN;
+  if (requestType.toLowerCase() === 'swap') {
+    approvalStatus = APPROVAL_PENDING_PARTNER;
+  }
+
+  const record = buildRowFromHeaders(headers, {
+    ID: id,
+    Timestamp: timestamp,
+    Name: name,
+    Date: date,
+    Day: day,
+    Request: request,
+    Status: STATUS_ACTIVE,
+    Comment: comment,
+    ApprovalStatus: approvalStatus,
+    SwapPartner: swapPartner,
+    RequestType: requestType
+  });
+
+  sheet.appendRow(record);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleUpdate(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureHeaders(sheet, values[0] || []);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing request ID for update.');
+  }
+
+  const name = String(data.name || '').trim();
+  const date = data.date;
+  const request = String(data.request || '').trim();
+  const comment = data.comment ? String(data.comment).trim() : '';
+  const requestType = data.requestType ? String(data.requestType).trim() : 'Leave';
+  const swapPartner = data.swapPartner ? String(data.swapPartner).trim() : '';
+
+  if (!name || !date || !request) {
+    throw new Error('Missing required fields for update.');
+  }
+
+  const day = data.day ? String(data.day) : getWeekdayName(date);
+  const timestamp = new Date();
+  const newId = Date.now();
+  let found = false;
+
+  rows.forEach((row, rowIndex) => {
+    const currentId = String(row[indexes.ID] || '').trim();
+    if (currentId === targetId) {
+      const status = normalizeString(row[indexes.Status]);
+      if (status === normalizeString(STATUS_ACTIVE)) {
+        sheet.getRange(rowIndex + 2, indexes.Status + 1).setValue(STATUS_OLD);
+      }
+      found = true;
+    }
+  });
+
+  if (!found) {
+    throw new Error('Request not found for update.');
+  }
+
+  let approvalStatus = APPROVAL_PENDING_ADMIN;
+  if (requestType.toLowerCase() === 'swap') {
+    approvalStatus = APPROVAL_PENDING_PARTNER;
+  }
+
+  const record = buildRowFromHeaders(headers, {
+    ID: newId,
+    Timestamp: timestamp,
+    Name: name,
+    Date: date,
+    Day: day,
+    Request: request,
+    Status: STATUS_ACTIVE,
+    Comment: comment,
+    ApprovalStatus: approvalStatus,
+    SwapPartner: swapPartner,
+    RequestType: requestType
+  });
+
+  sheet.appendRow(record);
+  return createJsonResponse({ result: 'success', id: newId, previousId: targetId });
+}
+
+function handleDelete(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error(`Sheet "${REQUEST_SHEET_NAME}" not found.`);
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureHeaders(sheet, values[0] || []);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing request ID for delete.');
+  }
+
+  let found = false;
+
+  rows.forEach((row, rowIndex) => {
+    const currentId = String(row[indexes.ID] || '').trim();
+    if (currentId === targetId) {
+      const status = normalizeString(row[indexes.Status]);
+      if (status === normalizeString(STATUS_ACTIVE)) {
+        sheet.getRange(rowIndex + 2, indexes.Status + 1).setValue(STATUS_CANCELLED);
+      }
+      found = true;
+    }
+  });
+
+  if (!found) {
+    throw new Error('Request not found or already inactive.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleUploadMasterRoster(data) {
+  const sheet = createSheetIfNotExist(MASTER_ROSTER_SHEET_NAME, ['Name', 'Date', 'Shift']);
+  
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  }
+
+  const rows = data.rows;
+  if (Array.isArray(rows) && rows.length > 0) {
+    const values = rows.map(r => [
+      String(r.name || '').trim(),
+      String(r.date || '').trim(),
+      String(r.shift || '').trim()
+    ]);
+    sheet.getRange(2, 1, values.length, 3).setValues(values);
+  }
+
+  return createJsonResponse({ result: 'success', count: rows ? rows.length : 0 });
+}
+
+function handleUpdateRequestApproval(data) {
+  const sheet = getSheetByName(REQUEST_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('Requests sheet not found.');
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = ensureHeaders(sheet, values[0]);
+  const indexes = buildHeaderIndex(headers);
+  const rows = values.slice(1);
+
+  const targetId = String(data.id || '').trim();
+  const newApprovalStatus = String(data.approvalStatus || '').trim();
+
+  if (!targetId || !newApprovalStatus) {
+    throw new Error('Missing target ID or approval status.');
+  }
+
+  let found = false;
+  rows.forEach((row, rowIndex) => {
+    const currentId = String(row[indexes.ID] || '').trim();
+    if (currentId === targetId) {
+      sheet.getRange(rowIndex + 2, indexes.ApprovalStatus + 1).setValue(newApprovalStatus);
+      found = true;
+    }
+  });
+
+  if (!found) {
+    throw new Error('Request not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId, approvalStatus: newApprovalStatus });
+}
+
+function handleAddShiftBlock(data) {
+  const sheet = createSheetIfNotExist(SHIFT_BLOCKS_SHEET_NAME, ['ID', 'Date', 'ShiftType', 'MaxSlots']);
+  
+  const id = Date.now();
+  const date = String(data.date || '').trim();
+  const shiftType = String(data.shiftType || '').trim();
+  const maxSlots = Number(data.maxSlots ?? 0);
+
+  if (!date || !shiftType) {
+    throw new Error('Missing required fields for shift block.');
+  }
+
+  sheet.appendRow([id, date, shiftType, maxSlots]);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleDeleteShiftBlock(data) {
+  const sheet = getSheetByName(SHIFT_BLOCKS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftBlocks sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const targetId = String(data.id || '').trim();
+  
+  let deleted = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  if (!deleted) {
+    throw new Error('Shift block ID not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleAddShiftType(data) {
+  const sheet = createSheetIfNotExist(SHIFT_TYPES_SHEET_NAME, ['ID', 'Name', 'IsPublic', 'GroupID']);
+  
+  const id = Date.now();
+  const name = String(data.name || '').trim().toUpperCase();
+  const isPublic = Boolean(data.isPublic);
+  const groupId = String(data.groupId || '').trim();
+
+  if (!name) {
+    throw new Error('Missing shift type name.');
+  }
+
+  sheet.appendRow([id, name, isPublic, groupId]);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleUpdateShiftType(data) {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftTypes sheet not found.');
+  }
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing shift type ID.');
+  }
+
+  const name = String(data.name || '').trim().toUpperCase();
+  const isPublic = Boolean(data.isPublic);
+  const groupId = String(data.groupId || '').trim();
+
+  const values = sheet.getDataRange().getValues();
+  let found = false;
+
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.getRange(i + 1, 2).setValue(name);
+      sheet.getRange(i + 1, 3).setValue(isPublic);
+      sheet.getRange(i + 1, 4).setValue(groupId);
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new Error('Shift type not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleDeleteShiftType(data) {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftTypes sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const targetId = String(data.id || '').trim();
+  
+  let deleted = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  if (!deleted) {
+    throw new Error('Shift type ID not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleReorderShiftTypes(data) {
+  const sheet = getSheetByName(SHIFT_TYPES_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ShiftTypes sheet not found.');
+  }
+
+  const ids = data.ids;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new Error('Missing or invalid ids array.');
+  }
+
+  // Read current rows (skip header)
+  const allValues = sheet.getDataRange().getValues();
+  const header = allValues[0];
+  const dataRows = allValues.slice(1);
+
+  // Build a map id -> row data
+  const rowMap = {};
+  dataRows.forEach(function(row) {
+    rowMap[String(row[0]).trim()] = row;
+  });
+
+  // Build the new ordered rows based on the provided ids array
+  const reordered = ids.map(function(id) {
+    return rowMap[String(id).trim()];
+  }).filter(Boolean);
+
+  // Clear the sheet except header
+  if (sheet.getLastRow() > 1) {
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+  }
+
+  // Write reordered rows back
+  reordered.forEach(function(row, i) {
+    sheet.getRange(i + 2, 1, 1, row.length).setValues([row]);
+  });
+
+  return createJsonResponse({ result: 'success' });
+}
+
+function getLimitGroupsData() {
+  const sheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(LIMIT_GROUPS_SHEET_NAME, ['ID', 'GroupName', 'DefaultLimit']);
+    const defaultSheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+    const defaults = [
+      ['LEAVES', 'Leaves & Offs', 3]
+    ];
+    defaults.forEach(r => defaultSheet.appendRow(r));
+    return getLimitGroupsData();
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function handleAddLimitGroup(data) {
+  const sheet = createSheetIfNotExist(LIMIT_GROUPS_SHEET_NAME, ['ID', 'GroupName', 'DefaultLimit']);
+  
+  const id = 'G_' + Date.now();
+  const groupName = String(data.groupName || '').trim();
+  const defaultLimit = Number(data.defaultLimit ?? 0);
+
+  if (!groupName) {
+    throw new Error('Missing limit group name.');
+  }
+
+  sheet.appendRow([id, groupName, defaultLimit]);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleUpdateLimitGroup(data) {
+  const sheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('LimitGroups sheet not found.');
+  }
+
+  const targetId = String(data.id || '').trim();
+  if (!targetId) {
+    throw new Error('Missing limit group ID.');
+  }
+
+  const groupName = String(data.groupName || '').trim();
+  const defaultLimit = Number(data.defaultLimit ?? 0);
+
+  const values = sheet.getDataRange().getValues();
+  let found = false;
+
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.getRange(i + 1, 2).setValue(groupName);
+      sheet.getRange(i + 1, 3).setValue(defaultLimit);
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new Error('Limit group not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function handleDeleteLimitGroup(data) {
+  const sheet = getSheetByName(LIMIT_GROUPS_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('LimitGroups sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const targetId = String(data.id || '').trim();
+  
+  let deleted = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      sheet.deleteRow(i + 1);
+      deleted = true;
+      break;
+    }
+  }
+
+  if (!deleted) {
+    throw new Error('Limit group ID not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function ensureSpecificHeaders(sheet, headers, requiredHeaders) {
+  const extendedHeaders = [...headers];
+  let modified = false;
+  requiredHeaders.forEach((header) => {
+    if (extendedHeaders.indexOf(header) === -1) {
+      extendedHeaders.push(header);
+      modified = true;
+    }
+  });
+  if (modified) {
+    sheet.getRange(1, 1, 1, extendedHeaders.length).setValues([extendedHeaders]);
+  }
+  return extendedHeaders;
+}
+
+function getPublicHolidaysData() {
+  const sheet = createSheetIfNotExist(PUBLIC_HOLIDAYS_SHEET_NAME, ['ID', 'Date', 'Name', 'Active']);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = ensureSpecificHeaders(sheet, values[0], ['ID', 'Date', 'Name', 'Active']);
+  const displayRows = sheet.getRange(2, 1, values.length - 1, headers.length).getDisplayValues();
+
+  return displayRows.map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    const rawActive = String(record.Active || '').trim().toLowerCase();
+    record.Active = !['false', 'inactive', 'no', '0'].includes(rawActive);
+    return record;
+  }).filter((record) => record.Date && record.Name);
+}
+
+function handleUpsertPublicHoliday(data) {
+  const date = String(data.date || data.Date || '').trim();
+  const name = String(data.name || data.Name || '').trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('Public holiday date must use YYYY-MM-DD format.');
+  }
+  if (!name) {
+    throw new Error('Public holiday name is required.');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = createSheetIfNotExist(PUBLIC_HOLIDAYS_SHEET_NAME, ['ID', 'Date', 'Name', 'Active']);
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], ['ID', 'Date', 'Name', 'Active']);
+    const indexes = buildHeaderIndex(headers);
+    let targetRow = -1;
+
+    for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+      if (String(values[rowIndex][indexes.Date] || '').trim() === date) {
+        targetRow = rowIndex + 1;
+        break;
+      }
+    }
+
+    if (targetRow > 0) {
+      sheet.getRange(targetRow, indexes.Date + 1).setNumberFormat('@').setValue(date);
+      sheet.getRange(targetRow, indexes.Name + 1).setValue(name);
+      sheet.getRange(targetRow, indexes.Active + 1).setValue(true);
+    } else {
+      const row = buildRowFromHeaders(headers, {
+        ID: Date.now(),
+        Date: date,
+        Name: name,
+        Active: true
+      });
+      sheet.appendRow(row);
+      sheet.getRange(sheet.getLastRow(), indexes.Date + 1).setNumberFormat('@').setValue(date);
+    }
+
+    return createJsonResponse({ result: 'success', date, name });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleDeletePublicHoliday(data) {
+  const date = String(data.date || data.Date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('A valid public holiday date is required.');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getSheetByName(PUBLIC_HOLIDAYS_SHEET_NAME);
+    if (!sheet) {
+      throw new Error('Public holiday was not found.');
+    }
+
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], ['ID', 'Date', 'Name', 'Active']);
+    const indexes = buildHeaderIndex(headers);
+
+    for (let rowIndex = values.length - 1; rowIndex >= 1; rowIndex--) {
+      if (String(values[rowIndex][indexes.Date] || '').trim() === date) {
+        sheet.deleteRow(rowIndex + 1);
+        return createJsonResponse({ result: 'success', date });
+      }
+    }
+
+    throw new Error('Public holiday was not found.');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getLeaveApplicationsData() {
+  const requiredHeaders = ['ID', 'MemberName', 'LeaveType', 'StartDate', 'EndDate', 'Days', 'Status', 'SubmittedDate', 'ReferenceNo', 'Notes', 'UpdatedAt'];
+  const sheet = createSheetIfNotExist(LEAVE_APPLICATIONS_SHEET_NAME, requiredHeaders);
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = ensureSpecificHeaders(sheet, values[0], requiredHeaders);
+  const displayRows = sheet.getRange(2, 1, values.length - 1, headers.length).getDisplayValues();
+  return displayRows.map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  }).filter((record) => record.ID && record.MemberName && record.LeaveType && record.StartDate);
+}
+
+function handleUpsertLeaveApplication(data) {
+  const requiredHeaders = ['ID', 'MemberName', 'LeaveType', 'StartDate', 'EndDate', 'Days', 'Status', 'SubmittedDate', 'ReferenceNo', 'Notes', 'UpdatedAt'];
+  const id = String(data.id || data.ID || '').trim();
+  const memberName = String(data.memberName || data.MemberName || '').trim();
+  const leaveType = String(data.leaveType || data.LeaveType || '').trim().toUpperCase();
+  const startDate = String(data.startDate || data.StartDate || '').trim();
+  const endDate = String(data.endDate || data.EndDate || startDate).trim();
+  const status = String(data.status || data.Status || 'Pending').trim().toLowerCase() === 'submitted' ? 'Submitted' : 'Pending';
+  let submittedDate = String(data.submittedDate || data.SubmittedDate || '').trim();
+  const referenceNo = String(data.referenceNo || data.ReferenceNo || '').trim();
+  const notes = String(data.notes || data.Notes || '').trim();
+
+  if (!id) throw new Error('Leave tracking ID is required.');
+  if (!memberName) throw new Error('Member name is required.');
+  if (['MC', 'EL', 'AL'].indexOf(leaveType) === -1) throw new Error('Leave type must be MC, EL, or AL.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < startDate) {
+    throw new Error('A valid leave date range is required.');
+  }
+
+  if (status === 'Submitted' && !submittedDate) {
+    submittedDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  if (status === 'Pending') submittedDate = '';
+  if (submittedDate && !/^\d{4}-\d{2}-\d{2}$/.test(submittedDate)) {
+    throw new Error('Submitted date must use YYYY-MM-DD format.');
+  }
+
+  const start = new Date(startDate + 'T00:00:00Z');
+  const end = new Date(endDate + 'T00:00:00Z');
+  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const updatedAt = new Date();
+  const valuesByHeader = {
+    ID: id,
+    MemberName: memberName,
+    LeaveType: leaveType,
+    StartDate: startDate,
+    EndDate: endDate,
+    Days: days,
+    Status: status,
+    SubmittedDate: submittedDate,
+    ReferenceNo: referenceNo,
+    Notes: notes,
+    UpdatedAt: updatedAt
+  };
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = createSheetIfNotExist(LEAVE_APPLICATIONS_SHEET_NAME, requiredHeaders);
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], requiredHeaders);
+    const indexes = buildHeaderIndex(headers);
+    let targetRow = -1;
+
+    for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+      if (String(values[rowIndex][indexes.ID] || '').trim() === id) {
+        targetRow = rowIndex + 1;
+        break;
+      }
+    }
+
+    const row = buildRowFromHeaders(headers, valuesByHeader);
+    if (targetRow > 0) {
+      sheet.getRange(targetRow, 1, 1, headers.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+      targetRow = sheet.getLastRow();
+    }
+    ['ID', 'StartDate', 'EndDate', 'SubmittedDate'].forEach((header) => {
+      sheet.getRange(targetRow, indexes[header] + 1).setNumberFormat('@').setValue(valuesByHeader[header] || '');
+    });
+
+    return createJsonResponse({ result: 'success', record: valuesByHeader });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleDeleteLeaveApplication(data) {
+  const id = String(data.id || data.ID || '').trim();
+  if (!id) throw new Error('Leave tracking ID is required.');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheet = getSheetByName(LEAVE_APPLICATIONS_SHEET_NAME);
+    if (!sheet) throw new Error('Leave tracking record was not found.');
+
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = ensureSpecificHeaders(sheet, values[0] || [], ['ID']);
+    const indexes = buildHeaderIndex(headers);
+    for (let rowIndex = values.length - 1; rowIndex >= 1; rowIndex--) {
+      if (String(values[rowIndex][indexes.ID] || '').trim() === id) {
+        sheet.deleteRow(rowIndex + 1);
+        return createJsonResponse({ result: 'success', id: id });
+      }
+    }
+    throw new Error('Leave tracking record was not found.');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function parseRequestBody(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    throw new Error('Missing request body.');
+  }
+  return JSON.parse(e.postData.contents);
+}
+
+function getSheetByName(name) {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+}
+
+function createJsonResponse(payload) {
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function buildHeaderIndex(headers) {
+  return headers.reduce((acc, header, index) => {
+    acc[header] = index;
+    return acc;
+  }, {});
+}
+
+function buildRowFromHeaders(headers, valuesByHeader) {
+  const row = headers.map((header) => (header in valuesByHeader ? valuesByHeader[header] : ''));
+  return row;
+}
+
+function createSheetIfNotExist(name, defaultHeaders) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.getRange(1, 1, 1, defaultHeaders.length).setValues([defaultHeaders]);
+  }
+  return sheet;
+}
+
+function ensureHeaders(sheet, headers) {
+  const required = ['ID', 'Timestamp', 'Name', 'Date', 'Day', 'Request', 'Status', 'Comment', 'ApprovalStatus', 'SwapPartner', 'RequestType'];
+  let modified = false;
+  const extendedHeaders = [...headers];
+  
+  required.forEach((req) => {
+    if (extendedHeaders.indexOf(req) === -1) {
+      extendedHeaders.push(req);
+      modified = true;
+    }
+  });
+
+  if (modified) {
+    sheet.getRange(1, 1, 1, extendedHeaders.length).setValues([extendedHeaders]);
+  }
+  return extendedHeaders;
+}
+
+function normalizeString(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getWeekdayName(dateValue) {
+  if (!dateValue) return '';
+  const date = new Date(dateValue);
+  if (isNaN(date.getTime())) {
+    return '';
+  }
+  return date.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
+function getActivityHistoryData() {
+  const sheet = getSheetByName(ACTIVITY_HISTORY_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(ACTIVITY_HISTORY_SHEET_NAME, ['ID', 'Timestamp', 'CustomText', 'Name', 'RequestType', 'Request', 'SwapPartner', 'Date', 'ApprovalStatus', 'Comment', 'Status']);
+    return [];
+  }
+
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) {
+    return [];
+  }
+
+  const headers = values[0];
+  let statusColIndex = headers.indexOf('Status');
+  if (statusColIndex === -1) {
+    statusColIndex = headers.length;
+    sheet.getRange(1, statusColIndex + 1).setValue('Status');
+  }
+
+  const dateColIndex = headers.indexOf('Date');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const status = String(row[statusColIndex] || '').trim().toLowerCase();
+    
+    if (status !== 'archived' && dateColIndex !== -1) {
+      const dateVal = row[dateColIndex];
+      if (dateVal) {
+        let isPast = false;
+        
+        if (dateVal instanceof Date) {
+          const d = new Date(dateVal);
+          d.setHours(0, 0, 0, 0);
+          isPast = d < today;
+        } else {
+          const dateStr = String(dateVal).trim();
+          if (dateStr) {
+            const parts = dateStr.split('-');
+            if (parts.length === 3) {
+              const year = parseInt(parts[0], 10);
+              const month = parseInt(parts[1], 10) - 1;
+              const day = parseInt(parts[2], 10);
+              const d = new Date(year, month, day);
+              isPast = d < today;
+            } else {
+              const d = new Date(dateStr);
+              if (!isNaN(d.getTime())) {
+                d.setHours(0, 0, 0, 0);
+                isPast = d < today;
+              }
+            }
+          }
+        }
+        
+        if (isPast) {
+          sheet.getRange(i + 1, statusColIndex + 1).setValue('Archived');
+          while (values[i].length <= statusColIndex) {
+            values[i].push('');
+          }
+          values[i][statusColIndex] = 'Archived';
+        }
+      }
+    }
+  }
+
+  const data = values.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = row[index];
+    });
+    return record;
+  });
+
+  return data;
+}
+
+function handleAddActivity(data) {
+  const sheet = createSheetIfNotExist(ACTIVITY_HISTORY_SHEET_NAME, ['ID', 'Timestamp', 'CustomText', 'Name', 'RequestType', 'Request', 'SwapPartner', 'Date', 'ApprovalStatus', 'Comment', 'Status']);
+  
+  const id = String(Date.now());
+  const timestamp = new Date().toISOString();
+  const customText = String(data.customText || '').trim();
+  const name = String(data.name || '').trim();
+  const requestType = String(data.requestType || '').trim();
+  const request = String(data.request || '').trim();
+  const swapPartner = String(data.swapPartner || '').trim();
+  const date = String(data.date || '').trim();
+  const approvalStatus = String(data.approvalStatus || '').trim() || 'Approved';
+  const comment = String(data.comment || '').trim();
+
+  sheet.appendRow([id, timestamp, customText, name, requestType, request, swapPartner, date, approvalStatus, comment, 'Active']);
+  return createJsonResponse({ result: 'success', id });
+}
+
+function handleDeleteActivity(data) {
+  const sheet = getSheetByName(ACTIVITY_HISTORY_SHEET_NAME);
+  if (!sheet) {
+    throw new Error('ActivityHistory sheet not found.');
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0] || [];
+  const targetId = String(data.id || '').trim();
+
+  if (!targetId) {
+    throw new Error('Missing activity ID for delete.');
+  }
+
+  // Find or create the Status column
+  let statusColIndex = headers.indexOf('Status');
+  if (statusColIndex === -1) {
+    // Status column doesn't exist yet — add it to the header row
+    statusColIndex = headers.length;
+    sheet.getRange(1, statusColIndex + 1).setValue('Status');
+  }
+
+  let found = false;
+  for (let i = 1; i < values.length; i++) {
+    const currentId = String(values[i][0] || '').trim();
+    if (currentId === targetId) {
+      // Soft delete: mark as Archived, never physically remove the row
+      sheet.getRange(i + 1, statusColIndex + 1).setValue('Archived');
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new Error('Activity ID not found.');
+  }
+
+  return createJsonResponse({ result: 'success', id: targetId });
+}
+
+function getSettingsData() {
+  const sheet = getSheetByName(SETTINGS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SETTINGS_SHEET_NAME, ['Key', 'Value']);
+    sheet.appendRow(['monthly_request_limit', '10']);
+    return { monthly_request_limit: 10 };
+  }
+  const values = sheet.getDataRange().getValues();
+  const settings = {};
+  for (let i = 1; i < values.length; i++) {
+    const key = String(values[i][0] || '').trim();
+    const val = String(values[i][1] || '').trim();
+    if (key) {
+      settings[key] = val;
+    }
+  }
+  // Ensure default is there
+  if (settings.monthly_request_limit === undefined) {
+    settings.monthly_request_limit = '10';
+  }
+  return settings;
+}
+
+function handleUpdateSetting(data) {
+  const key = String(data.key || '').trim();
+  const value = String(data.value || '').trim();
+  if (!key) {
+    throw new Error('Missing setting key');
+  }
+  const sheet = getSheetByName(SETTINGS_SHEET_NAME);
+  if (!sheet) {
+    createSheetIfNotExist(SETTINGS_SHEET_NAME, ['Key', 'Value']);
+  }
+  const values = sheet.getDataRange().getValues();
+  let rowIdx = -1;
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === key) {
+      rowIdx = i + 1;
+      break;
+    }
+  }
+  if (rowIdx !== -1) {
+    sheet.getRange(rowIdx, 2).setValue(value);
+  } else {
+    sheet.appendRow([key, value]);
+  }
+  return createJsonResponse({ result: 'success', key: key, value: value });
+}
+
+function handleUpdateTeamMembers(data) {
+  return handleUpdateDirectoryMembers(data, TEAM_MEMBERS_SHEET_NAME);
+}
+
+function handleUpdateEmergencyPhysicians(data) {
+  return handleUpdateDirectoryMembers(data, EMERGENCY_PHYSICIANS_SHEET_NAME);
+}
+
+function handleUpdateDirectoryMembers(data, sheetName) {
+  const sheet = createSheetIfNotExist(sheetName, ['MemberName', 'FullName', 'Phone', 'Active']);
+  
+  // Ensure the sheet has the required columns
+  const headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 4)).getValues()[0];
+  let nameIndex = headers.indexOf('MemberName');
+  let fullNameIndex = headers.indexOf('FullName');
+  let phoneIndex = headers.indexOf('Phone');
+  let activeIndex = headers.indexOf('Active');
+  let staffIdIndex = headers.indexOf('StaffId');
+  let emailIndex = headers.indexOf('Email');
+
+  if (nameIndex === -1) {
+    sheet.getRange(1, 1).setValue('MemberName');
+    nameIndex = 0;
+  }
+  if (fullNameIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('FullName');
+    fullNameIndex = colPos - 1;
+  }
+  if (phoneIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Phone');
+    phoneIndex = colPos - 1;
+  }
+  if (activeIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Active');
+    activeIndex = colPos - 1;
+  }
+  if (staffIdIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('StaffId');
+    staffIdIndex = colPos - 1;
+  }
+  if (emailIndex === -1) {
+    const colPos = sheet.getLastColumn() + 1;
+    sheet.getRange(1, colPos).setValue('Email');
+    emailIndex = colPos - 1;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    // Clear rows below headers
+    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  }
+
+  const members = data.members;
+  if (Array.isArray(members) && members.length > 0) {
+    const values = [];
+    const seen = new Set();
+    members.forEach(m => {
+      let name = '';
+      let fullName = '';
+      let phone = '';
+      let staffId = '';
+      let email = '';
+      let active = true;
+
+      if (typeof m === 'string') {
+        name = m.trim();
+      } else if (m && typeof m === 'object') {
+        name = String(m.name || '').trim();
+        fullName = String(m.fullName || '').trim();
+        phone = String(m.phone || '').trim();
+        staffId = String(m.staffId || '').trim();
+        email = String(m.email || '').trim();
+        active = m.active === undefined || m.active === null ? true : m.active !== false;
+      }
+
+      if (name && !seen.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        const row = [];
+        row[nameIndex] = name;
+        if (fullNameIndex !== -1) row[fullNameIndex] = fullName;
+        if (phoneIndex !== -1) row[phoneIndex] = phone;
+        if (staffIdIndex !== -1) row[staffIdIndex] = staffId;
+        if (emailIndex !== -1) row[emailIndex] = email;
+        if (activeIndex !== -1) row[activeIndex] = active ? 'TRUE' : 'FALSE';
+        
+        // Fill empty indices to avoid array sparsity issues
+        const maxIdx = Math.max(nameIndex, fullNameIndex, phoneIndex, activeIndex, staffIdIndex, emailIndex);
+        for (let i = 0; i <= maxIdx; i++) {
+          if (row[i] === undefined) {
+            row[i] = '';
+          }
+        }
+        values.push(row);
+      }
+    });
+
+    if (values.length > 0) {
+      sheet.getRange(2, 1, values.length, values[0].length).setValues(values);
+    }
+  }
+  return createJsonResponse({ result: 'success', count: members ? members.length : 0 });
+}
