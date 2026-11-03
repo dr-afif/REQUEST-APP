@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { isSessionTokenActive } from '../features/roster/auth/adminAuth.js';
 import { toIsoDate } from '../utils/normalise';
 import {
   buildLimitGroupById,

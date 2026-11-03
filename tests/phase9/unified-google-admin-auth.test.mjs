@@ -111,6 +111,7 @@ test('Phase A2: Unified Google Administrator Authentication Suite', async (t) =>
   const AppNavigation = await loadJsxComponent('src/components/AppNavigation.jsx');
   const AdminPanel = await loadJsxComponent('src/components/AdminPanel.jsx');
   const RosterPage = await loadJsxComponent('src/components/RosterPage.jsx');
+  const NewRequestForm = await loadJsxComponent('src/components/NewRequestForm.jsx');
 
   t.beforeEach(() => {
     adminAuthModule.clearAdminSessionToken();
@@ -265,6 +266,32 @@ test('Phase A2: Unified Google Administrator Authentication Suite', async (t) =>
     );
     assert.ok(!authHtml.includes('Administrator Verification Required'), 'Auth AdminPanel must not show verification warning');
     assert.ok(authHtml.includes('Administrative Controls') || authHtml.includes('Admin Panel') || authHtml.includes('Requests') || authHtml.includes('Shift Block'), 'Auth AdminPanel renders controls');
+  });
+
+  await t.test('5b. NewRequestForm renders without ReferenceError for Admin user', () => {
+    // 1. Unauthenticated Admin
+    adminAuthModule.clearAdminSessionToken();
+    const unauthHtml = ReactDOMServer.renderToStaticMarkup(
+      React.createElement(NewRequestForm, {
+        selectedName: 'Admin',
+        names: ['Doctor 1', 'Doctor 2'],
+        shiftTypes: [{ Name: 'AM', IsPublic: true }, { Name: 'MANAGEMENT', IsPublic: false }]
+      })
+    );
+    assert.ok(unauthHtml.includes('AM'));
+    assert.ok(!unauthHtml.includes('MANAGEMENT'), 'Unauth admin must not see private shift types');
+
+    // 2. Authenticated Admin
+    adminAuthModule.setAdminSessionToken('valid_token', 'admin@hospital.gov.my', 900);
+    const authHtml = ReactDOMServer.renderToStaticMarkup(
+      React.createElement(NewRequestForm, {
+        selectedName: 'Admin',
+        names: ['Doctor 1', 'Doctor 2'],
+        shiftTypes: [{ Name: 'AM', IsPublic: true }, { Name: 'MANAGEMENT', IsPublic: false }]
+      })
+    );
+    assert.ok(authHtml.includes('AM'));
+    assert.ok(authHtml.includes('MANAGEMENT'), 'Auth admin must see private shift types');
   });
 
   // Scenario 6: Admin-only actions remain backend-authorized
