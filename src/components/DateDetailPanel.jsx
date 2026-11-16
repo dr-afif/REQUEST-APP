@@ -41,6 +41,8 @@ export default function DateDetailPanel({
   onClose,
   onEdit,
   onDelete,
+  onRetry,
+  onDismissFailed,
   onSubmit,
   isSubmitting,
   editingRequest,
@@ -68,7 +70,9 @@ export default function DateDetailPanel({
 
   // Escape key
   useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') handleClose(); };
+    const handler = (e) => {
+      if (e.key === 'Escape') handleClose();
+    };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, []);
@@ -138,7 +142,8 @@ export default function DateDetailPanel({
               </h3>
               <ul className="date-panel__request-list">
                 {allDateRequests.map((r) => {
-                  const isSaving = r.isOptimistic;
+                  const isSaving = Boolean(r.isOptimistic);
+                  const hasError = Boolean(r.saveError);
                   const style = getVariantStyle(r.request);
                   const isAdmin = Boolean(selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive());
                   const isOwnOrAdmin =
@@ -147,7 +152,11 @@ export default function DateDetailPanel({
                   const itemClass = [
                     'date-panel__request-item',
                     isOwnOrAdmin ? 'date-panel__request-item--own' : '',
-                    isSaving ? 'opacity-65 animate-pulse border border-dashed border-indigo-200/80 bg-indigo-50/20' : '',
+                    hasError
+                      ? 'border border-rose-300 bg-rose-50/70'
+                      : isSaving
+                        ? 'opacity-65 animate-pulse border border-dashed border-indigo-200/80 bg-indigo-50/20'
+                        : '',
                   ].filter(Boolean).join(' ');
 
                   return (
@@ -168,11 +177,15 @@ export default function DateDetailPanel({
                         </span>
                         <span className="date-panel__request-name">
                           {r.name}
-                          {isSaving && (
-                            <span className="ml-1.5 text-[10px] font-semibold text-indigo-500">
-                              (Syncing...)
+                          {hasError ? (
+                            <span className="ml-1.5 text-[10px] font-semibold text-rose-600" title={r.saveError}>
+                              (Failed to save)
                             </span>
-                          )}
+                          ) : isSaving ? (
+                            <span className="ml-1.5 text-[10px] font-semibold text-indigo-500">
+                              (Saving...)
+                            </span>
+                          ) : null}
                         </span>
                         {r.comment && (
                           <span className="date-panel__request-comment">{r.comment}</span>
@@ -180,22 +193,43 @@ export default function DateDetailPanel({
                       </div>
                       {isOwnOrAdmin && (
                         <div className="date-panel__request-actions shrink-0">
-                          <button
-                            type="button"
-                            className="date-panel__btn date-panel__btn--edit disabled:opacity-40 disabled:pointer-events-none"
-                            onClick={() => onEdit?.(r)}
-                            disabled={isSaving}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="date-panel__btn date-panel__btn--delete disabled:opacity-40 disabled:pointer-events-none"
-                            onClick={() => onDelete?.(r)}
-                            disabled={isSaving}
-                          >
-                            Delete
-                          </button>
+                          {hasError ? (
+                            <>
+                              <button
+                                type="button"
+                                className="date-panel__btn bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-500"
+                                onClick={() => onRetry?.(r)}
+                              >
+                                Retry
+                              </button>
+                              <button
+                                type="button"
+                                className="date-panel__btn date-panel__btn--delete"
+                                onClick={() => onDismissFailed?.(r)}
+                              >
+                                Dismiss
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="date-panel__btn date-panel__btn--edit disabled:opacity-40 disabled:pointer-events-none"
+                                onClick={() => onEdit?.(r)}
+                                disabled={isSaving}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="date-panel__btn date-panel__btn--delete disabled:opacity-40 disabled:pointer-events-none"
+                                onClick={() => onDelete?.(r)}
+                                disabled={isSaving}
+                              >
+                                Delete
+                              </button>
+                            </>
+                          )}
                         </div>
                       )}
                     </li>

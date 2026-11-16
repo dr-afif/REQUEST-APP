@@ -283,18 +283,29 @@ export default function CalendarView({
                       typeof entry.comment === 'string' ? entry.comment.trim() : '';
                     const requestLabel = (entry.request ?? '').toString().trim();
                     const variantClass = getRequestVariant(requestLabel);
-                    const isSaving = entry.isOptimistic;
+                    const isSaving = Boolean(entry.isOptimistic);
+                    const hasError = Boolean(entry.saveError);
                     const chipClass = [
                       'req',
                       variantClass,
-                      isSaving ? 'opacity-60 animate-pulse ring-2 ring-indigo-400/60' : ''
+                      hasError
+                        ? 'ring-2 ring-rose-500 bg-rose-50/90'
+                        : isSaving
+                          ? 'opacity-60 animate-pulse ring-2 ring-indigo-400/60'
+                          : ''
                     ].filter(Boolean).join(' ');
 
                     return (
                       <div
                         key={entry.id ?? `${entry.name}-${entry.date}-${entry.request}`}
                         className={chipClass}
-                        title={isSaving ? 'Syncing with Google Sheets...' : (trimmedComment || undefined)}
+                        title={
+                          hasError
+                            ? `Failed to save: ${entry.saveError} (Tap date to retry)`
+                            : isSaving
+                              ? 'Saving to Google Sheets...'
+                              : (trimmedComment || undefined)
+                        }
                       >
                         <span className="req__tag">{requestLabel || 'N/A'}</span>
                         {trimmedName ? (

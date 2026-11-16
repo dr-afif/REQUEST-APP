@@ -32,6 +32,8 @@ export default function UserRequests({
   selectedName,
   onEdit,
   onDelete,
+  onRetry,
+  onDismissFailed,
   isLoading,
   settings = {},
 }) {
@@ -187,12 +189,15 @@ export default function UserRequests({
                     ? new Date(request.timestamp).toLocaleString()
                     : 'Timestamp unavailable';
 
-                   const isSaving = request.isOptimistic;
+                  const isSaving = Boolean(request.isOptimistic);
+                  const hasError = Boolean(request.saveError);
                   const itemClass = [
                     "flex flex-wrap items-center justify-between gap-2 rounded-2xl px-3 py-2 transition-all duration-300",
-                    isSaving 
-                      ? "bg-indigo-50/40 border border-indigo-150/40 opacity-75 animate-pulse" 
-                      : "bg-slate-50 border border-transparent"
+                    hasError
+                      ? "bg-rose-50/80 border border-rose-200"
+                      : isSaving
+                        ? "bg-indigo-50/40 border border-indigo-150/40 opacity-75 animate-pulse"
+                        : "bg-slate-50 border border-transparent"
                   ].filter(Boolean).join(" ");
 
                   return (
@@ -204,30 +209,57 @@ export default function UserRequests({
                         <p className="text-sm font-semibold text-slate-900">
                           {formatDisplayDate(request.date)} | {request.request}
                         </p>
-                        <p className="text-xs text-slate-500">
-                          {isSaving ? <><APP_ICONS.activity className="w-3 h-3 inline-block mr-1 animate-spin" /> Syncing with Google Sheets...</> : `Submitted ${submissionLabel}`}
+                        <p className={`text-xs ${hasError ? 'text-rose-700 font-medium' : 'text-slate-500'}`}>
+                          {hasError ? (
+                            <>⚠️ Failed to save: {request.saveError}</>
+                          ) : isSaving ? (
+                            <><APP_ICONS.activity className="w-3 h-3 inline-block mr-1 animate-spin" /> Saving to Google Sheets...</>
+                          ) : (
+                            `Submitted ${submissionLabel}`
+                          )}
                         </p>
                         {request.comment ? (
                           <p className="mt-1 max-w-lg text-xs text-slate-600">{request.comment}</p>
                         ) : null}
                       </div>
                       <div className="flex gap-2">
-                        <button
-                          type="button"
-                          className="rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-600 transition hover:bg-amber-50 disabled:opacity-30 disabled:pointer-events-none"
-                          onClick={() => onEdit?.(request)}
-                          disabled={isSaving}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none"
-                          onClick={() => onDelete?.(request)}
-                          disabled={isSaving}
-                        >
-                          Delete
-                        </button>
+                        {hasError ? (
+                          <>
+                            <button
+                              type="button"
+                              className="rounded-full bg-indigo-600 px-3 py-1 text-xs font-semibold text-white transition hover:bg-indigo-500 cursor-pointer"
+                              onClick={() => onRetry?.(request)}
+                            >
+                              Retry
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 cursor-pointer"
+                              onClick={() => onDismissFailed?.(request)}
+                            >
+                              Dismiss
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-600 transition hover:bg-amber-50 disabled:opacity-30 disabled:pointer-events-none"
+                              onClick={() => onEdit?.(request)}
+                              disabled={isSaving}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none"
+                              onClick={() => onDelete?.(request)}
+                              disabled={isSaving}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
                       </div>
                     </li>
                   );

@@ -14,6 +14,8 @@ export default function UserSection({
   onSelectName,
   onSubmitRequest,
   onDeleteRequest,
+  onRetryRequest,
+  onDismissFailedRequest,
   isLoadingRequests,
   masterRoster = [],
   shiftTypes = [],
@@ -147,6 +149,13 @@ export default function UserSection({
         </div>
       )}
 
+      {isLoadingRequests && requests.length === 0 && (
+        <div className="flex items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 text-xs font-semibold text-indigo-700 animate-pulse">
+          <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin shrink-0" />
+          <span>Loading requests from Google Sheets...</span>
+        </div>
+      )}
+
       {/* 📊 Monthly Request Limits Summary Cards */}
       {selectedName && selectedName.trim().toLowerCase() !== 'admin' && selectedName.trim().toLowerCase() !== 'guest' && monthlyStats.length > 0 && (
         <div className="animate-fadeIn mb-2 max-w-sm">
@@ -251,6 +260,8 @@ export default function UserSection({
             selectedName={selectedName}
             onEdit={handleEdit}
             onDelete={handleDelete}
+            onRetry={onRetryRequest}
+            onDismissFailed={onDismissFailedRequest}
             isLoading={isLoadingRequests}
             settings={settings}
           />
@@ -266,6 +277,8 @@ export default function UserSection({
           onClose={handlePanelClose}
           onEdit={handleEdit}
           onDelete={handleDelete}
+          onRetry={onRetryRequest}
+          onDismissFailed={onDismissFailedRequest}
           onSubmit={handleSubmit}
           isSubmitting={isSubmitting}
           editingRequest={editingRequest}

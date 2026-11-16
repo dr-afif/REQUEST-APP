@@ -152,6 +152,7 @@ export default function App() {
   
   const [isLoading, setIsLoading] = useState(() => !hasCacheValue('resq_cache_requests'));
   const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [selectedName, setSelectedName] = useState(() => {
     const stored = localStorage.getItem('resq_member_name') || '';
     if (stored?.trim().toLowerCase() === 'admin') {
@@ -167,6 +168,7 @@ export default function App() {
   const [, forceUpdateMockUi] = useState({});
   
   const inFlightMutationsRef = useRef(0);
+  const isSyncingRef = useRef(false);
   const pendingSyncTimeoutRef = useRef(null);
 
   const scheduleSafeSync = (delay = 600) => {
@@ -385,6 +387,8 @@ export default function App() {
 
   // 1. Unified Roster Data Synchronization Handler with Resilient Legacy Fallback
   const loadAllData = async () => {
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
     try {
       setIsSyncing(true);
       setRefreshError('');
@@ -455,26 +459,30 @@ export default function App() {
       setTeamMembers(dedupedMembers);
       setEmergencyPhysicians(dedupedEmergencyPhysicians);
 
-      // Parse & set Requests, preserving any in-flight optimistic operations
+      // Parse & set Requests, preserving any in-flight optimistic or failed-save operations
       const adapted = adaptRequestsResponse(rawRequests);
       setRequests((currentRequests) => {
-        const pendingOptimistic = currentRequests.filter((r) => r.isOptimistic);
-        if (!pendingOptimistic.length) {
+        const pendingOrFailed = currentRequests.filter((r) => r.isOptimistic || r.saveError);
+        if (!pendingOrFailed.length) {
           return adapted;
         }
 
-        const stillPending = [];
-        pendingOptimistic.forEach((optReq) => {
+        const preserved = [];
+        pendingOrFailed.forEach((localReq) => {
+          if (localReq.saveError) {
+            preserved.push(localReq);
+            return;
+          }
           const isConfirmed = adapted.some((srvReq) => {
-            if (optReq.id && !String(optReq.id).startsWith('opt_') && String(srvReq.id) === String(optReq.id)) {
+            if (localReq.id && !String(localReq.id).startsWith('opt_') && String(srvReq.id) === String(localReq.id)) {
               return true;
             }
             if (
-              String(optReq.id).startsWith('opt_') &&
-              srvReq.name?.trim().toLowerCase() === optReq.name?.trim().toLowerCase() &&
-              srvReq.date === optReq.date &&
-              srvReq.request === optReq.request &&
-              srvReq.requestType === optReq.requestType
+              String(localReq.id).startsWith('opt_') &&
+              srvReq.name?.trim().toLowerCase() === localReq.name?.trim().toLowerCase() &&
+              srvReq.date === localReq.date &&
+              srvReq.request === localReq.request &&
+              srvReq.requestType === localReq.requestType
             ) {
               return true;
             }
@@ -482,11 +490,13 @@ export default function App() {
           });
 
           if (!isConfirmed) {
-            stillPending.push(optReq);
+            preserved.push(localReq);
           }
         });
 
-        return [...adapted, ...stillPending];
+        const preservedIds = new Set(preserved.map((r) => String(r.id)));
+        const filteredAdapted = adapted.filter((srvReq) => !preservedIds.has(String(srvReq.id)));
+        return [...filteredAdapted, ...preserved];
       });
 
       // Set Master Baseline Roster with validation, preserving in-flight optimistic edits
@@ -563,9 +573,11 @@ export default function App() {
       } catch (cacheErr) {
         console.warn('Failed to save data to localStorage cache:', cacheErr);
       }
+      setLastSyncedAt(new Date());
     } catch (error) {
       setRefreshError(error.message ?? 'Could not synchronize roster data.');
     } finally {
+      isSyncingRef.current = false;
       setIsLoading(false);
       setIsSyncing(false);
       setIsLoadingTeamMembers(false);
@@ -634,8 +646,8 @@ export default function App() {
     }
   }, [rosterNames, selectedName, isLoading, isLoadingTeamMembers]);
 
-  // Optimistic request writes update UI first, then refresh or revert after Apps Script responds.
-  const handleSubmitRequest = async ({ name, date, request, id, comment, requestType, swapPartner }) => {
+  // Fast optimistic request writes: close UI immediately, save in background, and keep failed items for one-click retry.
+  const handleSubmitRequest = async ({ name, date, request, id, comment, requestType, swapPartner, retryTempId }) => {
     const isoDate = toIsoDate(date);
     const normalizedDate = isoDate ?? date;
     const sanitizedComment = typeof comment === 'string' ? comment.trim() : '';
@@ -650,57 +662,69 @@ export default function App() {
       swapPartner: swapPartner || '',
     };
 
-    const tempId = id || `opt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-    let originalItem = null;
+    const isRealEdit = Boolean(id && !String(id).startsWith('opt_'));
+    const targetId = retryTempId || (isRealEdit ? id : `opt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`);
+    const existingItem = requests.find((req) => req.id === targetId) ?? null;
+    const originalItem = isRealEdit ? (existingItem?._originalItem ?? existingItem) : null;
 
     setRequests((prev) => {
-      if (id) {
-        originalItem = prev.find((req) => req.id === id);
+      if (isRealEdit || retryTempId) {
         return prev.map((req) =>
-          req.id === id ? { ...req, ...payload, isOptimistic: true } : req
+          req.id === targetId
+            ? { ...req, ...payload, isOptimistic: true, saveError: null, _originalItem: originalItem }
+            : req
         );
-      } else {
-        const newReq = {
-          ...payload,
-          id: tempId,
-          isOptimistic: true,
-          status: 'Active',
-          approvalStatus: 'Pending',
-          timestamp: new Date().toISOString(),
-        };
-        return [...prev, newReq];
       }
+      const newReq = {
+        ...payload,
+        id: targetId,
+        isOptimistic: true,
+        saveError: null,
+        status: 'Active',
+        approvalStatus: 'Pending',
+        timestamp: new Date().toISOString(),
+      };
+      return [...prev, newReq];
     });
 
-    const actionText = id ? 'Updating' : 'Submitting';
-    const toastId = addToast(`🔄 ${actionText} request for ${name}...`, 'info', Infinity);
+    const actionText = isRealEdit ? 'Updating' : 'Saving';
+    const toastId = addToast(`${actionText} request for ${name}...`, 'info', Infinity);
 
     inFlightMutationsRef.current++;
     (async () => {
       try {
-        if (id) {
-          await updateRequest(id, payload);
-        } else {
-          await submitRequest(payload);
-        }
+        const response = isRealEdit
+          ? await updateRequest(id, payload)
+          : await submitRequest(payload);
+
+        const confirmedId = !isRealEdit && response?.id ? response.id : targetId;
+        setRequests((prev) =>
+          prev.map((req) => {
+            if (req.id !== targetId) return req;
+            const { _originalItem, ...cleanReq } = req;
+            return { ...cleanReq, id: confirmedId, isOptimistic: false, saveError: null };
+          })
+        );
+
         updateToast(toastId, {
-          message: `✅ Request saved successfully!`,
+          message: 'Request saved to Google Sheets!',
           type: 'success',
           duration: 3000,
         });
       } catch (err) {
         console.error('Background save failed:', err);
-        setRequests((prev) => {
-          if (id) {
-            return originalItem ? prev.map((r) => (r.id === id ? originalItem : r)) : prev;
-          } else {
-            return prev.filter((r) => r.id !== tempId);
-          }
-        });
+        const errorMessage = err.message || 'Network error';
+        setRequests((prev) =>
+          prev.map((req) =>
+            req.id === targetId
+              ? { ...req, isOptimistic: false, saveError: errorMessage, _originalItem: originalItem }
+              : req
+          )
+        );
         updateToast(toastId, {
-          message: `❌ Save failed: ${err.message || 'Network error'}. Reverted.`,
+          message: `Save failed: ${errorMessage}. Tap Retry on the request card.`,
           type: 'error',
-          duration: 5000,
+          duration: 6000,
         });
       } finally {
         inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
@@ -709,44 +733,65 @@ export default function App() {
     })();
   };
 
+  const handleRetryRequest = (failedRequest) => {
+    if (!failedRequest) return;
+    const isTemp = String(failedRequest.id || '').startsWith('opt_');
+    handleSubmitRequest({
+      name: failedRequest.name,
+      date: failedRequest.date,
+      request: failedRequest.request,
+      comment: failedRequest.comment,
+      requestType: failedRequest.requestType,
+      swapPartner: failedRequest.swapPartner,
+      id: isTemp ? undefined : failedRequest.id,
+      retryTempId: isTemp ? failedRequest.id : undefined,
+    });
+  };
+
+  const handleDismissFailedRequest = (failedRequest) => {
+    if (!failedRequest) return;
+    setRequests((prev) => {
+      if (failedRequest._originalItem) {
+        return prev.map((req) => (req.id === failedRequest.id ? failedRequest._originalItem : req));
+      }
+      return prev.filter((req) => req.id !== failedRequest.id);
+    });
+  };
+
   // Optimistic request deletes mirror submit behavior: local update first, backend confirmation after.
   const handleDeleteRequest = async ({ id, name }) => {
     if (!id) {
       throw new Error('Missing request ID for deletion.');
     }
 
-    let deletedItem = null;
-    setRequests((prev) => {
-      deletedItem = prev.find((req) => req.id === id);
-      return prev.filter((req) => req.id !== id);
-    });
+    const deletedItem = requests.find((req) => req.id === id) ?? null;
+    setRequests((prev) => prev.filter((req) => req.id !== id));
 
-    const toastId = addToast(`🔄 Deleting request for ${name || 'member'}...`, 'info', Infinity);
+    const toastId = addToast(`Deleting request for ${name || 'member'}...`, 'info', Infinity);
 
     inFlightMutationsRef.current++;
-    (async () => {
-      try {
-        await deleteRequest(id);
-        updateToast(toastId, {
-          message: `✅ Request deleted successfully.`,
-          type: 'success',
-          duration: 3000,
-        });
-      } catch (err) {
-        console.error('Background deletion failed:', err);
-        if (deletedItem) {
-          setRequests((prev) => [...prev, deletedItem]);
-        }
-        updateToast(toastId, {
-          message: `❌ Deletion failed: ${err.message || 'Network error'}. Reverted.`,
-          type: 'error',
-          duration: 5000,
-        });
-      } finally {
-        inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
-        scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
+    try {
+      await deleteRequest(id);
+      updateToast(toastId, {
+        message: 'Request deleted successfully.',
+        type: 'success',
+        duration: 3000,
+      });
+    } catch (err) {
+      console.error('Request deletion failed:', err);
+      if (deletedItem) {
+        setRequests((prev) => [...prev, deletedItem]);
       }
-    })();
+      updateToast(toastId, {
+        message: `Deletion failed: ${err.message || 'Network error'}. Reverted.`,
+        type: 'error',
+        duration: 5000,
+      });
+      throw err;
+    } finally {
+      inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+      scheduleSafeSync(inFlightMutationsRef.current === 0 ? 500 : 1500);
+    }
   };
 
   // Approval changes share the same optimistic refresh/revert pattern.
@@ -1666,6 +1711,8 @@ export default function App() {
         onSelectName={handleSelectName}
         names={rosterNames}
         syncStatus={isSyncing ? 'loading' : refreshError ? 'error' : 'connected'}
+        syncError={refreshError}
+        lastSyncedAt={lastSyncedAt}
         onRefresh={loadAllData}
         isAdmin={isAdmin}
       />
@@ -1875,6 +1922,8 @@ export default function App() {
               onSelectName={handleSelectName}
               onSubmitRequest={handleSubmitRequest}
               onDeleteRequest={handleDeleteRequest}
+              onRetryRequest={handleRetryRequest}
+              onDismissFailedRequest={handleDismissFailedRequest}
               isLoadingRequests={isLoading}
               shiftBlocks={shiftBlocks}
               masterRoster={composedRoster.effectiveRows}

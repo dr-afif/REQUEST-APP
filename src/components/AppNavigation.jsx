@@ -10,6 +10,8 @@ export default function AppNavigation({
   onSelectName,
   names = [],
   syncStatus = 'connected',
+  syncError = '',
+  lastSyncedAt = null,
   onRefresh,
   isAdmin: propIsAdmin,
 }) {
@@ -19,6 +21,7 @@ export default function AppNavigation({
       ? propIsAdmin
       : (selectedName?.trim().toLowerCase() === 'admin' && isSessionTokenActive())
   );
+  const isSyncing = syncStatus === 'loading';
 
   const statusColor = useMemo(() => {
     switch (syncStatus) {
@@ -31,6 +34,27 @@ export default function AppNavigation({
         return 'bg-emerald-500';
     }
   }, [syncStatus]);
+
+  const statusLabel = useMemo(() => {
+    switch (syncStatus) {
+      case 'loading':
+        return 'Syncing...';
+      case 'error':
+        return 'Sync failed';
+      case 'connected':
+      default:
+        return 'Connected';
+    }
+  }, [syncStatus]);
+
+  const formattedLastSync = useMemo(() => {
+    if (!lastSyncedAt) return '';
+    try {
+      return new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  }, [lastSyncedAt]);
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: APP_ICONS.dashboard },
@@ -59,22 +83,50 @@ export default function AppNavigation({
             </span>
             <div className="flex whitespace-nowrap items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
               <span className={`inline-block shrink-0 h-2 w-2 rounded-full ${statusColor}`} />
-              <span>Sync: {syncStatus}</span>
+              <span>{statusLabel}</span>
             </div>
           </div>
         </div>
 
         {/* Sync Controls / Refresh Row */}
-        <div className="mt-4 flex items-center justify-between bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Google Sheets</span>
-          <button
-            type="button"
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-xs shadow-sm transition hover:bg-slate-50 active:scale-95 cursor-pointer text-slate-600 hover:text-indigo-600"
-            onClick={onRefresh}
-            title="Refresh database"
-          >
-            <APP_ICONS.refresh className="w-3.5 h-3.5" />
-          </button>
+        <div
+          className={`mt-4 flex flex-col gap-1 rounded-xl border px-3 py-2 transition-colors ${
+            syncStatus === 'error'
+              ? 'bg-rose-50/70 border-rose-200'
+              : 'bg-slate-50 border-slate-100'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Google Sheets
+              </span>
+              <span className="block truncate text-[10px] font-medium text-slate-400">
+                {isSyncing
+                  ? 'Updating data...'
+                  : syncStatus === 'error'
+                    ? 'Tap refresh to retry'
+                    : formattedLastSync
+                      ? `Synced ${formattedLastSync}`
+                      : 'Live sync'}
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={isSyncing}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-xs shadow-sm transition hover:bg-slate-50 active:scale-95 cursor-pointer text-slate-600 hover:text-indigo-600 disabled:opacity-60 disabled:cursor-wait"
+              onClick={onRefresh}
+              title={isSyncing ? 'Syncing with Google Sheets...' : 'Refresh from Google Sheets'}
+              aria-label="Refresh from Google Sheets"
+            >
+              <APP_ICONS.refresh className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-600' : ''}`} />
+            </button>
+          </div>
+          {syncStatus === 'error' && syncError && (
+            <p className="text-[10px] font-medium text-rose-600 leading-snug line-clamp-2" title={syncError}>
+              {syncError}
+            </p>
+          )}
         </div>
 
         {/* Navigation Menu Links */}
@@ -169,7 +221,7 @@ export default function AppNavigation({
             </span>
             <div className="flex items-center gap-1 text-[8px] font-semibold text-slate-400 uppercase tracking-wider">
               <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusColor}`} />
-              <span>{syncStatus}</span>
+              <span className={syncStatus === 'error' ? 'text-rose-500' : ''}>{statusLabel}</span>
             </div>
           </div>
         </div>
@@ -184,11 +236,19 @@ export default function AppNavigation({
 
           <button
             type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-xs shadow-xs active:scale-95 cursor-pointer"
+            disabled={isSyncing}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-xs shadow-xs active:scale-95 cursor-pointer disabled:opacity-60 disabled:cursor-wait"
             onClick={onRefresh}
-            title="Refresh database"
+            title={
+              isSyncing
+                ? 'Syncing with Google Sheets...'
+                : syncStatus === 'error' && syncError
+                  ? `Sync failed: ${syncError}`
+                  : 'Refresh from Google Sheets'
+            }
+            aria-label="Refresh from Google Sheets"
           >
-            <APP_ICONS.refresh className="w-3.5 h-3.5 text-slate-600 hover:text-indigo-600" />
+            <APP_ICONS.refresh className={`w-3.5 h-3.5 text-slate-600 hover:text-indigo-600 ${isSyncing ? 'animate-spin text-indigo-600' : ''}`} />
           </button>
 
           <button

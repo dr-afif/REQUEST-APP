@@ -337,7 +337,7 @@ export default function NewRequestForm({
             {selectedDateKey && selectedTypeStatus.isLimited ? (
               <>
                 {selectedTypeStatus.usage}/{selectedTypeStatus.limit} requests for group '{selectedTypeStatus.groupName}' on this date.
-                {(!selectedName?.trim().toLowerCase() === 'admin' && selectedTypeStatus.isAtLimit) ? ' Selection capped.' : ''}
+                {(selectedName?.trim().toLowerCase() !== 'admin' && selectedTypeStatus.isAtLimit) ? ' Selection capped.' : ''}
               </>
             ) : (
               selectedTypeStatus.isLimited ? `Group '${selectedTypeStatus.groupName}' is subject to limits.` : 'This shift type is unlimited.'
@@ -361,7 +361,12 @@ export default function NewRequestForm({
           type="submit"
           className="mt-2 inline-flex w-full items-center justify-center rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:bg-indigo-300"
         >
-          {isSubmitting ? 'Saving...' : 'Save request'}
+          {isSubmitting && (
+            <span className="inline-block h-4 w-4 mr-2 rounded-full border-2 border-white border-t-transparent animate-spin" aria-hidden="true" />
+          )}
+          {isSubmitting
+            ? (initialValues?.id ? 'Updating request...' : 'Saving to Google Sheets...')
+            : (initialValues?.id ? 'Update request' : 'Save request')}
         </button>
 
         {validationError ? (

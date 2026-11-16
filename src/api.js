@@ -79,17 +79,23 @@ function buildUrl(query) {
   return url.toString();
 }
 
-async function request({ method = 'GET', body, headers, query } = {}) {
+async function request({ method = 'GET', body, headers, query, timeoutMs = 20000 } = {}) {
   if (devMockChecker && devMockChecker() && devMockDispatcher) {
     return devMockDispatcher({ method, body, headers, query });
   }
   const url = buildUrl(query);
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller && timeoutMs > 0
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
   const options = {
     method,
     headers: {
       Accept: 'application/json',
       ...headers,
     },
+    ...(controller ? { signal: controller.signal } : {}),
   };
 
   if (body !== undefined) {
@@ -98,6 +104,7 @@ async function request({ method = 'GET', body, headers, query } = {}) {
     if (LEGACY_ADMIN_MUTATION_ACTIONS.has(action) || SIMPLIFIED_ADMIN_MUTATION_ACTIONS.has(action)) {
       const token = getAdminSessionToken() || body.adminSessionToken;
       if (!token) {
+        if (timeoutId) clearTimeout(timeoutId);
         throw new Error('Administrator session required for this operation.');
       }
       finalBody = { ...body, adminSessionToken: token };
@@ -109,7 +116,18 @@ async function request({ method = 'GET', body, headers, query } = {}) {
     }
   }
 
-  const response = await fetch(url, options);
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Request timed out. Please check your connection and try again.');
+    }
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+
   const contentType = response.headers.get('content-type') ?? '';
 
   const payload = contentType.includes('application/json')
