@@ -6,7 +6,7 @@ import { harness, fixture, digest } from './apps-script-harness.mjs';
 
 test('all initial semantic codes and aliases have deterministic frontend/backend parity',()=>{
   const backend=harness().core();
-  const cases=['AM','PM','OH','COURT','ON1','ON2','ON','N','NIGHT','PN','OFF','GOFF','AL','MC','EL','HKA','GHKA','COURSE','','EP_OFFICE_HOUR','EP_ONCALL',
+  const cases=['AM','PM','OH','COURT','ON1','ON2','ON','N','NIGHT','PN','OFF','GOFF','AL','MC','EL','HKA','GHKA','COURSE','','EP_OFFICE_HOUR','EP_OFFICE_HOUR_PASSIVE','EP_ONCALL',
     'AMX','AM(X)','AM (X)','PMX','PM(X)','PM (X)','AM (S)','PM (S)','OFF (S)','GOFF (S)','HKA (S)','GHKA (S)','COURSE (S)','AM-S','PM-X'];
   for(const raw of cases){const actual=core.resolveShift(raw);assert.equal(actual.known,true,raw);assert.equal(actual.rawShift,raw);assert.deepEqual(JSON.parse(JSON.stringify(backend.resolveShift(raw))),actual,raw);}
   assert.equal(core.resolveShift('COURT').worked,true);assert.equal(core.resolveShift('COURT').providesStaffingCoverage,false);
@@ -32,7 +32,7 @@ test('every initial base code satisfies the approved semantic matrix',()=>{
     ON1:[true,'INCREMENT','NIGHT',true,false,true],ON2:[true,'INCREMENT','NIGHT',true,false,true],ON:[true,'INCREMENT','NIGHT',true,false,true],N:[true,'INCREMENT','NIGHT',true,false,true],NIGHT:[true,'INCREMENT','NIGHT',true,false,true],
     PN:[false,'TRANSPARENT',null,true,false,true],OFF:[false,'RESET',null,false,true,false],
     GOFF:[false,'RESET',null,false,false,false],HKA:[false,'RESET',null,false,false,false],GHKA:[false,'RESET',null,false,false,false],AL:[false,'RESET',null,false,false,false],MC:[false,'RESET',null,false,false,false],EL:[false,'RESET',null,false,false,false],COURSE:[false,'RESET',null,false,false,false],'':[false,'RESET',null,false,false,false],
-    EP_OFFICE_HOUR:[false,'EXCLUDED',null,false,false,false],EP_ONCALL:[false,'EXCLUDED',null,false,false,false],
+    EP_OFFICE_HOUR:[false,'EXCLUDED',null,false,false,false],EP_OFFICE_HOUR_PASSIVE:[false,'EXCLUDED',null,false,false,false],EP_ONCALL:[false,'EXCLUDED',null,false,false,false],
   };
   assert.deepEqual(Object.keys(core.catalog).sort(),Object.keys(expected).sort());
   for(const [raw,tuple] of Object.entries(expected)){const s=core.resolveShift(raw);assert.deepEqual([s.worked,s.consecutive,s.staffingBucket,s.policyBQualifier,s.normalOff,s.canDisplaceOffEarnGoff],tuple,raw);}
@@ -52,10 +52,10 @@ test('unknowns stay explicit, do not turn into blank/OFF, and do not silently re
   assert.equal(core.advanceWorkedDays(4,core.classifyCalendarDay(['MYSTERY'])),null);
 });
 test('EP assignments and roles contribute nothing to MO work, staffing, OFF or GOFF',()=>{
-  for(const raw of ['EP_OFFICE_HOUR','EP_ONCALL']){
+  for(const raw of ['EP_OFFICE_HOUR','EP_OFFICE_HOUR_PASSIVE','EP_ONCALL']){
     const s=core.resolveShift(raw);assert.equal(s.worked,false);assert.equal(s.consecutive,'EXCLUDED');assert.equal(s.policyBQualifier,false);assert.equal(s.normalOff,false);assert.equal(s.canDisplaceOffEarnGoff,false);
   }
-  assert.equal(core.advanceWorkedDays(4,core.classifyCalendarDay(['EP_OFFICE_HOUR','EP_ONCALL'])),4);
+  assert.equal(core.advanceWorkedDays(4,core.classifyCalendarDay(['EP_OFFICE_HOUR','EP_OFFICE_HOUR_PASSIVE','EP_ONCALL'])),4);
   assert.equal(core.resolveShift('AM','EP').providesStaffingCoverage,false);
 });
 test('stable identities survive renames; approved aliases, roles, orphans and inactive history remain distinct',()=>{

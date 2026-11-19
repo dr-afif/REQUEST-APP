@@ -20,6 +20,7 @@ import {
   CLEAR_MARKER,
   FIELD_MO_SHIFT,
   FIELD_EP_OFFICE_HOUR,
+  FIELD_EP_OFFICE_HOUR_PASSIVE,
   FIELD_EP_ONCALL,
   resolveStaffIdentity,
   buildRosterCellKey,
@@ -1389,6 +1390,7 @@ test('Simplified Roster Redesign — 35-Scenario End-to-End Verification Suite',
   await t.test('Scenario 23 — Emergency Physician (EP) roster compatibility across Main, Amend, and explicit clears', () => {
     const mainRows = [
       { Name: 'Iskasymar', Date: '2026-10-08', Shift: FIELD_EP_OFFICE_HOUR },
+      { Name: 'Azrul', Date: '2026-10-08', Shift: FIELD_EP_OFFICE_HOUR_PASSIVE },
       { Name: 'Luqman', Date: '2026-10-08', Shift: FIELD_EP_ONCALL },
       { Name: 'Adi', Date: '2026-10-08', Shift: 'AM' },
     ];
@@ -1421,6 +1423,20 @@ test('Simplified Roster Redesign — 35-Scenario End-to-End Verification Suite',
         IsCleared: true,
         Sequence: 2,
       },
+      // Replace EP_OFFICE_HOUR_PASSIVE Azrul -> Zaki
+      {
+        AmendmentId: 'ep-3',
+        RosterMonth: '2026-10',
+        Date: '2026-10-08',
+        TargetType: 'EP',
+        Field: FIELD_EP_OFFICE_HOUR_PASSIVE,
+        StaffKey: '__EP__',
+        StaffName: 'Zaki',
+        PreviousValue: 'Azrul',
+        NewValue: 'Zaki',
+        IsCleared: false,
+        Sequence: 3,
+      },
     ];
 
     const composed = composeEffectiveRoster({
@@ -1435,8 +1451,62 @@ test('Simplified Roster Redesign — 35-Scenario End-to-End Verification Suite',
       'EP_OFFICE_HOUR amended to Hafizah'
     );
     assert.ok(
+      composed.effectiveRows.some((r) => r.Name === 'Zaki' && r.Shift === FIELD_EP_OFFICE_HOUR_PASSIVE),
+      'EP_OFFICE_HOUR_PASSIVE amended to Zaki'
+    );
+    assert.ok(
       !composed.effectiveRows.some((r) => r.Shift === FIELD_EP_ONCALL),
       'Cleared EP_ONCALL does NOT fall back to Luqman'
+    );
+
+    const gridCells = buildCellsMapFromEditedGrid({
+      editedGrid: {
+        '2026-10-08': {
+          AM: 'Adi',
+          PM: '',
+          NIGHT: '',
+          EP_OFFICE_HOUR: 'Hafizah',
+          EP_OFFICE_HOUR_PASSIVE: 'Zaki',
+          EP_ONCALL: '',
+        },
+      },
+      rosterMonth: '2026-10',
+      names: ['Adi'],
+      teamMembers: [CERTIFIED_TEAM_MEMBERS[0]],
+      baseCellsMap: composed.cellsMap,
+    });
+    const passiveCell = gridCells.get(buildRosterCellKey({
+      date: '2026-10-08',
+      field: FIELD_EP_OFFICE_HOUR_PASSIVE,
+      staffKey: '__EP__',
+    }));
+    assert.equal(passiveCell?.value, 'Zaki', 'buildCellsMapFromEditedGrid tracks EP_OFFICE_HOUR_PASSIVE');
+
+    // Also verify explicit clear on EP_OFFICE_HOUR_PASSIVE
+    const clearedComposed = composeEffectiveRoster({
+      mainRows,
+      amendments: [
+        ...amendments,
+        {
+          AmendmentId: 'ep-4',
+          RosterMonth: '2026-10',
+          Date: '2026-10-08',
+          TargetType: 'EP',
+          Field: FIELD_EP_OFFICE_HOUR_PASSIVE,
+          StaffKey: '__EP__',
+          StaffName: '',
+          PreviousValue: 'Zaki',
+          NewValue: CLEAR_MARKER,
+          IsCleared: true,
+          Sequence: 4,
+        },
+      ],
+      rosterMonth: '2026-10',
+      teamMembers: CERTIFIED_TEAM_MEMBERS,
+    });
+    assert.ok(
+      !clearedComposed.effectiveRows.some((r) => r.Shift === FIELD_EP_OFFICE_HOUR_PASSIVE),
+      'Cleared EP_OFFICE_HOUR_PASSIVE does NOT fall back to Main'
     );
 
     const h = createInteractiveComponentHarness(RosterPage, {
@@ -1452,7 +1522,9 @@ test('Simplified Roster Redesign — 35-Scenario End-to-End Verification Suite',
       isAdmin: false,
     });
     const calHtml = h.renderHtml();
+    assert.ok(calHtml.includes('OFFICE HOUR (PASSIVE)'), 'Calendar View renders OFFICE HOUR (PASSIVE) column');
     assert.ok(calHtml.includes('>Hafizah<'), 'Calendar View displays amended EP Hafizah');
+    assert.ok(calHtml.includes('>Zaki<'), 'Calendar View displays amended EP passive Zaki');
     assert.ok(!calHtml.includes('>Luqman<'), 'Calendar View omits cleared EP Luqman from active cell text');
     assert.ok(calHtml.includes('Main: Luqman → Current: Cleared'), 'Provenance tooltip records Main: Luqman -> Current: Cleared');
   });

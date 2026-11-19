@@ -67,6 +67,7 @@ const RosterCompatibility = (() => {
     AL: code(false, 'RESET', null), MC: code(false, 'RESET', null), EL: code(false, 'RESET', null),
     COURSE: code(false, 'RESET', null), '': code(false, 'RESET', null),
     EP_OFFICE_HOUR: code(false, 'EXCLUDED', null, false, false, false, [], [], 'EP'),
+    EP_OFFICE_HOUR_PASSIVE: code(false, 'EXCLUDED', null, false, false, false, [], [], 'EP'),
     EP_ONCALL: code(false, 'EXCLUDED', null, false, false, false, [], [], 'EP'),
   });
   const owns = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);

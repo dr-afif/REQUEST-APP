@@ -4,6 +4,7 @@ import { mapName } from '../../../utils/adapters.js';
 export const CLEAR_MARKER = '__CLEAR__';
 export const FIELD_MO_SHIFT = 'MO_SHIFT';
 export const FIELD_EP_OFFICE_HOUR = 'EP_OFFICE_HOUR';
+export const FIELD_EP_OFFICE_HOUR_PASSIVE = 'EP_OFFICE_HOUR_PASSIVE';
 export const FIELD_EP_ONCALL = 'EP_ONCALL';
 export const EP_SLOT_STAFF_KEY = '__EP__';
 
@@ -12,7 +13,17 @@ export const EP_SLOT_STAFF_KEY = '__EP__';
  */
 export function isEpSlotShift(shift) {
   const up = String(shift || '').trim().toUpperCase();
-  return up === FIELD_EP_OFFICE_HOUR || up === FIELD_EP_ONCALL;
+  return up === FIELD_EP_OFFICE_HOUR || up === FIELD_EP_OFFICE_HOUR_PASSIVE || up === FIELD_EP_ONCALL;
+}
+
+/**
+ * Returns the canonical human-readable label for an EP slot field.
+ */
+export function getEpSlotLabel(field) {
+  const up = String(field || '').trim().toUpperCase();
+  if (up === FIELD_EP_OFFICE_HOUR) return 'EP Office Hour';
+  if (up === FIELD_EP_OFFICE_HOUR_PASSIVE) return 'EP Office Hour (Passive)';
+  return 'EP On Call';
 }
 
 /**
@@ -93,7 +104,7 @@ export function resolveStaffIdentity(rawIdentifier, rawFallbackName = '', teamMe
 export function buildRosterCellKey({ date, field = FIELD_MO_SHIFT, staffKey = '', teamMembers = [] }) {
   const isoDate = toIsoDate(date) || String(date || '').trim();
   const upField = String(field || FIELD_MO_SHIFT).trim().toUpperCase();
-  if (upField === FIELD_EP_OFFICE_HOUR || upField === FIELD_EP_ONCALL) {
+  if (isEpSlotShift(upField)) {
     const normStaff = normalizeForComparison(staffKey);
     if (!normStaff || normStaff === normalizeForComparison(EP_SLOT_STAFF_KEY) || normStaff === normalizeForComparison(upField)) {
       return `EP|${isoDate}|${upField}`;
@@ -299,7 +310,7 @@ export function composeEffectiveRoster({
             targetType: 'EP',
             field: upShift,
             staffKey: EP_SLOT_STAFF_KEY,
-            staffName: upShift === FIELD_EP_OFFICE_HOUR ? 'EP Office Hour' : 'EP On Call',
+            staffName: getEpSlotLabel(upShift),
             mainValue: rawName,
             effectiveValue: rawName,
             isAmended: false,
@@ -396,7 +407,7 @@ export function composeEffectiveRoster({
         targetType: 'EP',
         field: amd.field,
         staffKey: EP_SLOT_STAFF_KEY,
-        staffName: amd.field === FIELD_EP_OFFICE_HOUR ? 'EP Office Hour' : 'EP On Call',
+        staffName: getEpSlotLabel(amd.field),
         mainValue: mainVal,
         effectiveValue: nextVal,
         isAmended: true,
@@ -469,7 +480,7 @@ export function composeEffectiveRoster({
       continue;
     }
 
-    if (entry.field === FIELD_EP_OFFICE_HOUR || entry.field === FIELD_EP_ONCALL) {
+    if (isEpSlotShift(entry.field)) {
       const epNames = entry.effectiveValue
         .split(/[,\n]+/)
         .map((n) => n.trim())
@@ -533,7 +544,7 @@ export function normalizeShiftComparison(val) {
  */
 export function getCellAmendmentInfo(amendedCellsMap, { date, doctorName, staffKey, field, epField = null, teamMembers = [] }) {
   if (!amendedCellsMap || !(amendedCellsMap instanceof Map)) return null;
-  const resolvedEpField = epField || ((field === FIELD_EP_OFFICE_HOUR || field === FIELD_EP_ONCALL) ? field : null);
+  const resolvedEpField = epField || (isEpSlotShift(field) ? field : null);
   if (resolvedEpField) {
     const key = buildRosterCellKey({ date, field: resolvedEpField, staffKey: EP_SLOT_STAFF_KEY });
     return amendedCellsMap.get(key) || null;
@@ -591,7 +602,7 @@ export function buildCellsMapFromEditedGrid({
     if (!dayObj || typeof dayObj !== 'object') continue;
 
     // 1. EP slots
-    for (const epField of [FIELD_EP_OFFICE_HOUR, FIELD_EP_ONCALL]) {
+    for (const epField of [FIELD_EP_OFFICE_HOUR, FIELD_EP_OFFICE_HOUR_PASSIVE, FIELD_EP_ONCALL]) {
       if (dayObj[epField] !== undefined) {
         const cleanEp = String(dayObj[epField] || '')
           .split(/[,\n]+/)
@@ -607,7 +618,7 @@ export function buildCellsMapFromEditedGrid({
             targetType: 'EP',
             field: epField,
             staffKey: EP_SLOT_STAFF_KEY,
-            staffName: epField === FIELD_EP_OFFICE_HOUR ? 'EP Office Hour' : 'EP On Call',
+            staffName: getEpSlotLabel(epField),
             value: cleanEp,
           });
         }

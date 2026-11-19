@@ -41,9 +41,23 @@ function renderContactRows(contacts = []) {
 
 function renderTable({ rosterType, rows }) {
   const isEpOnly = rosterType === 'EP ROSTER';
+  const isEpPlus = rosterType === 'EP+ ROSTER';
 
-  const header = isEpOnly
+  const header = isEpPlus
     ? `
+      <tr>
+        <th rowspan="2" class="date-col">DATE</th>
+        <th rowspan="2" class="day-col">DAY</th>
+        <th colspan="3">EMERGENCY PHYSICIAN</th>
+      </tr>
+      <tr>
+        <th>AM<br><span>8AM-4PM</span></th>
+        <th>OFFICE HOUR<br><span>(PASSIVE)</span></th>
+        <th>ONCALL<br><span>4PM-8AM</span></th>
+      </tr>
+    `
+    : isEpOnly
+      ? `
       <tr>
         <th rowspan="2" class="date-col">DATE</th>
         <th rowspan="2" class="day-col">DAY</th>
@@ -54,7 +68,7 @@ function renderTable({ rosterType, rows }) {
         <th>ONCALL<br><span>4PM-8AM</span></th>
       </tr>
     `
-    : `
+      : `
       <tr>
         <th rowspan="2" class="date-col">DATE</th>
         <th rowspan="2" class="day-col">DAY</th>
@@ -76,6 +90,18 @@ function renderTable({ rosterType, rows }) {
       rowClassAttr = ' class="holiday"';
     } else if (row.day === 'SAT' || row.day === 'SUN') {
       rowClassAttr = ' class="weekend"';
+    }
+
+    if (isEpPlus) {
+      return `
+        <tr${rowClassAttr}>
+          <td>${escapeHtml(row.date)}</td>
+          <td>${escapeHtml(row.day)}</td>
+          <td>${formatCell(row.epAm)}</td>
+          <td>${formatCell(row.epPassive)}</td>
+          <td>${formatCell(row.epOncall)}</td>
+        </tr>
+      `;
     }
 
     if (isEpOnly) {
@@ -103,7 +129,7 @@ function renderTable({ rosterType, rows }) {
   }).join('');
 
   return `
-    <table class="roster-table ${isEpOnly ? 'ep-only' : 'mo-ep'}">
+    <table class="roster-table ${isEpPlus ? 'ep-plus' : isEpOnly ? 'ep-only' : 'mo-ep'}">
       <thead>${header}</thead>
       <tbody>${body}</tbody>
     </table>
@@ -111,7 +137,7 @@ function renderTable({ rosterType, rows }) {
 }
 
 function renderContacts({ rosterType, contacts }) {
-  if (rosterType === 'EP ROSTER') {
+  if (rosterType === 'EP ROSTER' || rosterType === 'EP+ ROSTER') {
     return `
       <section class="contact-grid single">
         <div class="contact-box">
@@ -266,7 +292,7 @@ function renderPlanningFooter({ preparedBy, checkedBy, approvedBy, holidaysHtml 
   `;
 }
 
-function buildPrintDocument({
+export function buildPrintDocument({
   mainTitle,
   rosterType,
   monthYear,
@@ -455,6 +481,9 @@ function buildPrintDocument({
           .roster-table.ep-only { width: 70mm; }
           .roster-table.ep-only th:nth-child(n+3),
           .roster-table.ep-only td:nth-child(n+3) { width: calc((100% - 19mm) / 2); }
+          .roster-table.ep-plus { width: 100mm; }
+          .roster-table.ep-plus th:nth-child(n+3),
+          .roster-table.ep-plus td:nth-child(n+3) { width: calc((100% - 19mm) / 3); }
           .roster-table tr.weekend td {
             background: #e5e7eb;
             color: #111827;

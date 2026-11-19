@@ -21,7 +21,7 @@ import {
   subscribeAdminAuth,
   verifyAdminPin,
 } from './features/roster/auth/adminAuth.js';
-import { composeEffectiveRoster } from './features/roster/simplified/rosterComposition.js';
+import { composeEffectiveRoster, isEpSlotShift } from './features/roster/simplified/rosterComposition.js';
 import {
   isDevMockActive,
   setDevMockActive,
@@ -1571,7 +1571,7 @@ export default function App() {
           for (const ch of changes) {
             const chDate = toIsoDate(ch.date) || String(ch.date || '').trim();
             const chField = String(ch.field || 'MO_SHIFT').trim().toUpperCase();
-            const isEp = chField === 'EP_OFFICE_HOUR' || chField === 'EP_ONCALL';
+            const isEp = isEpSlotShift(chField);
             const k = isEp
               ? `EP|${chDate}|${chField}`
               : `MO|${chDate}|${normalizeForComparison(ch.staffName || ch.staffKey || '')}`;
@@ -1584,7 +1584,7 @@ export default function App() {
             const rDate = toIsoDate(row?.date || row?.Date) || String(row?.date || row?.Date || '').trim();
             const rShift = String(row?.shift || row?.Shift || '').trim();
             const rName = String(row?.name || row?.Name || '').trim();
-            const isEp = rShift.toUpperCase() === 'EP_OFFICE_HOUR' || rShift.toUpperCase() === 'EP_ONCALL';
+            const isEp = isEpSlotShift(rShift);
             const k = isEp
               ? `EP|${rDate}|${rShift.toUpperCase()}`
               : `MO|${rDate}|${normalizeForComparison(rName)}`;

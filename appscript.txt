@@ -1972,6 +1972,11 @@ function getRosterAmendmentsData(params) {
   return records;
 }
 
+function isEpShiftField_(val) {
+  var up = String(val || '').trim().toUpperCase();
+  return up === 'EP_OFFICE_HOUR' || up === 'EP_OFFICE_HOUR_PASSIVE' || up === 'EP_ONCALL';
+}
+
 function composeServerSideEffectiveCells_(targetMonth) {
   var cells = {};
   var teamMembersList = [];
@@ -1988,7 +1993,7 @@ function composeServerSideEffectiveCells_(targetMonth) {
     if (!nameStr || !shiftStr) continue;
 
     var upShift = shiftStr.toUpperCase();
-    if (upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL') {
+    if (isEpShiftField_(upShift)) {
       var epKey = 'EP|' + dateStr + '|' + upShift;
       if (cells[epKey]) {
         var existingNames = cells[epKey].split(/[,\n]+/).map(function(n) { return n.trim(); }).filter(Boolean);
@@ -2031,7 +2036,7 @@ function composeServerSideEffectiveCells_(targetMonth) {
     var field = String(amd.Field || 'MO_SHIFT').trim().toUpperCase();
     var isCleared = Boolean(amd.IsCleared === true || String(amd.IsCleared).toUpperCase() === 'TRUE' || String(amd.NewValue || '').trim() === '__CLEAR__');
     var newVal = isCleared ? '' : String(amd.NewValue || '').trim();
-    var cKey = (field === 'EP_OFFICE_HOUR' || field === 'EP_ONCALL')
+    var cKey = isEpShiftField_(field)
       ? ('EP|' + dStr + '|' + field)
       : ('MO|' + dStr + '|' + resolveServerStaffKey_(amd.StaffKey || amd.StaffName, amd.StaffName, teamMembersList));
     cells[cKey] = newVal;
@@ -2116,7 +2121,7 @@ function handleSaveMasterRosterDraft(data) {
         if (!b || typeof b !== 'object') continue;
         var bDate = String(b.date || '').trim();
         var bField = String(b.field || 'MO_SHIFT').trim().toUpperCase();
-        var bKey = (bField === 'EP_OFFICE_HOUR' || bField === 'EP_ONCALL')
+        var bKey = isEpShiftField_(bField)
           ? ('EP|' + bDate + '|' + bField)
           : ('MO|' + bDate + '|' + resolveServerStaffKey_(b.staffKey || b.staffName, b.staffName, draftTeamList));
         var serverVal = String(currentCells[bKey] || '').trim();
@@ -2190,7 +2195,7 @@ function handleSaveMasterRosterDraft(data) {
           throw new Error('Change date "' + chDate + '" does not match targetMonth "' + targetMonth + '".');
         }
         var chField = String(ch.field || ch.Field || 'MO_SHIFT').trim().toUpperCase();
-        var chIsEp = (chField === 'EP_OFFICE_HOUR' || chField === 'EP_ONCALL');
+        var chIsEp = isEpShiftField_(chField);
         var chTargetType = chIsEp ? 'EP' : String(ch.targetType || ch.TargetType || 'MO').trim().toUpperCase();
         var chName = String(ch.staffName || ch.StaffName || ch.name || ch.Name || '').trim();
         var chKey = chIsEp ? '__EP__' : resolveServerStaffKey_(ch.staffKey || ch.StaffKey || chName, chName, draftTeamList);
@@ -2222,8 +2227,8 @@ function handleSaveMasterRosterDraft(data) {
         var rShiftStr = String(rItem.shift !== undefined ? rItem.shift : (rItem.Shift !== undefined ? rItem.Shift : '')).trim();
         var rNameStr = String(rItem.name !== undefined ? rItem.name : (rItem.Name !== undefined ? rItem.Name : '')).trim();
         var upShift = rShiftStr.toUpperCase();
-        var rIsEp = (upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL' || rItem.field === 'EP_OFFICE_HOUR' || rItem.field === 'EP_ONCALL');
-        var rField = rIsEp ? (upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL' ? upShift : String(rItem.field).trim().toUpperCase()) : 'MO_SHIFT';
+        var rIsEp = (isEpShiftField_(upShift) || isEpShiftField_(rItem.field));
+        var rField = rIsEp ? (isEpShiftField_(upShift) ? upShift : String(rItem.field).trim().toUpperCase()) : 'MO_SHIFT';
         var rCleared = Boolean(rItem.isCleared === true || (rIsEp ? !rNameStr || rNameStr === '__CLEAR__' : !rShiftStr || rShiftStr === '__CLEAR__'));
         var rStaffKey = rIsEp ? '__EP__' : resolveServerStaffKey_(rItem.staffKey || rNameStr, rNameStr, draftTeamList);
         incomingChanges.push({
@@ -2258,7 +2263,7 @@ function handleSaveMasterRosterDraft(data) {
       var existingRow = targetMonthRows[m];
       var rowDateStr = formatCellDate_(existingRow.date);
       var rowShiftUp = String(existingRow.shift || '').trim().toUpperCase();
-      var rowIsEp = (rowShiftUp === 'EP_OFFICE_HOUR' || rowShiftUp === 'EP_ONCALL');
+      var rowIsEp = isEpShiftField_(rowShiftUp);
       var rowCellKey = rowIsEp
         ? ('EP|' + rowDateStr + '|' + rowShiftUp)
         : ('MO|' + rowDateStr + '|' + resolveServerStaffKey_(existingRow.name, existingRow.name, draftTeamList));
@@ -2488,7 +2493,7 @@ function handleAppendRosterAmendments(data) {
       }
 
       var field = String(item.field || item.Field || 'MO_SHIFT').trim().toUpperCase();
-      var isEpField = (field === 'EP_OFFICE_HOUR' || field === 'EP_ONCALL');
+      var isEpField = isEpShiftField_(field);
       var targetType = isEpField ? 'EP' : String(item.targetType || item.TargetType || 'MO').trim().toUpperCase();
       var staffName = String(item.staffName || item.StaffName || item.name || item.Name || '').trim();
       var rawStaffKey = String(item.staffKey || item.StaffKey || (isEpField ? '__EP__' : staffName)).trim();
@@ -2692,6 +2697,7 @@ const RosterCompatibility = (() => {
     AL: code(false, 'RESET', null), MC: code(false, 'RESET', null), EL: code(false, 'RESET', null),
     COURSE: code(false, 'RESET', null), '': code(false, 'RESET', null),
     EP_OFFICE_HOUR: code(false, 'EXCLUDED', null, false, false, false, [], [], 'EP'),
+    EP_OFFICE_HOUR_PASSIVE: code(false, 'EXCLUDED', null, false, false, false, [], [], 'EP'),
     EP_ONCALL: code(false, 'EXCLUDED', null, false, false, false, [], [], 'EP'),
   });
   const owns = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);

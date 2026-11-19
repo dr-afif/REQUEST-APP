@@ -1,6 +1,7 @@
 import {
   buildCellsMapFromEditedGrid,
   diffBaselineAndEditedCells,
+  isEpSlotShift,
   normalizeShiftComparison,
   resolveStaffIdentity,
 } from './rosterComposition.js';
@@ -590,16 +591,16 @@ export function rebaseLocalEditsOntoServer({
   for (const edit of changedCells) {
     const { date, field, staffName, staffKey, newValue } = edit;
     if (!rebasedGrid[date]) {
-      rebasedGrid[date] = { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
+      rebasedGrid[date] = { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_OFFICE_HOUR_PASSIVE: '', EP_ONCALL: '' };
     }
-    if (field === 'EP_OFFICE_HOUR' || field === 'EP_ONCALL') {
+    if (isEpSlotShift(field)) {
       rebasedGrid[date][field] = newValue;
     } else {
       const normTargetKey = normalizeForComparison(staffKey);
       const normTargetName = normalizeForComparison(mapName(staffName));
       // Remove staffKey / staffName from all MO shift keys on that date, then add to newValue shift(s)
       for (const sKey of Object.keys(rebasedGrid[date])) {
-        if (sKey === 'EP_OFFICE_HOUR' || sKey === 'EP_ONCALL') continue;
+        if (isEpSlotShift(sKey)) continue;
         const filtered = String(rebasedGrid[date][sKey] || '')
           .split(/[,\n]+/)
           .map((n) => n.trim())

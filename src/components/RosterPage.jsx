@@ -26,6 +26,7 @@ import {
   getCellAmendmentInfo,
   buildCellsMapFromEditedGrid,
   computeCellsChecksum,
+  isEpSlotShift,
   resolveStaffIdentity,
 } from '../features/roster/simplified/rosterComposition.js';
 import {
@@ -67,6 +68,7 @@ function EpPainterToolbar({
   onSelectStamp,
   onClearStamp,
   onBatchFillWeekdays,
+  onBatchFillPassiveWeekdays,
   onBatchFillWeekends,
 }) {
   const options = useMemo(() => physicians
@@ -101,7 +103,7 @@ function EpPainterToolbar({
               )}
             </h3>
             <p className="text-[10px] sm:text-xs text-teal-700/80 mt-0.5">
-              Select a doctor badge below, then click any <strong className="font-semibold text-teal-950">Office Hour</strong> or <strong className="font-semibold text-teal-950">On Call</strong> cell to stamp immediately with 1 click.
+              Select a doctor badge below, then click any <strong className="font-semibold text-teal-950">Office Hour</strong>, <strong className="font-semibold text-teal-950">Office Hour (Passive)</strong>, or <strong className="font-semibold text-teal-950">On Call</strong> cell to stamp immediately with 1 click.
             </p>
           </div>
         </div>
@@ -166,6 +168,14 @@ function EpPainterToolbar({
               title={`Assign ${activeStamp} to all weekdays (Mon-Fri) Office Hour for this month`}
             >
               <span>⚡ Fill Weekdays (Office)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onBatchFillPassiveWeekdays(activeStamp)}
+              className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-white text-teal-800 border border-teal-300 hover:bg-teal-50 hover:border-teal-400 transition shadow-2xs flex items-center gap-1 cursor-pointer"
+              title={`Assign ${activeStamp} to all weekdays (Mon-Fri) Office Hour (Passive) for this month`}
+            >
+              <span>⚡ Fill Weekdays (Passive)</span>
             </button>
             <button
               type="button"
@@ -1167,7 +1177,7 @@ export default function RosterPage({
         const iso = toIsoDate(r.Date || r.date);
         if (!iso || !iso.startsWith(rosterMonth)) return false;
         const s = String(r.Shift || r.shift || '').trim().toUpperCase();
-        return s === 'EP_OFFICE_HOUR' || s === 'EP_ONCALL';
+        return isEpSlotShift(s);
       });
       return [...moRows, ...epRows];
     }
@@ -1182,7 +1192,7 @@ export default function RosterPage({
       const iso = toIsoDate(r.Date || r.date);
       if (!iso || !iso.startsWith(rosterMonth)) return false;
       const s = String(r.Shift || r.shift || '').trim().toUpperCase();
-      return s === 'EP_OFFICE_HOUR' || s === 'EP_ONCALL';
+      return isEpSlotShift(s);
     });
     return [...moRows, ...epRows];
   }, [isSimplifiedMode, simplifiedProjection, isPostCutoverPeriod, isV2PeriodActive, masterRoster, v2LiveSnapshot.isLoaded, v2LiveSnapshot.period, rosterMonth, derivedV2CalendarRows]);
@@ -1591,6 +1601,7 @@ export default function RosterPage({
         moPm: isEditMode ? (editedGrid[dateStr]?.PM ?? '') : (dayAssignments.PM || []).join(', '),
         moNight: isEditMode ? getNightShiftNamesFromGrid(editedGrid[dateStr]) : (dayAssignments.NIGHT || []).join(', '),
         epAm: getEpAssignmentText(dateStr, 'EP_OFFICE_HOUR'),
+        epPassive: getEpAssignmentText(dateStr, 'EP_OFFICE_HOUR_PASSIVE'),
         epOncall: getEpAssignmentText(dateStr, 'EP_ONCALL'),
         holidayName: getHolidayName(dateStr),
         isHoliday: !!getHolidayName(dateStr),
@@ -1716,6 +1727,7 @@ export default function RosterPage({
       if (!cloned[dateStr].PM) cloned[dateStr].PM = '';
       if (!cloned[dateStr].NIGHT) cloned[dateStr].NIGHT = '';
       if (cloned[dateStr].EP_OFFICE_HOUR === undefined) cloned[dateStr].EP_OFFICE_HOUR = '';
+      if (cloned[dateStr].EP_OFFICE_HOUR_PASSIVE === undefined) cloned[dateStr].EP_OFFICE_HOUR_PASSIVE = '';
       if (cloned[dateStr].EP_ONCALL === undefined) cloned[dateStr].EP_ONCALL = '';
     });
 
@@ -1955,6 +1967,26 @@ export default function RosterPage({
           nextGrid[dateStr] = {
             ...(nextGrid[dateStr] || {}),
             EP_OFFICE_HOUR: doctorName,
+          };
+        }
+      });
+      return nextGrid;
+    });
+  };
+
+  const handleBatchFillPassiveWeekdays = (doctorName) => {
+    if (isPeriodLocked || isPostCutoverPeriod || !doctorName || doctorName === '__CLEAR__') return;
+    const confirmMsg = `Assign ${doctorName} to all weekdays (Mon-Fri) Office Hour (Passive) for ${monthLabel}?`;
+    if (!confirm(confirmMsg)) return;
+
+    applyGridEdit((prev) => {
+      const nextGrid = { ...prev };
+      daysInMonthList.forEach(({ dayName, dateStr }) => {
+        const isWknd = dayName === 'SAT' || dayName === 'SUN';
+        if (!isWknd) {
+          nextGrid[dateStr] = {
+            ...(nextGrid[dateStr] || {}),
+            EP_OFFICE_HOUR_PASSIVE: doctorName,
           };
         }
       });
@@ -2687,7 +2719,7 @@ export default function RosterPage({
       if (key === 'ArrowUp') nextDayIndex -= 1;
       if (key === 'ArrowDown' || key === 'Enter') nextDayIndex += 1;
       if (key === 'ArrowLeft' && shiftIndex > 0) nextShiftIndex -= 1;
-      if (key === 'ArrowRight' && shiftIndex < 4) nextShiftIndex += 1;
+      if (key === 'ArrowRight' && shiftIndex < 5) nextShiftIndex += 1;
 
       if (nextDayIndex >= 0 && nextDayIndex < daysInMonthList.length) {
         e.preventDefault();
@@ -2733,7 +2765,7 @@ export default function RosterPage({
         
         cells.forEach((cellVal, cIdx) => {
           const targetShiftIndex = startShiftIndex + cIdx;
-          if (targetShiftIndex > 4) return;
+          if (targetShiftIndex > 5) return;
           
           let cleanVal = cellVal.replace(/___NEWLINE___/g, '\n');
           // Remove surrounding quotes if Excel added them
@@ -2748,15 +2780,16 @@ export default function RosterPage({
           else if (targetShiftIndex === 1) shiftCol = 'PM';
           else if (targetShiftIndex === 2) shiftCol = 'NIGHT';
           else if (targetShiftIndex === 3) shiftCol = 'EP_OFFICE_HOUR';
+          else if (targetShiftIndex === 4) shiftCol = 'EP_OFFICE_HOUR_PASSIVE';
           else shiftCol = 'EP_ONCALL';
 
-          if (shiftCol === 'EP_OFFICE_HOUR' || shiftCol === 'EP_ONCALL') {
+          if (isEpSlotShift(shiftCol)) {
             // EP columns: simple overwrite, no name-overlap cleaning
-            if (!nextGrid[dateStr]) nextGrid[dateStr] = { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
+            if (!nextGrid[dateStr]) nextGrid[dateStr] = { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_OFFICE_HOUR_PASSIVE: '', EP_ONCALL: '' };
             nextGrid[dateStr][shiftCol] = cleanVal.trim();
           } else {
             nextGrid[dateStr] = cleanDayDataForNameOverlap(
-              nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' },
+              nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_OFFICE_HOUR_PASSIVE: '', EP_ONCALL: '' },
               shiftCol,
               cleanVal.trim(),
               allowDoubleShift
@@ -2817,7 +2850,7 @@ export default function RosterPage({
           cleanVal = cleanVal.replace(/""/g, '"');
           cleanVal = cleanVal.trim().toUpperCase();
 
-          const dayData = nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
+          const dayData = nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_OFFICE_HOUR_PASSIVE: '', EP_ONCALL: '' };
           const nextDayData = { ...dayData };
 
           const removeNameFromList = (namesStr) => {
@@ -2837,9 +2870,13 @@ export default function RosterPage({
             return list.join(', ');
           };
 
-          // Remove this doctor from all shift keys on this day
+          // Remove this doctor from all MO shift keys on this day (preserve EP slots)
           Object.keys(dayData).forEach((shiftKey) => {
-            nextDayData[shiftKey] = allowDoubleShift ? dayData[shiftKey] : removeNameFromList(dayData[shiftKey]);
+            if (isEpSlotShift(shiftKey)) {
+              nextDayData[shiftKey] = dayData[shiftKey];
+            } else {
+              nextDayData[shiftKey] = allowDoubleShift ? dayData[shiftKey] : removeNameFromList(dayData[shiftKey]);
+            }
           });
 
           // Add to new shift if it's a non-empty value
@@ -2929,7 +2966,7 @@ export default function RosterPage({
         const dateStr = daysInMonthList[dayIndex].dateStr;
         const docName = names[nameIndex];
         const normalizedName = normalizeForComparison(mapName(docName));
-        const dayData = nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_ONCALL: '' };
+        const dayData = nextGrid[dateStr] || { AM: '', PM: '', NIGHT: '', EP_OFFICE_HOUR: '', EP_OFFICE_HOUR_PASSIVE: '', EP_ONCALL: '' };
         const nextDayData = {};
 
         const removeNameFromList = (namesStr) => {
@@ -2950,7 +2987,7 @@ export default function RosterPage({
         };
 
         Object.keys(dayData).forEach((shiftKey) => {
-          if (shiftKey === 'EP_OFFICE_HOUR' || shiftKey === 'EP_ONCALL') {
+          if (isEpSlotShift(shiftKey)) {
             nextDayData[shiftKey] = dayData[shiftKey];
           } else {
             nextDayData[shiftKey] = allowDoubleShift ? dayData[shiftKey] : removeNameFromList(dayData[shiftKey]);
@@ -3952,6 +3989,7 @@ export default function RosterPage({
               onSelectStamp={(stamp) => setActiveEpStamp(stamp)}
               onClearStamp={() => setActiveEpStamp(null)}
               onBatchFillWeekdays={handleBatchFillWeekdays}
+              onBatchFillPassiveWeekdays={handleBatchFillPassiveWeekdays}
               onBatchFillWeekends={handleBatchFillWeekends}
             />
           )}
@@ -3982,7 +4020,7 @@ export default function RosterPage({
                     MEDICAL OFFICER
                   </th>
                   <th
-                    colSpan={2}
+                    colSpan={3}
                     className="border border-slate-300 px-1.5 sm:px-4 py-2 sm:py-2.5 font-bold uppercase tracking-wider text-[10px] sm:text-xs bg-teal-700"
                   >
                     EMERGENCY PHYSICIAN
@@ -3990,19 +4028,22 @@ export default function RosterPage({
                 </tr>
                 {/* Row 2 Header */}
                 <tr className="bg-slate-700 text-white border border-slate-700 select-none">
-                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/5">
+                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/6">
                     AM
                   </th>
-                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/5">
+                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/6">
                     PM
                   </th>
-                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/5">
+                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/6">
                     NIGHT
                   </th>
-                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/5 bg-teal-700/80">
+                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/6 bg-teal-700/80">
                     OFFICE HOUR
                   </th>
-                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/5 bg-teal-700/80">
+                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/6 bg-teal-700/80">
+                    OFFICE HOUR (PASSIVE)
+                  </th>
+                  <th className="border border-slate-300 px-1 sm:px-4 py-1 sm:py-2 font-bold uppercase tracking-wider text-[10px] sm:text-xs w-1/6 bg-teal-700/80">
                     ON CALL
                   </th>
                 </tr>
@@ -4119,8 +4160,8 @@ export default function RosterPage({
                         </td>
                       ))}
 
-                      {/* Emergency Physician Cells (Office Hour + On Call) */}
-                      {[['EP_OFFICE_HOUR', 3, 'Office Hour'], ['EP_ONCALL', 4, 'On Call']].map(([epKey, shiftIndex, slotLabel]) => {
+                      {/* Emergency Physician Cells (Office Hour + Office Hour Passive + On Call) */}
+                      {[['EP_OFFICE_HOUR', 3, 'Office Hour'], ['EP_OFFICE_HOUR_PASSIVE', 4, 'Office Hour (Passive)'], ['EP_ONCALL', 5, 'On Call']].map(([epKey, shiftIndex, slotLabel]) => {
                         const epVal = isEditMode
                           ? (editedGrid[dateStr]?.[epKey] ?? '')
                           : (() => {
@@ -4966,6 +5007,7 @@ export default function RosterPage({
                   >
                     <option value="MO & EP ROSTER">MO &amp; EP ROSTER</option>
                     <option value="EP ROSTER">EP ROSTER</option>
+                    <option value="EP+ ROSTER">EP+ ROSTER (with Office Hour Passive)</option>
                     <option value="MO ROSTER">MO ROSTER</option>
                   </select>
                 </div>

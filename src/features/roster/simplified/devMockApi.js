@@ -14,6 +14,8 @@
  * 6. Interactive controls to reset mock state, simulate conflict, simulate network failure
  */
 
+import { isEpSlotShift } from './rosterComposition.js';
+
 const STORAGE_KEY_STORE = 'resq_dev_mock_store_v1';
 const STORAGE_KEY_ACTIVE = 'resq_dev_mock';
 const STORAGE_KEY_SIM_CONFLICT = 'resq_dev_mock_sim_conflict';
@@ -122,6 +124,7 @@ function createInitialMockDatabase() {
       { ShiftType: 'OFF', Description: 'Day Off' },
       { ShiftType: 'GOFF', Description: 'Golden Off' },
       { ShiftType: 'EP_OFFICE_HOUR', Description: 'EP Office' },
+      { ShiftType: 'EP_OFFICE_HOUR_PASSIVE', Description: 'EP Office (Passive)' },
       { ShiftType: 'EP_ONCALL', Description: 'EP On-Call' },
     ],
     limitGroups: [],
@@ -354,7 +357,7 @@ export async function handleDevMockRequest({ method = 'GET', body, query = {} } 
         if (!ch || typeof ch !== 'object') continue;
         const chDate = String(ch.date || ch.Date || '').trim();
         const chField = String(ch.field || ch.Field || 'MO_SHIFT').trim().toUpperCase();
-        const isEp = chField === 'EP_OFFICE_HOUR' || chField === 'EP_ONCALL';
+        const isEp = isEpSlotShift(chField);
         const chNewVal = ch.newValue !== undefined ? ch.newValue : (ch.NewValue !== undefined ? ch.NewValue : '');
         const isCleared = Boolean(ch.isCleared === true || ch.IsCleared === true || String(chNewVal).trim() === '__CLEAR__' || !String(chNewVal).trim());
         incomingChanges.push({
@@ -374,7 +377,7 @@ export async function handleDevMockRequest({ method = 'GET', body, query = {} } 
         const rName = String(r.name || r.Name || '').trim();
         const rShift = String(r.shift || r.Shift || '').trim();
         const upShift = rShift.toUpperCase();
-        const isEp = upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL';
+        const isEp = isEpSlotShift(upShift);
         const isCleared = Boolean(r.isCleared || (isEp ? !rName || rName === '__CLEAR__' : !rShift || rShift === '__CLEAR__'));
         incomingChanges.push({
           date: rDate,
@@ -406,7 +409,7 @@ export async function handleDevMockRequest({ method = 'GET', body, query = {} } 
       const rName = String(row.Name || row.name || '').trim();
       const rShift = String(row.Shift || row.shift || '').trim();
       const upShift = rShift.toUpperCase();
-      const isEp = upShift === 'EP_OFFICE_HOUR' || upShift === 'EP_ONCALL';
+      const isEp = isEpSlotShift(upShift);
       const k = isEp ? `EP|${rDate}|${upShift}` : `MO|${rDate}|${normKey(rName)}`;
 
       if (changesByKey.has(k)) {
