@@ -1,70 +1,24 @@
-const CACHE_NAME = 'ed-roster-cache-v3';
-const ASSETS_TO_CACHE = [
-  '/REQUEST-APP/',
-  '/REQUEST-APP/index.html',
-  '/REQUEST-APP/favicon.ico',
-  '/REQUEST-APP/site.webmanifest',
-  '/REQUEST-APP/icons/icon-192.png',
-  '/REQUEST-APP/icons/icon-512.png'
-];
-
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    })
-  );
+// Self-unregistering service worker to migrate legacy PWA users to the new ED-Roster app.
+self.addEventListener('install', function () {
   self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener('activate', function (event) {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            return caches.delete(cache);
-          }
-        })
-      );
-    })
-  );
-  self.clients.claim();
-});
-
-self.addEventListener('fetch', (event) => {
-  // Only cache GET requests
-  if (event.request.method !== 'GET') return;
-
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Fetch in background to update cache
-        fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse.status === 200) {
-              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-            }
-          })
-          .catch(() => {/* Ignore network errors during bg fetch */});
-        return cachedResponse;
-      }
-
-      return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-          return networkResponse;
-        }
-        const responseToCache = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
+    (async function () {
+      try {
+        var keys = await caches.keys();
+        await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+      } catch (e) {}
+      try {
+        await self.registration.unregister();
+      } catch (e) {}
+      try {
+        var clients = await self.clients.matchAll({ type: 'window' });
+        clients.forEach(function (client) {
+          client.navigate('https://dr-afif.github.io/ED-Roster/');
         });
-        return networkResponse;
-      }).catch(() => {
-        // Fallback for document navigation when offline
-        if (event.request.mode === 'navigate') {
-          return caches.match('/REQUEST-APP/index.html');
-        }
-      });
-    })
+      } catch (e) {}
+    })()
   );
 });
